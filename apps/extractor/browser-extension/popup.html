@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SpilledCinema Capture</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        width: 340px;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        background: #0f1016;
+        color: #f5efe3;
+      }
+
+      .shell {
+        padding: 18px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 18px;
+      }
+
+      p {
+        margin: 0 0 14px;
+        color: #c9bba3;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 12px;
+        font-size: 12px;
+        color: #d9cfbf;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      input {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        box-sizing: border-box;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #fff;
+        padding: 11px 12px;
+        font-size: 13px;
+      }
+
+      button {
+        width: 100%;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 14px;
+        background: #f97316;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        margin-top: 10px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .status {
+        margin-top: 12px;
+        min-height: 18px;
+        font-size: 12px;
+        color: #c9bba3;
+      }
+
+      .status.error {
+        color: #fca5a5;
+      }
+
+      .status.ok {
+        color: #bbf7d0;
+      }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <h1>SpilledCinema Capture</h1>
+      <p>Paste the capture session ID from the app, then start the picker on the current tab.</p>
+
+      <label>
+        App origin
+        <input id="appOrigin" type="text" placeholder="http://localhost:3000" />
+      </label>
+
+      <label>
+        Session ID
+        <input id="sessionId" type="text" placeholder="cap_xxxxx" />
+      </label>
+
+      <button id="startButton" type="button">Start picker on this tab</button>
+      <button id="reviewButton" class="secondary" type="button">Open review page</button>
+
+      <div id="status" class="status"></div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+  </html>

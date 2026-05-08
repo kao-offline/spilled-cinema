@@ -1,0 +1,5 @@
+{
+  "name": "@spilledcinema/node-client",
+  "private": true,
+  "type": "module"
+}

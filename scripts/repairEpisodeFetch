@@ -1,0 +1,321 @@
+#!/usr/bin/env node
+
+const fs = require("node:fs/promises");
+const syncFs = require("node:fs");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+
+function parseArgs(argv) {
+  const options = {
+    input: null,
+    output: null,
+    slug: null,
+    dryRun: false,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--input") {
+      options.input = argv[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === "--output") {
+      options.output = argv[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === "--slug") {
+      options.slug = argv[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === "--dry-run") {
+      options.dryRun = true;
+      continue;
+    }
+  }
+
+  return options;
+}
+
+function isBrokenSvetSerialuEpisode(episode) {
+  if (!episode || !Array.isArray(episode.players)) {
+    return false;
+  }
+
+  return episode.players.some(
+    (player) =>
+      player?.provider === "svetserialu" &&
+      player?.alias === "embed-default" &&
+      player?.embedUrl === episode.episodeUrl,
+  );
+}
+
+function validateLibraryState(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error("Library snapshot must be a JSON object.");
+  }
+  if (!Array.isArray(snapshot.shows)) {
+    throw new Error("Library snapshot is missing a valid shows array.");
+  }
+}
+
+function mergeShowPreservingClientFields(existingShow, repairedShow) {
+  const repairedEpisodesById = new Map(repairedShow.episodes.map((episode) => [episode.id, episode]));
+
+  return {
+    ...repairedShow,
+    isFavorite: existingShow.isFavorite ?? repairedShow.isFavorite,
+    posterUrl: existingShow.posterUrl ?? repairedShow.posterUrl ?? null,
+    backdropUrl: existingShow.backdropUrl ?? repairedShow.backdropUrl ?? null,
+    clearLogoUrl: existingShow.clearLogoUrl ?? repairedShow.clearLogoUrl ?? null,
+    episodes: repairedShow.episodes.map((episode) => {
+      const existingEpisode = existingShow.episodes.find((entry) => entry.id === episode.id);
+      if (!existingEpisode) {
+        return episode;
+      }
+
+      const selectedAliasStillExists =
+        typeof existingEpisode.selectedPlayerAlias === "string" &&
+        existingEpisode.selectedPlayerAlias.length > 0 &&
+        episode.players.some((player) => player.alias === existingEpisode.selectedPlayerAlias);
+
+      return {
+        ...episode,
+        selectedPlayerAlias: selectedAliasStillExists ? existingEpisode.selectedPlayerAlias : episode.selectedPlayerAlias,
+      };
+    }),
+  };
+}
+
+async function loadImporter() {
+  const moduleUrl = pathToFileURL(
+    path.resolve(__dirname, "..", "apps", "dashboard", "api", "_lib", "svetserialu.js"),
+  ).href;
+  const mod = await import(moduleUrl);
+  if (typeof mod.fetchSvetSerialuShow !== "function") {
+    throw new Error("Could not load shared SvetSerialu importer.");
+  }
+  return mod.fetchSvetSerialuShow;
+}
+
+async function tryReadJsonFile(filePath) {
+  const raw = await fs.readFile(filePath, "utf8");
+  return JSON.parse(raw);
+}
+
+async function findLatestExportedSnapshot(cwd) {
+  const entries = await fs.readdir(cwd, { withFileTypes: true });
+  const candidates = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!/^spilled-library-.*\.json$/i.test(entry.name)) continue;
+    const fullPath = path.join(cwd, entry.name);
+    const stats = await fs.stat(fullPath);
+    candidates.push({ fullPath, mtimeMs: stats.mtimeMs });
+  }
+
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.fullPath ?? null;
+}
+
+function extractJsonObjectAt(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let index = startIndex; index < text.length; index += 1) {
+    const ch = text[index];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (ch === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractSnapshotFromLevelDbText(text) {
+  const keyIndex = text.indexOf("spilled-library.state.v1");
+  if (keyIndex === -1) {
+    return null;
+  }
+
+  const jsonStart = text.indexOf("{", keyIndex);
+  if (jsonStart === -1) {
+    return null;
+  }
+
+  const json = extractJsonObjectAt(text, jsonStart);
+  if (!json) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+async function findSnapshotInChromiumStorage() {
+  const roots = [
+    path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "User Data"),
+    path.join(process.env.LOCALAPPDATA || "", "BraveSoftware", "Brave-Browser", "User Data"),
+    path.join(process.env.LOCALAPPDATA || "", "Vivaldi", "User Data"),
+  ];
+
+  for (const root of roots) {
+    if (!root || !syncFs.existsSync(root)) continue;
+    for (const profile of syncFs.readdirSync(root)) {
+      const leveldb = path.join(root, profile, "Local Storage", "leveldb");
+      if (!syncFs.existsSync(leveldb)) continue;
+
+      for (const name of syncFs.readdirSync(leveldb)) {
+        const file = path.join(leveldb, name);
+        try {
+          if (!syncFs.statSync(file).isFile()) continue;
+          const text = syncFs.readFileSync(file).toString("utf8");
+          const snapshot = extractSnapshotFromLevelDbText(text);
+          if (snapshot) {
+            return {
+              snapshot,
+              source: `browser localStorage (${root} :: ${profile} :: ${name})`,
+            };
+          }
+        } catch {
+          // Ignore unreadable browser cache files.
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+async function loadSnapshot(options) {
+  const cwd = process.cwd();
+  const attemptedSources = [];
+
+  if (options.input) {
+    const explicitPath = path.resolve(cwd, options.input);
+    attemptedSources.push(explicitPath);
+    if (syncFs.existsSync(explicitPath)) {
+      return {
+        snapshot: await tryReadJsonFile(explicitPath),
+        source: explicitPath,
+      };
+    }
+  }
+
+  const latestExport = await findLatestExportedSnapshot(cwd);
+  if (latestExport) {
+    attemptedSources.push(latestExport);
+    return {
+      snapshot: await tryReadJsonFile(latestExport),
+      source: latestExport,
+    };
+  }
+
+  const browserSnapshot = await findSnapshotInChromiumStorage();
+  if (browserSnapshot) {
+    return browserSnapshot;
+  }
+
+  const explicitLabel = options.input
+    ? `Could not find input snapshot at ${path.resolve(cwd, options.input)}.`
+    : "No --input snapshot path was provided.";
+  throw new Error(
+    `${explicitLabel} No exported spilled-library-*.json snapshot was found in ${cwd}, and no spilled-library.state.v1 key was found in common Chrome/Brave/Vivaldi localStorage profiles.`,
+  );
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const { snapshot, source } = await loadSnapshot(options);
+  validateLibraryState(snapshot);
+  console.log(`Loaded library snapshot from ${source}`);
+
+  const brokenShows = snapshot.shows.filter((show) => {
+    if (options.slug && show.slug !== options.slug) {
+      return false;
+    }
+    return Array.isArray(show.episodes) && show.episodes.some(isBrokenSvetSerialuEpisode);
+  });
+
+  if (brokenShows.length === 0) {
+    console.log("No broken SvetSerialu imports found.");
+    if (!options.dryRun && options.output) {
+      const outputPath = path.resolve(process.cwd(), options.output);
+      await fs.writeFile(outputPath, JSON.stringify(snapshot, null, 2), "utf8");
+      console.log(`Wrote unchanged snapshot to ${outputPath}`);
+    }
+    return;
+  }
+
+  console.log(`Found ${brokenShows.length} broken show(s): ${brokenShows.map((show) => show.slug).join(", ")}`);
+  if (options.dryRun) {
+    return;
+  }
+
+  if (!options.output) {
+    throw new Error("Missing required --output <library.repaired.json>.");
+  }
+
+  const fetchSvetSerialuShow = await loadImporter();
+  const repairedShowsBySlug = new Map();
+
+  for (const show of brokenShows) {
+    try {
+      console.log(`Repairing ${show.slug}...`);
+      const repaired = await fetchSvetSerialuShow(show.slug);
+      repairedShowsBySlug.set(show.slug, mergeShowPreservingClientFields(show, repaired));
+      console.log(`Repaired ${show.slug}`);
+    } catch (error) {
+      console.warn(`Failed to repair ${show.slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const nextSnapshot = {
+    ...snapshot,
+    shows: snapshot.shows.map((show) => repairedShowsBySlug.get(show.slug) ?? show),
+  };
+
+  const outputPath = path.resolve(process.cwd(), options.output);
+  await fs.writeFile(outputPath, JSON.stringify(nextSnapshot, null, 2), "utf8");
+  console.log(`Wrote repaired snapshot to ${outputPath}`);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

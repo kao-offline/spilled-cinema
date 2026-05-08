@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SpilledCinema Bridge</title>
+    <style>
+      body {
+        margin: 0;
+        min-width: 300px;
+        background: #0c0d12;
+        color: #f4f4f5;
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .wrap {
+        padding: 16px;
+      }
+      .badge {
+        display: inline-flex;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.08);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .card {
+        margin-top: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px;
+        padding: 12px;
+        background: rgba(255,255,255,0.04);
+      }
+      button {
+        width: 100%;
+        margin-top: 12px;
+        border: 0;
+        border-radius: 12px;
+        background: #ffffff;
+        color: #0c0d12;
+        padding: 10px 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .muted {
+        color: rgba(255,255,255,0.6);
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: rgba(255,255,255,0.75);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="badge">SpilledCinema</div>
+      <div class="card">
+        <strong>Local runtime</strong>
+        <div id="status" class="muted" style="margin-top: 6px;">Checking localhost...</div>
+      </div>
+      <button id="refresh">Refresh status</button>
+      <pre id="details"></pre>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+  </html>

@@ -1,0 +1,5 @@
+{
+  "name": "@spilledcinema/node-protocol",
+  "private": true,
+  "type": "module"
+}

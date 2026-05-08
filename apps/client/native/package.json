@@ -1,0 +1,13 @@
+{
+  "name": "@spilledcinema/client-native",
+  "private": true,
+  "version": "0.1.0",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node launch.js",
+    "start": "node launch.js"
+  },
+  "dependencies": {
+    "electron": "^35.5.1"
+  }
+}

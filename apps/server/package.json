@@ -1,0 +1,9 @@
+{
+  "name": "@spilledcinema/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/standalone.ts",
+    "start": "tsx src/standalone.ts"
+  }
+}

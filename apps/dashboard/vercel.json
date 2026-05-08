@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/server/(.*)",
+      "destination": "/api/server/$1"
+    }
+  ],
+  "functions": {
+    "api/import-svetserialu.js": {
+      "maxDuration": 60
+    },
+    "api/import-bombuj.js": {
+      "maxDuration": 30
+    },
+    "api/server/[...path].js": {
+      "maxDuration": 30
+    }
+  }
+}

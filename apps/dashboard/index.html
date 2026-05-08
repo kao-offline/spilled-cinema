@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c0d12" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/app-icon-light-rounded-200.png" media="(prefers-color-scheme: dark)" type="image/png" />
+    <link rel="icon" href="/icons/app-icon-dark-rounded-200.png" media="(prefers-color-scheme: light)" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/app-icon-dark-rounded-192.png" />
+    <title>SpilledLibrary | Own Your Cinema</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cardo:ital,wght@1,400&family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+  </head>
+  <body class="no-scrollbar">
+    <div id="root"></div>
+    <script>
+      (function () {
+        if (!('serviceWorker' in navigator)) {
+          return;
+        }
+        navigator.serviceWorker.getRegistrations().then(function (registrations) {
+          if (!registrations || registrations.length === 0) {
+            return;
+          }
+
+          return Promise.all(registrations.map(function (registration) {
+            return registration.unregister();
+          })).then(function () {
+            return (window.caches && caches.keys ? caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (key) { return caches.delete(key); }));
+            }) : Promise.resolve());
+          });
+        }).catch(function () {
+          // Keep bootstrap resilient even when SW cleanup fails.
+        });
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

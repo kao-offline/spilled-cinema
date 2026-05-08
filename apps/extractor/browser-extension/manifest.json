@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "SpilledCinema Capture",
+  "version": "0.1.0",
+  "description": "Select a video player on the current page and send it to a SpilledCinema capture session.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "SpilledCinema Capture",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

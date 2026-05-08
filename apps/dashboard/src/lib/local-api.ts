@@ -1,0 +1,245 @@
+type RuntimeApiResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T;
+  origin?: string;
+  transport: "native" | "extension" | "direct" | "node" | "remote";
+};
+
+type JsonRequestInit = {
+  method?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+};
+
+const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
+const LONG_RUNTIME_TIMEOUT_MS = 60000;
+
+function getRuntimeTimeoutMs(path: string) {
+  if (
+    path.startsWith("/api/import-") ||
+    path.startsWith("/api/artwork/refresh")
+  ) {
+    return LONG_RUNTIME_TIMEOUT_MS;
+  }
+
+  return LOCAL_RUNTIME_TIMEOUT_MS;
+}
+
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs = LOCAL_RUNTIME_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!window.spilledNative?.serverUrl) {
+    return null;
+  }
+
+  const response = await fetchWithTimeout(`${window.spilledNative.serverUrl}${path}`, {
+    method: init.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  }, getRuntimeTimeoutMs(path));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: (await readJsonSafe<T>(response)) as T,
+    origin: window.spilledNative.serverUrl,
+    transport: "native",
+  };
+}
+
+async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  const id = `runtime_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+
+  const payload = await new Promise<{ ok: boolean; status: number; origin?: string; data?: T }>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("Extension bridge timed out."));
+    }, 2500);
+
+    function onMessage(event: MessageEvent) {
+      if (event.source !== window || !event.data || event.data.type !== "SPILLEDCINEMA_EXTENSION_RESPONSE" || event.data.id !== id) {
+        return;
+      }
+
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+      if (!event.data.ok) {
+        reject(new Error(event.data.error || "Extension bridge failed."));
+        return;
+      }
+      resolve(event.data.payload);
+    }
+
+    window.addEventListener("message", onMessage);
+    window.postMessage(
+      {
+        type: "SPILLEDCINEMA_EXTENSION_REQUEST",
+        id,
+        action: "fetchLocal",
+        path,
+        method: init.method ?? "GET",
+        headers: init.headers ?? {},
+        body: init.body,
+      },
+      "*",
+    );
+  });
+
+  return {
+    ok: payload.ok,
+    status: payload.status,
+    data: (payload.data ?? null) as T,
+    origin: payload.origin,
+    transport: "extension",
+  };
+}
+
+async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!(window.location.protocol === "http:" || ["localhost", "127.0.0.1"].includes(window.location.hostname))) {
+    return null;
+  }
+
+  for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
+    try {
+      const response = await fetchWithTimeout(`${origin}${path}`, {
+        method: init.method ?? "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(init.headers ?? {}),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      }, getRuntimeTimeoutMs(path));
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        data: (await readJsonSafe<T>(response)) as T,
+        origin,
+        transport: "direct",
+      };
+    } catch {
+      // Try the next origin.
+    }
+  }
+
+  return null;
+}
+
+async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    return null;
+  }
+
+  const response = await fetchWithTimeout(path, {
+    method: init.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  }, getRuntimeTimeoutMs(path));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: (await readJsonSafe<T>(response)) as T,
+    origin: window.location.origin,
+    transport: "node",
+  };
+}
+
+export function resolveRuntimeUrl(url: string, origin?: string) {
+  if (!origin || !url.startsWith("/")) {
+    return url;
+  }
+  return `${origin}${url}`;
+}
+
+export function buildRuntimeUrl(path: string) {
+  if (window.spilledNative?.serverUrl) {
+    return `${window.spilledNative.serverUrl}${path}`;
+  }
+
+  // If we are on localhost, we can use the same origin (it will be handled by the Vite plugin)
+  // or we can hit the standalone server. To match native behavior and fix the web version,
+  // we prefer the standalone server on port 8787 for these local-only resources.
+  return `http://127.0.0.1:8787${path}`;
+}
+
+export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit = {}): Promise<RuntimeApiResult<T>> {
+  try {
+    const native = await fetchNative<T>(path, init);
+    if (native) {
+      return native;
+    }
+  } catch {
+    // Fall through to same-origin/extension/direct/remote.
+  }
+
+  try {
+    const sameOrigin = await fetchSameOriginLocalNode<T>(path, init);
+    if (sameOrigin) {
+      return sameOrigin;
+    }
+  } catch {
+    // Fall through to extension/direct/remote.
+  }
+
+  try {
+    const extension = await fetchExtension<T>(path, init);
+    if (extension) {
+      return extension;
+    }
+  } catch {
+    // Fall through to direct/remote.
+  }
+
+  try {
+    const direct = await fetchDirect<T>(path, init);
+    if (direct) {
+      return direct;
+    }
+  } catch {
+    // Fall through to remote.
+  }
+
+  const response = await fetchWithTimeout(path, {
+    method: init.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  }, getRuntimeTimeoutMs(path));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: (await readJsonSafe<T>(response)) as T,
+    transport: "remote",
+  };
+}

@@ -1,0 +1,28 @@
+{
+  "name": "spilled-cinema-monorepo",
+  "private": true,
+  "dependencies": {
+    "convex": "^1.36.1"
+  },
+  "workspaces": [
+    "apps/*",
+    "apps/*/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.3"
+  },
+  "scripts": {
+    "dev:dashboard": "npm run dev -w apps/dashboard",
+    "dev:extension": "npm run build -w @spilledcinema/client-extension",
+    "dev:extractor": "npm run dev -w apps/extractor",
+    "dev:native": "npm run dev -w @spilledcinema/client-native",
+    "dev:server": "npm run dev -w @spilledcinema/server",
+    "start:server": "npm run start -w @spilledcinema/server",
+    "build:dashboard": "npm run build -w apps/dashboard",
+    "convex:codegen": "npx convex codegen",
+    "convex:deploy": "npx convex deploy",
+    "dev": "concurrently \"npm run dev:extractor\" \"npm run dev:dashboard\""
+  }
+}

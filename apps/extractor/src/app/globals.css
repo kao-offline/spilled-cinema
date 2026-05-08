@@ -1,0 +1,189 @@
+@import "tailwindcss";
+
+:root {
+  --background: #08090d;
+  --foreground: #eef2f8;
+  --muted: #8a96ab;
+  --panel: rgba(15, 18, 28, 0.72);
+  --panel-strong: rgba(20, 24, 38, 0.95);
+  --line: rgba(255, 255, 255, 0.06);
+  --accent: #00f2ff;
+  --accent-soft: #00b8ff;
+  --accent-ruby: #ff2d55;
+  --shadow-xl: 0 32px 64px -16px rgba(0, 0, 0, 0.6);
+  --radius-card: 22px;
+  --radius-pill: 100px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-display: "Clash Display", "Inter", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+}
+
+html {
+  background: 
+    radial-gradient(circle at 0% 0%, rgba(0, 242, 255, 0.12), transparent 45%),
+    radial-gradient(circle at 100% 0%, rgba(142, 68, 173, 0.08), transparent 35%),
+    var(--background);
+  color: var(--foreground);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom Scrollbar for Rows */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+.glass-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(24px);
+}
+
+.premium-card {
+  position: relative;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: center;
+}
+
+.premium-card:hover {
+  transform: translateY(-8px) scale(1.04);
+  box-shadow: 0 40px 80px -20px rgba(0, 242, 255, 0.15);
+  z-index: 10;
+}
+
+.premium-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid rgba(0, 242, 255, 0.3);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+.premium-card:hover::after {
+  opacity: 1;
+}
+
+.netflix-row {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  gap: 1.5rem;
+  padding: 1rem 0 2rem 0;
+}
+
+.netflix-row > * {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+}
+
+.hero-gradient {
+  background: linear-gradient(0deg, var(--background) 0%, transparent 60%),
+              linear-gradient(90deg, var(--background) 0%, transparent 80%);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, #fff, var(--muted));
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+
+.btn-primary {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 8px 20px -6px var(--accent);
+}
+
+.btn-primary:hover {
+  background: #fff;
+  transform: scale(1.05);
+  box-shadow: 0 12px 24px -4px rgba(255, 255, 255, 0.3);
+}
+
+/* Player Skin Styles */
+.player-controls-reveal {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-container:hover .player-controls-reveal {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.video-progress-bar {
+  background: rgba(255, 255, 255, 0.2);
+  height: 4px;
+  cursor: pointer;
+  transition: height 0.2s ease;
+}
+
+.video-progress-bar:hover {
+  height: 8px;
+}
+
+.video-progress-fill {
+  background: var(--accent);
+  height: 100%;
+  position: relative;
+}
+
+.video-progress-fill::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--accent);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.video-progress-bar:hover .video-progress-fill::after {
+  opacity: 1;
+}

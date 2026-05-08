@@ -1,0 +1,47 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+async function getJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return await response.json();
+}
+
+contextBridge.exposeInMainWorld("spilledNative", {
+  kind: "native",
+  serverUrl: "http://127.0.0.1:8787",
+  async getStatus() {
+    return await getJson("http://127.0.0.1:8787/api/status");
+  },
+  async connectVault() {
+    return await ipcRenderer.invoke("vault:connect");
+  },
+  async disconnectVault() {
+    return await ipcRenderer.invoke("vault:disconnect");
+  },
+  async getVaultStatus() {
+    return await ipcRenderer.invoke("vault:status");
+  },
+  async readVaultSnapshot() {
+    return await ipcRenderer.invoke("vault:readSnapshot");
+  },
+  async writeVaultSnapshot(text) {
+    return await ipcRenderer.invoke("vault:writeSnapshot", text);
+  },
+  async listVaultArtifacts() {
+    return await ipcRenderer.invoke("vault:listArtifacts");
+  },
+  async writeVaultBlob(fileName, bytes) {
+    return await ipcRenderer.invoke("vault:writeBlob", fileName, bytes);
+  },
+  async writeVaultRecord(episodeId, payload) {
+    return await ipcRenderer.invoke("vault:writeRecord", episodeId, payload);
+  },
+  async removeVaultRecord(episodeId) {
+    return await ipcRenderer.invoke("vault:removeRecord", episodeId);
+  },
+  async clearVaultRecords() {
+    return await ipcRenderer.invoke("vault:clearRecords");
+  },
+});

@@ -1,0 +1,1 @@
+IMPORT_FETCH_PROXY_TEMPLATE=https://your-worker-name.your-subdomain.workers.dev/?key=YOUR_LONG_RANDOM_KEY&url={url}
