@@ -21,6 +21,7 @@
     "dev:server": "npm run dev -w @spilledcinema/server",
     "start:server": "npm run start -w @spilledcinema/server",
     "build:dashboard": "npm run build -w apps/dashboard",
+    "control-plane": "powershell -ExecutionPolicy Bypass -File scripts/control-plane.ps1",
     "convex:codegen": "npx convex codegen",
     "convex:deploy": "npx convex deploy",
     "dev": "concurrently \"npm run dev:extractor\" \"npm run dev:dashboard\""

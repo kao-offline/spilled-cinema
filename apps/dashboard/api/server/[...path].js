@@ -37,6 +37,9 @@ export default async function handler(req, res) {
         "Content-Type": req.headers["content-type"] || "application/json",
       },
     };
+    if (req.headers["x-spilled-control-plane-secret"]) {
+      init.headers["x-spilled-control-plane-secret"] = req.headers["x-spilled-control-plane-secret"];
+    }
 
     if (req.method && req.method !== "GET" && req.method !== "HEAD") {
       init.body = await readBody(req);
