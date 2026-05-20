@@ -3,18 +3,25 @@ import { Compass, CopyPlus, Download, Frame, Heart, Home, Settings } from "lucid
 import type { LucideIcon } from "lucide-react";
 import { DownloadManagerPanel } from "./DownloadManagerPanel";
 import type { PersistentDownloadJob } from "../lib/download-manager";
+import type { ProviderFeedViewId } from "../lib/provider-modules-shared";
 
-export type ViewState = "home" | "favorites" | "explore" | "downloaded" | "import" | "settings" | "support";
+export type ViewState = "home" | "favorites" | "explore" | "downloaded" | "import" | "settings" | "support" | ProviderFeedViewId;
+
+export type SidebarFeedLink = {
+  id: ProviderFeedViewId;
+  label: string;
+};
 
 type SidebarProps = {
   activeView: ViewState;
   onChangeView: (view: ViewState) => void;
+  feedLinks: SidebarFeedLink[];
   downloadJobs: PersistentDownloadJob[];
   onCancelDownload: (episodeId: string) => void;
   onDismissDownload: (episodeId: string) => void;
 };
 
-export function Sidebar({ activeView, onChangeView, downloadJobs, onCancelDownload, onDismissDownload }: SidebarProps) {
+export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onCancelDownload, onDismissDownload }: SidebarProps) {
   const primaryLinks: Array<{ id: ViewState; label: string; icon: LucideIcon }> = [
     { id: "home", label: "Home", icon: Home },
     { id: "favorites", label: "Favorites", icon: Heart },
@@ -67,6 +74,31 @@ export function Sidebar({ activeView, onChangeView, downloadJobs, onCancelDownlo
             );
           })}
         </ul>
+
+        {feedLinks.length > 0 ? (
+          <ul className="flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+            <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-white/20 lg:mb-2 lg:px-4 lg:text-xs">Feeds</div>
+            {feedLinks.map((link) => {
+              const isActive = activeView === link.id;
+              return (
+                <li key={link.id}>
+                  <button
+                    onClick={() => onChangeView(link.id)}
+                    className={clsx(
+                      "flex min-w-[9rem] items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all lg:w-full lg:min-w-0 lg:gap-4 lg:px-4 lg:py-3",
+                      isActive
+                        ? "bg-white/10 text-white"
+                        : "text-white/40 hover:bg-white/5 hover:text-white/80",
+                    )}
+                  >
+                    <Compass className={clsx("h-5 w-5 shrink-0", isActive ? "text-white" : "text-white/40")} />
+                    <span className="whitespace-nowrap">{link.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
 
         <ul className="flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
           <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-white/20 lg:mb-2 lg:px-4 lg:text-xs">System</div>

@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+const serverUrl = `http://127.0.0.1:${process.env.SPILLED_NATIVE_PORT || "8787"}`;
+
 async function getJson(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -10,9 +12,9 @@ async function getJson(url) {
 
 contextBridge.exposeInMainWorld("spilledNative", {
   kind: "native",
-  serverUrl: "http://127.0.0.1:8787",
+  serverUrl,
   async getStatus() {
-    return await getJson("http://127.0.0.1:8787/api/status");
+    return await getJson(`${serverUrl}/api/status`);
   },
   async connectVault() {
     return await ipcRenderer.invoke("vault:connect");

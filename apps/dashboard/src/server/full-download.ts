@@ -50,9 +50,10 @@ const jobs = new Map<string, FullDownloadJob>();
 const activeFfmpegProcesses = new Map<string, ChildProcess>();
 const activeOutputPaths = new Map<string, { outputPath: string; temporaryOutputPath: string; episodeId: string }>();
 const cancelRequestedJobs = new Set<string>();
+const seekableRepairLocks = new Map<string, Promise<string>>();
+const seekableRepairCache = new Map<string, string>();
 const DOWNLOAD_INDEX_FILE = "index.json";
 const SUBTITLE_INDEX_FILE = "subtitles.json";
-const REPAIRED_DOWNLOADS = new Set<string>();
 
 type DownloadIndex = Record<string, string>;
 type SubtitleEntry = {
@@ -103,7 +104,7 @@ function ensureNotCanceled(jobId: string) {
 
 function sanitizeFilename(value: string) {
   return value
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 150);
@@ -571,49 +572,71 @@ function formatMegabytesFromKilobytes(kilobytes: number | null) {
   return `${(kilobytes / 1024).toFixed(1)} MB`;
 }
 
-function remuxToFaststart(inputPath: string, outputPath: string): Promise<void> {
+function runCommand(command: string, args: string[], timeoutMs = 10_000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const ffmpeg = execFile(
-      "ffmpeg",
-      [
-        "-y",
-        "-i",
-        inputPath,
-        "-c",
-        "copy",
-        "-movflags",
-        "+faststart",
-        outputPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] } as any,
-    );
-
-    let lastError = "";
-    ffmpeg.stderr?.setEncoding("utf8");
-    ffmpeg.stderr?.on("data", (chunk: string) => {
-      lastError += chunk;
-    });
-
-    ffmpeg.on("error", (error) => rejectPromise(error));
-    ffmpeg.on("close", (code) => {
-      if (code === 0) {
-        resolvePromise();
-      } else {
-        rejectPromise(new Error(`ffmpeg remux failed: ${lastError || `exit code ${code}`}`));
+    const child = execFile(command, args, { windowsHide: true }, (error, stdout, stderr) => {
+      if (timeout) {
+        clearTimeout(timeout);
       }
+
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+
+      resolvePromise({
+        stdout,
+        stderr,
+      });
     });
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      rejectPromise(new Error(`${command} timed out.`));
+    }, timeoutMs);
   });
+}
+
+async function getToolVersion(command: "ffmpeg" | "ffprobe") {
+  try {
+    const { stdout, stderr } = await runCommand(command, ["-version"], 5_000);
+    const firstLine = (stdout || stderr).split(/\r?\n/).find(Boolean) ?? `${command} available`;
+    return {
+      available: true,
+      version: firstLine,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      error: error instanceof Error ? error.message : `${command} unavailable`,
+    };
+  }
+}
+
+export async function getMediaToolStatus() {
+  const [ffmpeg, ffprobe] = await Promise.all([getToolVersion("ffmpeg"), getToolVersion("ffprobe")]);
+  return {
+    ffmpeg,
+    ffprobe,
+    canDownload: ffmpeg.available,
+    canValidate: ffprobe.available || ffmpeg.available,
+    canRepairSeekableMp4: ffmpeg.available,
+  };
 }
 
 function probeVideoFile(filePath: string): Promise<boolean> {
   return new Promise((resolvePromise) => {
-    const ffmpeg = execFile(
-      "ffmpeg",
-      ["-v", "error", "-i", filePath, "-f", "null", "-"],
-      { stdio: ["ignore", "ignore", "pipe"] } as any,
-    );
+    const ffmpeg = execFile("ffprobe", ["-v", "error", "-show_format", "-show_streams", filePath], {
+      windowsHide: true,
+    });
 
-    ffmpeg.on("error", () => resolvePromise(false));
+    ffmpeg.on("error", () => {
+      const fallback = execFile("ffmpeg", ["-v", "error", "-i", filePath, "-f", "null", "-"], {
+        windowsHide: true,
+      });
+      fallback.on("error", () => resolvePromise(false));
+      fallback.on("close", (code) => resolvePromise(code === 0));
+    });
     ffmpeg.on("close", (code) => resolvePromise(code === 0));
   });
 }
@@ -657,11 +680,79 @@ async function cleanupDownloadArtifacts(episodeId: string, filePath: string) {
   await removeFolderIfExists(resolve(getSubtitlesFolder(), sanitizeEpisodeId(episodeId)));
 }
 
-const REPAIR_PROMISES = new Map<string, Promise<string>>();
+async function getSeekableCacheKey(filePath: string) {
+  const fileInfo = await stat(filePath);
+  return `${filePath}:${fileInfo.size}:${fileInfo.mtimeMs}`;
+}
+
+async function repairSeekableDownloadFile(episodeId: string, filePath: string): Promise<string> {
+  const cacheKey = await getSeekableCacheKey(filePath);
+  if (seekableRepairCache.get(filePath) === cacheKey) {
+    return filePath;
+  }
+
+  const temporaryOutputPath = `${filePath}.faststart.tmp`;
+  const backupPath = `${filePath}.faststart.bak`;
+  await removeFileIfExists(temporaryOutputPath);
+  await removeFileIfExists(backupPath);
+
+  try {
+    await runCommand(
+      "ffmpeg",
+      [
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        filePath,
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        temporaryOutputPath,
+      ],
+      120_000,
+    );
+
+    if (!(await probeVideoFile(temporaryOutputPath))) {
+      throw new Error("Faststart repair produced an invalid video file.");
+    }
+
+    await rename(filePath, backupPath);
+    try {
+      await rename(temporaryOutputPath, filePath);
+    } catch (error) {
+      await rename(backupPath, filePath).catch(() => undefined);
+      throw error;
+    }
+    await removeFileIfExists(backupPath);
+
+    seekableRepairCache.set(filePath, await getSeekableCacheKey(filePath));
+    return filePath;
+  } catch (error) {
+    await removeFileIfExists(temporaryOutputPath);
+    await removeFileIfExists(backupPath);
+    if (await probeVideoFile(filePath)) {
+      return filePath;
+    }
+    await cleanupDownloadArtifacts(episodeId, filePath);
+    throw error;
+  }
+}
 
 export async function ensureSeekableDownloadFile(episodeId: string, filePath: string): Promise<string> {
-  // Repair disabled temporarily to troubleshoot playback issues.
-  return filePath;
+  const existing = seekableRepairLocks.get(filePath);
+  if (existing) {
+    return existing;
+  }
+
+  const repair = repairSeekableDownloadFile(episodeId, filePath).finally(() => {
+    seekableRepairLocks.delete(filePath);
+  });
+  seekableRepairLocks.set(filePath, repair);
+  return repair;
 }
 
 async function isValidDownloadFile(episodeId: string, filePath: string) {
@@ -853,11 +944,7 @@ function runFfmpeg(job: FullDownloadJob, streamUrl: string, outputPath: string, 
       outputPath,
     ];
 
-    const ffmpeg = execFile(
-      "ffmpeg",
-      args,
-      { stdio: ["ignore", "ignore", "pipe"] } as any,
-    );
+    const ffmpeg = execFile("ffmpeg", args, { windowsHide: true });
     activeFfmpegProcesses.set(job.id, ffmpeg);
 
     ffmpeg.stderr?.setEncoding("utf8");

@@ -132,4 +132,5 @@ export type SpillshareSource = {
   manifestId: string;
   size: number;
   mimeType: string;
+  sha256?: string;
 };

@@ -16,7 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import { clsx } from "clsx";
-import type { DownloadEngine, LibrarySettings } from "../lib/types";
+import type { DownloadEngine, LibrarySettings, ProviderFeedCatalogEntry } from "../lib/types";
 import { INTEGRATIONS, type IntegrationId } from "../lib/integrations";
 import type { LocalRuntimeStatus } from "../lib/runtime-bridge";
 import { getConnectionModeLabel } from "../lib/runtime-bridge";
@@ -43,6 +43,8 @@ type SettingsViewProps = {
   onDisconnectVault: () => Promise<void>;
   onResetVaultLink: () => Promise<void>;
   onRefreshVaultStatus: () => void | Promise<void>;
+  providerFeeds: ProviderFeedCatalogEntry[];
+  onToggleProviderFeed: (moduleId: string, feedId: string) => void;
 };
 
 type SettingsTab = "general" | "storage" | "integrations";
@@ -229,6 +231,8 @@ export function SettingsView({
   onDisconnectVault,
   onResetVaultLink,
   onRefreshVaultStatus,
+  providerFeeds,
+  onToggleProviderFeed,
 }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [folderBusy, setFolderBusy] = useState(false);
@@ -800,6 +804,40 @@ export function SettingsView({
                     <SettingsIcon className="h-3.5 w-3.5" />
                     Download aware
                   </span>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Provider Feeds"
+                hint="Add standalone provider pages so new episodes land directly inside Spilled."
+                className="xl:col-span-2"
+              >
+                <div className="grid gap-3">
+                  {providerFeeds.map((feed) => (
+                    <div key={`${feed.moduleId}:${feed.feedId}`} className="rounded-2xl border border-white/8 bg-black/20 px-4 py-4">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="font-medium text-white">{feed.title}</div>
+                            <StatusChip tone={feed.enabled ? "good" : "neutral"}>{feed.providerName}</StatusChip>
+                          </div>
+                          <p className="mt-2 text-sm text-white/45">{feed.description}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onToggleProviderFeed(feed.moduleId, feed.feedId)}
+                          className={clsx(
+                            "inline-flex items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
+                            feed.enabled
+                              ? "bg-white/10 text-white hover:bg-white/18"
+                              : "bg-white text-black hover:bg-orange-200",
+                          )}
+                        >
+                          {feed.enabled ? "Remove" : "Add to Spilled"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </SectionCard>
             </div>

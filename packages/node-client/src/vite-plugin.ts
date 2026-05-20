@@ -8,6 +8,9 @@ export function createDashboardApiPlugin(): Plugin {
     server.middlewares.use("/api/import-svetserialu", handlers.importSvetSerialuHandler);
     server.middlewares.use("/api/import-bombuj", handlers.importBombujHandler);
     server.middlewares.use("/api/search", handlers.searchHandler);
+    server.middlewares.use("/api/provider-modules", handlers.providerModulesHandler);
+    server.middlewares.use("/api/provider-feed", handlers.providerFeedHandler);
+    server.middlewares.use("/api/provider-search", handlers.providerSearchHandler);
     server.middlewares.use("/api/explore/feed", handlers.exploreFeedHandler);
     server.middlewares.use("/api/explore/people", handlers.explorePeopleHandler);
     server.middlewares.use("/api/trending/feed", handlers.trendingFeedHandler);

@@ -107,6 +107,7 @@ export class SpilledCinemaNodeRuntime {
   async getNodeRecord(): Promise<NodeRecord> {
     const identity = await this.ensureIdentity();
     const state = await this.loadState();
+    const regionHint = identity.regionHint ?? this.options.regionHint;
     const unsigned = {
       nodeId: identity.nodeId,
       publicKey: identity.publicKey,
@@ -118,7 +119,7 @@ export class SpilledCinemaNodeRuntime {
         },
       ],
       capabilities: this.getCapabilities(),
-      regionHint: identity.regionHint ?? this.options.regionHint,
+      ...(regionHint ? { regionHint } : {}),
       load: {
         activeSessions: state.sessions.filter((session) => session.expiresAt > Date.now()).length,
         activeDownloads: 0,

@@ -45,7 +45,7 @@ function parseBombujGenres(rawValue: string) {
 
   return uniqueBy(
     stripped
-      .split(/[\/,]/)
+      .split(/[/,]/)
       .flatMap((part) => part.split(/\s+/))
       .map((entry) => entry.trim())
       .filter(Boolean)

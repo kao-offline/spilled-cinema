@@ -27,6 +27,36 @@ const nodeLoadValidator = v.object({
   relayPercent: v.number(),
 });
 
+const providerFeedKindValidator = v.union(
+  v.literal("new-episodes"),
+  v.literal("new-additions"),
+  v.literal("popular"),
+  v.literal("latest-episodes"),
+  v.literal("custom"),
+);
+
+const providerFeedValidator = v.object({
+  feedId: v.string(),
+  title: v.string(),
+  description: v.string(),
+  kind: providerFeedKindValidator,
+  defaultEnabled: v.boolean(),
+  pageTitle: v.string(),
+  supportsSearch: v.boolean(),
+  supportsOpenSource: v.boolean(),
+  supportsImport: v.boolean(),
+  sortMode: v.literal("newest"),
+  itemGranularity: v.union(v.literal("episode"), v.literal("show"), v.literal("movie")),
+});
+
+const providerCapabilitiesValidator = v.object({
+  import: v.boolean(),
+  player: v.boolean(),
+  search: v.boolean(),
+  download: v.boolean(),
+  feeds: v.array(providerFeedValidator),
+});
+
 export default defineSchema({
   nodes: defineTable({
     nodeId: v.string(),
@@ -59,6 +89,7 @@ export default defineSchema({
     manifestId: v.string(),
     size: v.number(),
     mimeType: v.string(),
+    sha256: v.optional(v.string()),
     updatedAt: v.number(),
     expiresAt: v.number(),
   })
@@ -66,4 +97,16 @@ export default defineSchema({
     .index("by_node_id", ["nodeId"])
     .index("by_content_id_and_node_id", ["contentId", "nodeId"])
     .index("by_expires_at", ["expiresAt"]),
+  providerModules: defineTable({
+    moduleId: v.string(),
+    providerId: v.string(),
+    displayName: v.string(),
+    version: v.number(),
+    status: v.union(v.literal("active"), v.literal("disabled")),
+    capabilities: providerCapabilitiesValidator,
+    publishedAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_module_id", ["moduleId"])
+    .index("by_status_and_provider_id", ["status", "providerId"]),
 });

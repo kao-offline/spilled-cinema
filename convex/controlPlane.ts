@@ -48,6 +48,7 @@ const spillshareSourceValidator = v.object({
   manifestId: v.string(),
   size: v.number(),
   mimeType: v.string(),
+  sha256: v.optional(v.string()),
 });
 
 const capabilityValidator = v.union(
@@ -86,6 +87,7 @@ type SpillshareInput = {
   manifestId: string;
   size: number;
   mimeType: string;
+  sha256?: string;
 };
 
 function supportsPublicCapability(node: Doc<"nodes">, capability: keyof Doc<"nodes">["capabilities"]) {
@@ -190,6 +192,7 @@ async function syncSpillshareSources(
       manifestId: source.manifestId,
       size: source.size,
       mimeType: source.mimeType,
+      sha256: source.sha256,
       updatedAt: now,
       expiresAt,
     };
@@ -322,6 +325,7 @@ export const listSpillshareSources = internalQuery({
         manifestId: row.manifestId,
         size: row.size,
         mimeType: row.mimeType,
+        sha256: row.sha256,
       }));
   },
 });

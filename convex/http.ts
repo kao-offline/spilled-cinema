@@ -1,8 +1,23 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const http = httpRouter();
+const NODE_CAPABILITIES = ["fetch", "relay", "library", "spillshare", "stream", "download"] as const;
+type NodeCapability = (typeof NODE_CAPABILITIES)[number];
+
+type NodeRecordCandidate = {
+  nodeId: string;
+  publicKey: string;
+  protocolVersion: number;
+  endpoints: unknown;
+  capabilities: unknown;
+  regionHint?: string;
+  load?: unknown;
+  publishedAt: number;
+  ttlMs: number;
+  signature: string;
+};
 
 function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), {
@@ -16,6 +31,106 @@ function json(data: unknown, init: ResponseInit = {}) {
 
 function toHex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function base64ToArrayBuffer(value: string) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer;
+}
+
+function base64UrlToArrayBuffer(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
+  return base64ToArrayBuffer(normalized + padding);
+}
+
+function pemToDer(pem: string) {
+  const body = pem
+    .replace(/-----BEGIN PUBLIC KEY-----/g, "")
+    .replace(/-----END PUBLIC KEY-----/g, "")
+    .replace(/\s+/g, "");
+  return base64ToArrayBuffer(body);
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(",")}}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNodeRecordCandidate(value: unknown): value is NodeRecordCandidate {
+  return (
+    isRecord(value) &&
+    typeof value.nodeId === "string" &&
+    typeof value.publicKey === "string" &&
+    typeof value.protocolVersion === "number" &&
+    typeof value.publishedAt === "number" &&
+    typeof value.ttlMs === "number" &&
+    typeof value.signature === "string"
+  );
+}
+
+async function verifyNodeRecordSignature(record: NodeRecordCandidate) {
+  const { signature, ...unsigned } = record;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(record.publicKey));
+  const expectedNodeId = `node_${toHex(digest).slice(0, 24)}`;
+  if (record.nodeId !== expectedNodeId) {
+    return false;
+  }
+
+  const publicKey = await crypto.subtle.importKey(
+    "spki",
+    pemToDer(record.publicKey),
+    { name: "Ed25519" },
+    false,
+    ["verify"],
+  );
+  return await crypto.subtle.verify(
+    { name: "Ed25519" },
+    publicKey,
+    base64UrlToArrayBuffer(signature),
+    new TextEncoder().encode(stableStringify(unsigned)),
+  );
+}
+
+async function requireVerifiedNodeRecord(record: unknown) {
+  if (!isNodeRecordCandidate(record)) {
+    return { ok: false as const, error: "Invalid node record." };
+  }
+  try {
+    if (await verifyNodeRecordSignature(record)) {
+      return { ok: true as const, record };
+    }
+  } catch {
+    // Fall through to a consistent auth failure.
+  }
+  return { ok: false as const, error: "Invalid node record signature." };
+}
+
+function parseCapability(value: string | null | undefined, fallback: NodeCapability = "relay") {
+  const capability = value || fallback;
+  return NODE_CAPABILITIES.includes(capability as NodeCapability) ? (capability as NodeCapability) : null;
+}
+
+function clampLimit(value: string | number | null | undefined, fallback: number, max: number) {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(max, Math.floor(parsed)));
 }
 
 async function signControlPlanePayload(payload: unknown) {
@@ -60,8 +175,12 @@ http.route({
     if (!body.record || !Array.isArray(body.spillshareSources)) {
       return json({ error: "Missing node registration payload." }, { status: 400 });
     }
+    const verified = await requireVerifiedNodeRecord(body.record);
+    if (!verified.ok) {
+      return json({ error: verified.error }, { status: 401 });
+    }
     const result = await ctx.runMutation(internal.controlPlane.registerNode, {
-      record: body.record as never,
+      record: verified.record as never,
       spillshareSources: body.spillshareSources as never,
     });
     const envelope = {
@@ -86,8 +205,12 @@ http.route({
     if (!body.record || !Array.isArray(body.spillshareSources)) {
       return json({ error: "Missing node heartbeat payload." }, { status: 400 });
     }
+    const verified = await requireVerifiedNodeRecord(body.record);
+    if (!verified.ok) {
+      return json({ error: verified.error }, { status: 401 });
+    }
     const result = await ctx.runMutation(internal.controlPlane.heartbeatNode, {
-      record: body.record as never,
+      record: verified.record as never,
       spillshareSources: body.spillshareSources as never,
     });
     const envelope = {
@@ -109,15 +232,12 @@ http.route({
   method: "GET",
   handler: httpAction(async (ctx, req) => {
     const url = new URL(req.url);
-    const capability = (url.searchParams.get("capability") || "relay") as
-      | "fetch"
-      | "relay"
-      | "library"
-      | "spillshare"
-      | "stream"
-      | "download";
+    const capability = parseCapability(url.searchParams.get("capability"));
+    if (!capability) {
+      return json({ error: "Unsupported capability." }, { status: 400 });
+    }
     const regionHint = url.searchParams.get("regionHint") || undefined;
-    const limit = Number.parseInt(url.searchParams.get("limit") || "10", 10);
+    const limit = clampLimit(url.searchParams.get("limit"), 10, 50);
     const candidates = await ctx.runQuery(internal.controlPlane.listActiveNodes, {
       capability,
       regionHint,
@@ -132,15 +252,12 @@ http.route({
   method: "GET",
   handler: httpAction(async (ctx, req) => {
     const url = new URL(req.url);
-    const capability = (url.searchParams.get("capability") || "relay") as
-      | "fetch"
-      | "relay"
-      | "library"
-      | "spillshare"
-      | "stream"
-      | "download";
+    const capability = parseCapability(url.searchParams.get("capability"));
+    if (!capability) {
+      return json({ error: "Unsupported capability." }, { status: 400 });
+    }
     const regionHint = url.searchParams.get("regionHint") || undefined;
-    const limit = Number.parseInt(url.searchParams.get("limit") || "10", 10);
+    const limit = clampLimit(url.searchParams.get("limit"), 10, 50);
     const candidates = await ctx.runQuery(internal.controlPlane.listActiveNodes, {
       capability,
       regionHint,
@@ -168,7 +285,7 @@ http.route({
     if (!contentId) {
       return json({ error: "contentId is required." }, { status: 400 });
     }
-    const limit = Number.parseInt(url.searchParams.get("limit") || "20", 10);
+    const limit = clampLimit(url.searchParams.get("limit"), 20, 100);
     const sources = await ctx.runQuery(internal.controlPlane.listSpillshareSources, {
       contentId,
       limit,
@@ -187,12 +304,15 @@ http.route({
       regionHint?: string;
       limit?: number;
     };
-    const capability = body.capability || "relay";
+    const capability = parseCapability(body.capability);
+    if (!capability) {
+      return json({ error: "Unsupported capability." }, { status: 400 });
+    }
     const selection = await ctx.runQuery(internal.controlPlane.selectRelay, {
       capability,
       contentId: body.contentId,
       regionHint: body.regionHint,
-      limit: body.limit ?? 10,
+      limit: clampLimit(body.limit, 10, 50),
     });
     const envelope = {
       capability,
@@ -223,6 +343,31 @@ http.route({
       ...envelope,
       signature: await signControlPlanePayload(envelope),
     });
+  }),
+});
+
+http.route({
+  path: "/server/provider-modules",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const modules = await ctx.runQuery(api.providerModules.listActiveProviderModules, {});
+    return json({ modules });
+  }),
+});
+
+http.route({
+  path: "/server/provider-modules/seed",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const configuredSecret = process.env.SPILLED_CONTROL_PLANE_SECRET;
+    if (configuredSecret) {
+      const providedSecret = req.headers.get("x-spilled-control-plane-secret");
+      if (providedSecret !== configuredSecret) {
+        return json({ error: "Unauthorized." }, { status: 401 });
+      }
+    }
+    const result = await ctx.runMutation(internal.providerModules.ensureDefaultProviderModules, {});
+    return json({ ok: true, ...result });
   }),
 });
 

@@ -2,17 +2,26 @@ import {
   cancelFullDownloadJob,
   createFullDownloadJob,
   deleteEpisodeDownload,
+  findEpisodeDownloadByFileNameFast,
   findEpisodeDownloadFast,
   getDownloadedEpisodes,
   getDownloadedSubtitles,
   getFullDownloadJob,
+  getMediaToolStatus,
   listDownloadedEpisodeIds,
   resolveBrowserDownload,
 } from "../../../apps/dashboard/src/server/full-download";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { basename } from "node:path";
 import { enrichArtwork, searchArtworkAssets } from "../../../apps/dashboard/src/server/artwork";
 import { compareSearchScores, scoreSearchCandidate } from "../../../apps/dashboard/src/lib/search-ranking";
 import { fetchBombujMovie, searchBombuj } from "../../../apps/dashboard/src/server/bombuj";
 import { getExploreFeed } from "../../../apps/dashboard/src/server/explore-feed";
+import { loadProviderFeed } from "../../../apps/dashboard/src/server/provider-feed";
+import { loadProviderModulesFromControlPlane } from "../../../apps/dashboard/src/server/provider-modules";
+import { searchProviderModule } from "../../../apps/dashboard/src/server/provider-search";
 import { searchSvetSerialu } from "../../../apps/dashboard/src/server/svetserialu";
 import { getTrendingFeed } from "../../../apps/dashboard/src/server/trending-feed";
 import { SpilledCinemaNodeRuntime } from "../../../apps/server/src/runtime";
@@ -46,7 +55,11 @@ export function getNodeRuntime() {
 }
 
 export async function getNodeStatus() {
-  return runtime.getStatus();
+  const [status, mediaTools] = await Promise.all([runtime.getStatus(), getMediaToolStatus()]);
+  return {
+    ...status,
+    mediaTools,
+  };
 }
 
 export async function searchNode(query: string) {
@@ -89,6 +102,18 @@ export async function loadTrendingFeed(input: Parameters<typeof getTrendingFeed>
   return getTrendingFeed(input);
 }
 
+export async function loadProviderModules() {
+  return loadProviderModulesFromControlPlane();
+}
+
+export async function loadProviderFeedItems(input: Parameters<typeof loadProviderFeed>[0]) {
+  return loadProviderFeed(input);
+}
+
+export async function searchProviderModuleItems(input: Parameters<typeof searchProviderModule>[0]) {
+  return searchProviderModule(input);
+}
+
 export async function startDownload(input: Parameters<typeof createFullDownloadJob>[0]) {
   return createFullDownloadJob(input);
 }
@@ -105,22 +130,81 @@ export async function deleteDownload(episodeId: string) {
   await deleteEpisodeDownload(episodeId);
 }
 
+function hashFile(filePath: string) {
+  return new Promise<string>((resolvePromise, rejectPromise) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", rejectPromise);
+    stream.on("end", () => resolvePromise(hash.digest("hex")));
+  });
+}
+
+async function publishSpillshareFile(input: {
+  nodeId: string;
+  filePath: string;
+  fileName?: string;
+}) {
+  const fileInfo = await stat(input.filePath);
+  if (!fileInfo.isFile() || fileInfo.size <= 0) {
+    return null;
+  }
+
+  const fileName = input.fileName ?? basename(input.filePath);
+  const fileSha256 = await hashFile(input.filePath);
+  return await runtime.publishSpillshareSource({
+    contentId: fileSha256,
+    nodeId: input.nodeId,
+    fileName,
+    manifestId: `manifest_${fileSha256.slice(0, 16)}`,
+    size: fileInfo.size,
+    mimeType: "video/mp4",
+    sha256: fileSha256,
+  });
+}
+
 export async function listDownloads() {
   const episodeIds = await listDownloadedEpisodeIds();
   const files = await getDownloadedEpisodes();
   await runtime.updateDownloadInventory(episodeIds, files);
 
   const nodeId = (await runtime.getNodeRecord()).nodeId;
+  const publishedPaths = new Set<string>();
+  for (const episodeId of episodeIds) {
+    const filePath = await findEpisodeDownloadFast(episodeId);
+    if (!filePath || publishedPaths.has(filePath)) {
+      continue;
+    }
+    try {
+      await publishSpillshareFile({ nodeId, filePath });
+      publishedPaths.add(filePath);
+    } catch (error) {
+      console.warn("[spillshare] failed to publish episode source", {
+        episodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   for (const fileName of files) {
-    const contentId = sha256(fileName);
-    await runtime.publishSpillshareSource({
-      contentId,
-      nodeId,
-      fileName,
-      manifestId: `manifest_${contentId.slice(0, 16)}`,
-      size: 0,
-      mimeType: "video/mp4",
-    });
+    const filePath = await findEpisodeDownloadByFileNameFast(fileName);
+    if (!filePath || publishedPaths.has(filePath)) {
+      continue;
+    }
+    try {
+      await publishSpillshareFile({ nodeId, filePath, fileName });
+      publishedPaths.add(filePath);
+    } catch (error) {
+      const fallbackId = sha256(fileName);
+      await runtime.publishSpillshareSource({
+        contentId: fallbackId,
+        nodeId,
+        fileName,
+        manifestId: `manifest_${fallbackId.slice(0, 16)}`,
+        size: 0,
+        mimeType: "video/mp4",
+      });
+    }
   }
 
   return { episodeIds, files };
