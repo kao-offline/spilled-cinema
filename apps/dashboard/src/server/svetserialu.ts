@@ -269,7 +269,7 @@ async function extractPlayers(episodeHtml: string, episodeUrl: string) {
     const groupHtml = `<div class="LangGroup${chunk}`;
     const headerMatch = groupHtml.match(/<div class="LangHeader[^>]*>([\s\S]*?)<\/div>/i);
     const language = normalizeSourceLanguageLabel(headerMatch?.[1] ?? "");
-    const tabsheMatch = groupHtml.match(/<div class="tabshe[^\"]*"([^>]*)>([\s\S]*?)<\/div>/i);
+    const tabsheMatch = groupHtml.match(/<div class="tabshe[^"]*"([^>]*)>([\s\S]*?)<\/div>/i);
     const tabsheAttrs = tabsheMatch?.[1] ?? "";
     const tabsheBody = tabsheMatch?.[2] ?? "";
     const dataIframeUrl = matchOne(tabsheAttrs, /\bdata-iframe-url="([^"]+)"/i);

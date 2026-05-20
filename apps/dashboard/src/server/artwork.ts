@@ -1,4 +1,4 @@
-import { scoreSearchCandidate } from "../lib/search-ranking";
+import { normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking";
 
 type ArtworkBundle = {
   posterUrl?: string | null;
@@ -387,6 +387,19 @@ function scoreTmdbCandidate(
   ) + scoreContextAgainstOverview(candidate.overview, description);
 }
 
+function getArtworkConfidenceThresholds(title: string, altTitle?: string | null) {
+  const primary = normalizeSearchText(title || altTitle || "");
+  const secondary = normalizeSearchText(altTitle || "");
+  const tokenCount = primary.split(" ").filter(Boolean).length;
+  const compactLength = primary.replace(/\s+/g, "").length;
+  const hasDigits = /\d/.test(primary) || /\d/.test(secondary);
+  const isShortOrAmbiguous = compactLength <= 8 || tokenCount <= 2 || hasDigits;
+
+  return isShortOrAmbiguous
+    ? { minimumScore: 980, minimumLead: 220 }
+    : { minimumScore: 560, minimumLead: 90 };
+}
+
 async function searchTmdbBestMatch({
   mediaType,
   title,
@@ -433,7 +446,18 @@ async function searchTmdbBestMatch({
   const ranked = rankedCandidates.sort((left, right) => right.score - left.score);
 
   const best = ranked[0];
-  return best && best.score > 0 ? best.candidate : null;
+  const runnerUp = ranked[1];
+  const thresholds = getArtworkConfidenceThresholds(title, altTitle);
+  if (!best) {
+    return null;
+  }
+  if (best.score < thresholds.minimumScore) {
+    return null;
+  }
+  if (runnerUp && best.score - runnerUp.score < thresholds.minimumLead) {
+    return null;
+  }
+  return best.candidate;
 }
 
 async function fetchTmdbImages(mediaType: "movie" | "tv", id: number) {
@@ -749,7 +773,18 @@ async function searchTvdbBestMatch({
   const ranked = rankedCandidates.sort((left, right) => right.score - left.score);
 
   const best = ranked[0];
-  return best && best.score > 0 ? best.candidate : null;
+  const runnerUp = ranked[1];
+  const thresholds = getArtworkConfidenceThresholds(title, altTitle);
+  if (!best) {
+    return null;
+  }
+  if (best.score < thresholds.minimumScore) {
+    return null;
+  }
+  if (runnerUp && best.score - runnerUp.score < thresholds.minimumLead) {
+    return null;
+  }
+  return best.candidate;
 }
 
 async function fetchTvdbExtended(mediaType: "movie" | "tv", id: number) {

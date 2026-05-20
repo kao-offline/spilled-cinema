@@ -162,15 +162,34 @@ export async function hydrateSvetItem(item: ExploreItem) {
     }
 
     const detail = parseSvetDetail(html);
-    const artwork = await enrichArtwork({
-      mediaType: "tv",
-      title: detail.title || item.title,
-      altTitle: detail.altTitle,
-      yearHint: detail.year ?? item.year ?? undefined,
-      description: detail.description,
-      currentPosterUrl: detail.posterUrl ?? item.posterUrl ?? null,
-      currentBackdropUrl: item.backdropUrl ?? null,
-    });
+    let artwork: {
+      posterUrl: string | null;
+      backdropUrl: string | null;
+      clearLogoUrl: string | null;
+    } = {
+      posterUrl: detail.posterUrl ?? item.posterUrl ?? null,
+      backdropUrl: item.backdropUrl ?? null,
+      clearLogoUrl: null,
+    };
+
+    try {
+      const enrichedArtwork = await enrichArtwork({
+        mediaType: "tv",
+        title: detail.title || item.title,
+        altTitle: detail.altTitle,
+        yearHint: detail.year ?? item.year ?? undefined,
+        description: detail.description,
+        currentPosterUrl: detail.posterUrl ?? item.posterUrl ?? null,
+        currentBackdropUrl: item.backdropUrl ?? null,
+      });
+      artwork = {
+        posterUrl: enrichedArtwork.posterUrl ?? detail.posterUrl ?? item.posterUrl ?? null,
+        backdropUrl: enrichedArtwork.backdropUrl ?? item.backdropUrl ?? null,
+        clearLogoUrl: enrichedArtwork.clearLogoUrl ?? null,
+      };
+    } catch {
+      // Keep source detail metadata even when external artwork providers fail.
+    }
 
     return {
       ...item,

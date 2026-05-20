@@ -1,7 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
-import type { ViewState } from "./components/Sidebar";
+import type { SidebarFeedLink, ViewState } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
 import { ShowCard } from "./components/ShowCard";
@@ -12,6 +12,7 @@ import { SettingsView } from "./components/SettingsView";
 import { SupportView } from "./components/SupportView";
 import { DownloadedView } from "./components/DownloadedView";
 import { ExploreView } from "./components/ExploreView";
+import { ProviderFeedPage } from "./components/ProviderFeedPage";
 import { DownloadLanguageModal, type DownloadLanguageOption } from "./components/DownloadLanguageModal";
 import { DownloadEngineModal } from "./components/DownloadEngineModal";
 import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
@@ -85,7 +86,31 @@ import { buildRuntimeUrl } from "./lib/local-api";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
 import { cacheExploreFeed, deriveTasteProfileFromLibraryState, readDiscoveryUiState, readTasteProfile, recordAudioPreferenceSignal, recordEpisodePlaySignal, recordFavoriteSignal, recordImportedShowSignal, recordShowOpenSignal, updateDiscoveryUiState, type DiscoveryUiState } from "./lib/discovery-storage";
 import { fetchExploreFeed } from "./lib/discovery-client";
-import type { ExploreFeedResponse, ExploreFilters, ExploreItem, ExplorePersonRole, UserTasteProfile } from "./lib/types";
+import type {
+  EnabledProviderFeed,
+  ExploreFeedResponse,
+  ExploreFilters,
+  ExploreItem,
+  ExplorePersonRole,
+  ProviderFeedCatalogEntry,
+  ProviderFeedResponse,
+  ProviderModuleManifest,
+  UserTasteProfile,
+} from "./lib/types";
+import {
+  readCachedProviderModules,
+  readEnabledProviderFeeds,
+  sanitizeEnabledProviderFeeds,
+  toggleEnabledProviderFeed,
+  writeCachedProviderModules,
+  writeEnabledProviderFeeds,
+} from "./lib/provider-feed-storage";
+import { fetchProviderFeed, fetchProviderModules, searchProviderModuleItems } from "./lib/provider-modules-client";
+import {
+  createProviderFeedViewId,
+  isProviderFeedViewId,
+  parseProviderFeedViewId,
+} from "./lib/provider-modules-shared";
 
 function sanitizeEpisodeIdForLookup(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80).toLowerCase();
@@ -288,8 +313,41 @@ function toggleListValue(values: string[], value: string) {
   return values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
 }
 
+type ProviderFeedPageState = {
+  query: string;
+  feed: ProviderFeedResponse | null;
+  feedLoading: boolean;
+  feedError: string | null;
+  searchResults: ExploreItem[];
+  searchLoading: boolean;
+  searchError: string | null;
+  lastSearchQuery: string | null;
+};
+
+function createEmptyProviderFeedPageState(): ProviderFeedPageState {
+  return {
+    query: "",
+    feed: null,
+    feedLoading: false,
+    feedError: null,
+    searchResults: [],
+    searchLoading: false,
+    searchError: null,
+    lastSearchQuery: null,
+  };
+}
+
+function mergeProviderFeedItems(left: ExploreItem[], right: ExploreItem[]) {
+  const merged = new Map<string, ExploreItem>();
+  for (const item of [...left, ...right]) {
+    merged.set(item.id, item);
+  }
+  return Array.from(merged.values());
+}
+
 function App() {
   const HERO_ROTATION_MS = 7000;
+  const cachedProviderModules = readCachedProviderModules();
   const [state, setState] = useState<LibraryState>(() => readLibraryState());
   const [importSlug, setImportSlug] = useState("");
   const [importing, setImporting] = useState(false);
@@ -346,6 +404,11 @@ function App() {
   const [exploreCursor, setExploreCursor] = useState<string | null>(readDiscoveryUiState().cachedExplore?.payload.continueCursor ?? null);
   const [exploreLoading, setExploreLoading] = useState(false);
   const [exploreError, setExploreError] = useState<string | null>(null);
+  const [providerModules, setProviderModules] = useState<ProviderModuleManifest[]>(() => cachedProviderModules.modules);
+  const [enabledProviderFeeds, setEnabledProviderFeeds] = useState<EnabledProviderFeed[]>(() =>
+    sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), cachedProviderModules.modules),
+  );
+  const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>({});
   const stateRef = useRef(state);
   const downloadedLanguageMapRef = useRef(downloadedEpisodeLanguageById);
   const downloadQueueRef = useRef(downloadQueue);
@@ -368,6 +431,35 @@ function App() {
   useEffect(() => {
     downloadQueueRef.current = downloadQueue;
   }, [downloadQueue]);
+
+  useEffect(() => {
+    let canceled = false;
+
+    const loadProviderModuleCatalog = async () => {
+      try {
+        const modules = await fetchProviderModules();
+        if (canceled) {
+          return;
+        }
+
+        setProviderModules(modules);
+        writeCachedProviderModules(modules);
+        setEnabledProviderFeeds((current) => {
+          const next = sanitizeEnabledProviderFeeds(current, modules);
+          writeEnabledProviderFeeds(next);
+          return next;
+        });
+      } catch {
+        // Keep cached manifests if the control plane is unavailable.
+      }
+    };
+
+    void loadProviderModuleCatalog();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   async function refreshVaultState() {
     const status = await getVaultStatus();
@@ -865,6 +957,199 @@ function App() {
       return rightScore - leftScore;
     });
   }, [remoteByPlatform, state.settings.preferredMovieSource, state.settings.preferredSeriesSource]);
+
+  const providerFeedCatalog = useMemo<ProviderFeedCatalogEntry[]>(
+    () =>
+      providerModules.flatMap((module) =>
+        module.capabilities.feeds.map((feed) => ({
+          moduleId: module.moduleId,
+          feedId: feed.feedId,
+          providerId: module.providerId,
+          providerName: module.displayName,
+          title: feed.title,
+          description: feed.description,
+          pageTitle: feed.pageTitle,
+          enabled: enabledProviderFeeds.some(
+            (enabledFeed) => enabledFeed.moduleId === module.moduleId && enabledFeed.feedId === feed.feedId,
+          ),
+        })),
+      ),
+    [enabledProviderFeeds, providerModules],
+  );
+
+  const providerFeedLinks = useMemo<SidebarFeedLink[]>(
+    () =>
+      enabledProviderFeeds.flatMap((enabledFeed) => {
+        const module = providerModules.find((entry) => entry.moduleId === enabledFeed.moduleId);
+        const feed = module?.capabilities.feeds.find((entry) => entry.feedId === enabledFeed.feedId);
+        if (!module || !feed) {
+          return [];
+        }
+
+        return [
+          {
+            id: createProviderFeedViewId(module.moduleId, feed.feedId),
+            label: feed.pageTitle,
+          },
+        ];
+      }),
+    [enabledProviderFeeds, providerModules],
+  );
+
+  const activeProviderFeedMeta = useMemo(() => {
+    if (!isProviderFeedViewId(activeView)) {
+      return null;
+    }
+
+    const parsed = parseProviderFeedViewId(activeView);
+    if (!parsed) {
+      return null;
+    }
+
+    const module = providerModules.find((entry) => entry.moduleId === parsed.moduleId);
+    const feed = module?.capabilities.feeds.find((entry) => entry.feedId === parsed.feedId);
+    if (!module || !feed) {
+      return null;
+    }
+
+    return {
+      viewId: activeView,
+      module,
+      feed,
+    };
+  }, [activeView, providerModules]);
+
+  const activeProviderFeedPageState = activeProviderFeedMeta
+    ? (providerFeedStates[activeProviderFeedMeta.viewId] ?? createEmptyProviderFeedPageState())
+    : null;
+  const deferredProviderFeedQuery = useDeferredValue(activeProviderFeedPageState?.query ?? "");
+
+  function updateProviderFeedPageState(viewId: string, patch: Partial<ProviderFeedPageState>) {
+    setProviderFeedStates((current) => ({
+      ...current,
+      [viewId]: {
+        ...(current[viewId] ?? createEmptyProviderFeedPageState()),
+        ...patch,
+      },
+    }));
+  }
+
+  function findImportedShowForItem(item: Pick<ExploreItem, "provider" | "importSlug">) {
+    return state.shows.find((show) => {
+      if (item.provider === "bombuj") {
+        return show.slug === `bombuj-${item.importSlug}`;
+      }
+      return show.slug === item.importSlug;
+    }) ?? null;
+  }
+
+  const activeProviderFeedItems = useMemo(() => {
+    if (!activeProviderFeedPageState) {
+      return [];
+    }
+
+    const sourceItems = activeProviderFeedPageState.query.trim()
+      ? activeProviderFeedPageState.searchResults
+      : activeProviderFeedPageState.feed?.items ?? [];
+
+    return sourceItems.map((item) => ({
+      ...item,
+      inVault: Boolean(findImportedShowForItem(item)),
+    }));
+  }, [activeProviderFeedPageState, state.shows]);
+
+  useEffect(() => {
+    if (!activeProviderFeedMeta) {
+      return;
+    }
+
+    const viewId = activeProviderFeedMeta.viewId;
+    const query = deferredProviderFeedQuery.trim();
+    const current = providerFeedStates[viewId] ?? createEmptyProviderFeedPageState();
+
+    if (query) {
+      if (current.searchLoading && current.query.trim() === query) {
+        return;
+      }
+
+      if (current.lastSearchQuery === query) {
+        return;
+      }
+
+      updateProviderFeedPageState(viewId, {
+        searchLoading: true,
+        searchError: null,
+      });
+
+      void searchProviderModuleItems({
+        moduleId: activeProviderFeedMeta.module.moduleId,
+        query,
+      })
+        .then((results) => {
+          updateProviderFeedPageState(viewId, {
+            searchResults: results,
+            searchLoading: false,
+            searchError: null,
+            lastSearchQuery: query,
+          });
+        })
+        .catch((error) => {
+          updateProviderFeedPageState(viewId, {
+            searchResults: [],
+            searchLoading: false,
+            searchError: error instanceof Error ? error.message : "Failed to search this provider.",
+            lastSearchQuery: query,
+          });
+        });
+      return;
+    }
+
+    if (current.searchResults.length > 0 || current.searchError || current.searchLoading) {
+      updateProviderFeedPageState(viewId, {
+        searchResults: [],
+        searchLoading: false,
+        searchError: null,
+        lastSearchQuery: null,
+      });
+    }
+
+    if (current.feed || current.feedLoading) {
+      return;
+    }
+
+    updateProviderFeedPageState(viewId, {
+      feedLoading: true,
+      feedError: null,
+    });
+
+    void fetchProviderFeed({
+      moduleId: activeProviderFeedMeta.module.moduleId,
+      feedId: activeProviderFeedMeta.feed.feedId,
+      limit: 24,
+    })
+      .then((feed) => {
+        updateProviderFeedPageState(viewId, {
+          feed,
+          feedLoading: false,
+          feedError: null,
+          searchResults: [],
+          searchLoading: false,
+          searchError: null,
+        });
+      })
+      .catch((error) => {
+        updateProviderFeedPageState(viewId, {
+          feedLoading: false,
+          feedError: error instanceof Error ? error.message : "Failed to load provider feed.",
+        });
+      });
+  }, [activeProviderFeedMeta, deferredProviderFeedQuery, providerFeedStates]);
+
+  useEffect(() => {
+    if (isProviderFeedViewId(activeView) && !activeProviderFeedMeta) {
+      setActiveView("home");
+    }
+  }, [activeProviderFeedMeta, activeView]);
 
   function setDiscoveryStateAndPersist(change: Partial<DiscoveryUiState>) {
     startTransition(() => {
@@ -1364,7 +1649,6 @@ function App() {
       }
     }
     // Resume once on startup; new items are resumed immediately after creation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function withLocalPlayer(episode: LibraryEpisode): LibraryEpisode {
@@ -1513,16 +1797,140 @@ function App() {
       return;
     }
 
+    if (isProviderFeedViewId(activeView)) {
+      updateProviderFeedPageState(activeView, {
+        query: value,
+        ...(value.trim()
+          ? {}
+          : {
+              searchResults: [],
+              searchError: null,
+              searchLoading: false,
+              lastSearchQuery: null,
+            }),
+      });
+      return;
+    }
+
     handleLibraryQueryChange(value);
   }
 
-  function handleOpenDiscoveryItem(item: ExploreItem) {
-    const inVaultShow = state.shows.find((show) => {
-      if (item.provider === "bombuj") {
-        return show.slug === `bombuj-${item.importSlug}`;
+  async function handleRefreshProviderFeed() {
+    if (!activeProviderFeedMeta) {
+      return;
+    }
+
+    const viewId = activeProviderFeedMeta.viewId;
+    const query = (providerFeedStates[viewId] ?? createEmptyProviderFeedPageState()).query.trim();
+
+    if (query) {
+      updateProviderFeedPageState(viewId, {
+        searchLoading: true,
+        searchError: null,
+      });
+
+      try {
+        const results = await searchProviderModuleItems({
+          moduleId: activeProviderFeedMeta.module.moduleId,
+          query,
+        });
+        updateProviderFeedPageState(viewId, {
+          searchResults: results,
+          searchLoading: false,
+          searchError: null,
+          lastSearchQuery: query,
+        });
+      } catch (error) {
+        updateProviderFeedPageState(viewId, {
+          searchResults: [],
+          searchLoading: false,
+          searchError: error instanceof Error ? error.message : "Failed to search this provider.",
+          lastSearchQuery: query,
+        });
       }
-      return show.slug === item.importSlug;
+      return;
+    }
+
+    updateProviderFeedPageState(viewId, {
+      feedLoading: true,
+      feedError: null,
     });
+
+    try {
+      const feed = await fetchProviderFeed({
+        moduleId: activeProviderFeedMeta.module.moduleId,
+        feedId: activeProviderFeedMeta.feed.feedId,
+        limit: 24,
+      });
+      updateProviderFeedPageState(viewId, {
+        feed,
+        feedLoading: false,
+        feedError: null,
+      });
+    } catch (error) {
+      updateProviderFeedPageState(viewId, {
+        feedLoading: false,
+        feedError: error instanceof Error ? error.message : "Failed to load provider feed.",
+      });
+    }
+  }
+
+  async function handleLoadMoreProviderFeed() {
+    if (!activeProviderFeedMeta) {
+      return;
+    }
+
+    const viewId = activeProviderFeedMeta.viewId;
+    const current = providerFeedStates[viewId] ?? createEmptyProviderFeedPageState();
+    if (current.query.trim() || current.feedLoading || !current.feed?.continueCursor) {
+      return;
+    }
+
+    updateProviderFeedPageState(viewId, {
+      feedLoading: true,
+      feedError: null,
+    });
+
+    try {
+      const nextFeed = await fetchProviderFeed({
+        moduleId: activeProviderFeedMeta.module.moduleId,
+        feedId: activeProviderFeedMeta.feed.feedId,
+        cursor: current.feed.continueCursor,
+        limit: 24,
+      });
+      updateProviderFeedPageState(viewId, {
+        feed: {
+          ...nextFeed,
+          items: mergeProviderFeedItems(current.feed.items, nextFeed.items),
+        },
+        feedLoading: false,
+        feedError: null,
+      });
+    } catch (error) {
+      updateProviderFeedPageState(viewId, {
+        feedLoading: false,
+        feedError: error instanceof Error ? error.message : "Failed to load more provider feed items.",
+      });
+    }
+  }
+
+  function handleToggleProviderFeed(moduleId: string, feedId: string) {
+    const viewId = createProviderFeedViewId(moduleId, feedId);
+    setEnabledProviderFeeds((current) => {
+      const next = sanitizeEnabledProviderFeeds(
+        toggleEnabledProviderFeed(current, { moduleId, feedId }),
+        providerModules,
+      );
+      writeEnabledProviderFeeds(next);
+      if (activeView === viewId && !next.some((feed) => feed.moduleId === moduleId && feed.feedId === feedId)) {
+        setActiveView("home");
+      }
+      return next;
+    });
+  }
+
+  function handleOpenDiscoveryItem(item: ExploreItem) {
+    const inVaultShow = findImportedShowForItem(item);
 
     if (inVaultShow) {
       handleOpenShow(inVaultShow.slug);
@@ -2123,9 +2531,17 @@ function App() {
     await handleConnectVault();
   }
 
-  const isExploreSurface = activeView === "explore";
-  const headerQuery = isExploreSurface ? discoveryState.exploreQuery : state.query;
-  const headerPlaceholder = isExploreSurface ? "Search the live catalog..." : "Search movies, series, shows...";
+  const isExploreSurface = activeView === "explore" || Boolean(activeProviderFeedMeta);
+  const headerQuery = activeView === "explore"
+    ? discoveryState.exploreQuery
+    : activeProviderFeedMeta
+      ? activeProviderFeedPageState?.query ?? ""
+      : state.query;
+  const headerPlaceholder = activeView === "explore"
+    ? "Search the live catalog..."
+    : activeProviderFeedMeta
+      ? `Search inside ${activeProviderFeedMeta.module.displayName}...`
+      : "Search movies, series, shows...";
   const headerSearchWidth = isExploreSurface ? "compact" : "default";
   const showHeader = true;
 
@@ -2137,6 +2553,7 @@ function App() {
           setActiveView(v);
           handleCloseShow();
         }}
+        feedLinks={providerFeedLinks}
         downloadJobs={downloadJobs}
         onCancelDownload={(episodeId) => {
           const show = state.shows.find((entry) => entry.episodes.some((episode) => episode.id === episodeId));
@@ -2237,6 +2654,8 @@ function App() {
               onRefreshVaultStatus={() => {
                 void refreshVaultState();
               }}
+              providerFeeds={providerFeedCatalog}
+              onToggleProviderFeed={handleToggleProviderFeed}
                onSettingsChange={(change) => {
                   const nextState = updateSettings(change);
                   setState(nextState);
@@ -2267,6 +2686,28 @@ function App() {
               onSetFilters={handleSetExploreFilters}
               onResetFilters={handleResetExploreFilters}
               onLoadMore={handleLoadMoreExplore}
+              onImport={(item) => {
+                void handleImport(item.provider, item.importSlug, item.mediaType);
+              }}
+              onOpenVault={handleOpenDiscoveryItem}
+            />
+          ) : activeProviderFeedMeta && activeProviderFeedPageState ? (
+            <ProviderFeedPage
+              module={activeProviderFeedMeta.module}
+              feed={activeProviderFeedMeta.feed}
+              items={activeProviderFeedItems}
+              query={activeProviderFeedPageState.query}
+              loading={activeProviderFeedPageState.query.trim() ? activeProviderFeedPageState.searchLoading : activeProviderFeedPageState.feedLoading}
+              error={activeProviderFeedPageState.query.trim() ? activeProviderFeedPageState.searchError : activeProviderFeedPageState.feedError}
+              stale={activeProviderFeedPageState.feed?.stale ?? false}
+              generatedAt={activeProviderFeedPageState.feed?.generatedAt ?? null}
+              continueCursor={activeProviderFeedPageState.feed?.continueCursor ?? null}
+              onRefresh={() => {
+                void handleRefreshProviderFeed();
+              }}
+              onLoadMore={() => {
+                void handleLoadMoreProviderFeed();
+              }}
               onImport={(item) => {
                 void handleImport(item.provider, item.importSlug, item.mediaType);
               }}

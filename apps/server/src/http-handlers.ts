@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer";
+import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { isIP } from "node:net";
 import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { SpillshareSource } from "../../../packages/node-protocol/src";
 import {
   cancelDownload,
@@ -10,6 +13,8 @@ import {
   getDownloadedSubtitleList,
   getDownloadStatus,
   loadExploreFeed,
+  loadProviderFeedItems,
+  loadProviderModules,
   loadTrendingFeed,
   getNodeRuntime,
   getNodeStatus,
@@ -19,6 +24,7 @@ import {
   resolveBrowserDownloadViaNode,
   searchArtwork,
   searchNode,
+  searchProviderModuleItems,
   startDownload,
 } from "../../../packages/node-client/src/index";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "./player-resolver";
@@ -82,6 +88,158 @@ function parseYearHint(value: string | null | undefined) {
   return match?.[0] ?? undefined;
 }
 
+export function resolveDownloadByteRange(fileSize: number, rangeHeader: string | undefined) {
+  if (!rangeHeader) {
+    return {
+      statusCode: 200,
+      start: 0,
+      end: fileSize - 1,
+      contentLength: fileSize,
+      contentRange: null,
+    };
+  }
+
+  const rangeMatch = rangeHeader.match(/bytes=(\d*)-(\d*)/i);
+  if (!rangeMatch) {
+    return null;
+  }
+
+  let start: number;
+  let end: number;
+  if (rangeMatch[1] && rangeMatch[2]) {
+    start = Number.parseInt(rangeMatch[1], 10);
+    end = Number.parseInt(rangeMatch[2], 10);
+  } else if (rangeMatch[1]) {
+    start = Number.parseInt(rangeMatch[1], 10);
+    end = fileSize - 1;
+  } else {
+    const suffixLength = Number.parseInt(rangeMatch[2], 10);
+    start = Math.max(fileSize - suffixLength, 0);
+    end = fileSize - 1;
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= fileSize || start > end) {
+    return null;
+  }
+
+  return {
+    statusCode: 206,
+    start,
+    end,
+    contentLength: end - start + 1,
+    contentRange: `bytes ${start}-${end}/${fileSize}`,
+  };
+}
+
+function isBlockedIpAddress(address: string) {
+  const version = isIP(address);
+  if (version === 4) {
+    const octets = address.split(".").map((part) => Number.parseInt(part, 10));
+    const [first, second] = octets;
+    return (
+      first === 0 ||
+      first === 10 ||
+      first === 127 ||
+      first >= 224 ||
+      (first === 100 && second >= 64 && second <= 127) ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) ||
+      (first === 198 && (second === 18 || second === 19))
+    );
+  }
+  if (version === 6) {
+    const normalized = address.toLowerCase();
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe80:") ||
+      normalized.startsWith("::ffff:127.") ||
+      normalized.startsWith("::ffff:10.") ||
+      normalized.startsWith("::ffff:192.168.")
+    );
+  }
+  return true;
+}
+
+async function assertSafeProxyTarget(parsed: URL) {
+  if (process.env.SPILLED_ALLOW_PRIVATE_PROXY === "1") {
+    return;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) {
+    throw new Error("Refusing to proxy a local host.");
+  }
+
+  if (isIP(hostname)) {
+    if (isBlockedIpAddress(hostname)) {
+      throw new Error("Refusing to proxy a private or reserved IP address.");
+    }
+    return;
+  }
+
+  const resolved = await lookup(hostname, { all: true, verbatim: true });
+  if (resolved.length === 0 || resolved.some((entry) => isBlockedIpAddress(entry.address))) {
+    throw new Error("Refusing to proxy a host that resolves to a private or reserved address.");
+  }
+}
+
+function getProxyMaxBytes() {
+  const configured = Number.parseInt(process.env.SPILLED_PROXY_MAX_BYTES || "", 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : 8 * 1024 * 1024 * 1024;
+}
+
+async function fetchProxyTarget(input: {
+  url: URL;
+  method: string;
+  headers: Record<string, string>;
+}) {
+  let currentUrl = input.url;
+  for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+    await assertSafeProxyTarget(currentUrl);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      Number.parseInt(process.env.SPILLED_PROXY_FETCH_TIMEOUT_MS || "15000", 10),
+    );
+    try {
+      const response = await fetch(currentUrl.toString(), {
+        method: input.method,
+        headers: input.headers,
+        redirect: "manual",
+        signal: controller.signal,
+      });
+
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get("location");
+        if (!location) {
+          return response;
+        }
+        currentUrl = new URL(location, currentUrl);
+        if (currentUrl.protocol !== "http:" && currentUrl.protocol !== "https:") {
+          throw new Error("Refusing to follow a redirect to an unsupported protocol.");
+        }
+        continue;
+      }
+
+      const contentLength = Number.parseInt(response.headers.get("content-length") || "", 10);
+      if (Number.isFinite(contentLength) && contentLength > getProxyMaxBytes()) {
+        throw new Error("Refusing to proxy a response larger than the configured limit.");
+      }
+
+      return response;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error("Too many upstream redirects.");
+}
+
 export function createHttpHandlers() {
   const runtime = getNodeRuntime();
   
@@ -123,6 +281,55 @@ export function createHttpHandlers() {
       sendJson(res, 200, { results: query ? await searchNode(query) : [] });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to search." });
+    }
+  };
+
+  const providerModulesHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, { modules: await loadProviderModules() });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to load provider modules." });
+    }
+  };
+
+  const providerFeedHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        moduleId?: string;
+        feedId?: string;
+        cursor?: string | null;
+        limit?: number;
+      }>(req);
+      const moduleId = body.moduleId?.trim();
+      const feedId = body.feedId?.trim();
+      if (!moduleId || !feedId) {
+        return sendJson(res, 400, { error: "moduleId and feedId are required." });
+      }
+      sendJson(res, 200, await loadProviderFeedItems({
+        moduleId,
+        feedId,
+        cursor: body.cursor ?? null,
+        limit: body.limit,
+      }));
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to load provider feed." });
+    }
+  };
+
+  const providerSearchHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{ moduleId?: string; query?: string }>(req);
+      const moduleId = body.moduleId?.trim();
+      const query = body.query?.trim() ?? "";
+      if (!moduleId) {
+        return sendJson(res, 400, { error: "moduleId is required." });
+      }
+      sendJson(res, 200, { results: query ? await searchProviderModuleItems({ moduleId, query }) : [] });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to search provider feed." });
     }
   };
 
@@ -284,7 +491,8 @@ export function createHttpHandlers() {
         return sendJson(res, 400, { error: "Unsupported stream URL protocol." });
       }
 
-      const upstream = await fetch(parsed.toString(), {
+      const upstream = await fetchProxyTarget({
+        url: parsed,
         method: req.method,
         headers: {
           "user-agent": USER_AGENT,
@@ -292,7 +500,6 @@ export function createHttpHandlers() {
           ...(referer ? { referer } : {}),
           ...(typeof req.headers?.range === "string" ? { range: req.headers.range } : {}),
         },
-        redirect: "follow",
       });
 
       if (!upstream.ok && upstream.status !== 206) {
@@ -313,7 +520,7 @@ export function createHttpHandlers() {
       if (contentLength) res.setHeader("Content-Length", contentLength);
       if (contentRange) res.setHeader("Content-Range", contentRange);
       if (req.method === "HEAD" || !upstream.body) return res.end();
-      Readable.fromWeb(upstream.body as ReadableStream).pipe(res as never);
+      Readable.fromWeb(upstream.body as unknown as NodeReadableStream).pipe(res as never);
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to proxy download." });
     }
@@ -397,44 +604,24 @@ export function createHttpHandlers() {
       res.setHeader("Content-Type", "video/mp4");
       res.setHeader("Cache-Control", "no-store");
 
-      if (rangeHeader) {
-        const rangeMatch = rangeHeader.match(/bytes=(\d*)-(\d*)/i);
-        if (!rangeMatch) {
-          res.statusCode = 416;
-          res.setHeader("Content-Range", `bytes */${fileSize}`);
-          return res.end();
-        }
+      const resolvedRange = resolveDownloadByteRange(fileSize, rangeHeader);
+      if (!resolvedRange) {
+        res.statusCode = 416;
+        res.setHeader("Content-Range", `bytes */${fileSize}`);
+        return res.end();
+      }
 
-        let start: number;
-        let end: number;
-        if (rangeMatch[1] && rangeMatch[2]) {
-          start = Number.parseInt(rangeMatch[1], 10);
-          end = Number.parseInt(rangeMatch[2], 10);
-        } else if (rangeMatch[1]) {
-          start = Number.parseInt(rangeMatch[1], 10);
-          end = fileSize - 1;
-        } else {
-          const suffixLength = Number.parseInt(rangeMatch[2], 10);
-          start = Math.max(fileSize - suffixLength, 0);
-          end = fileSize - 1;
-        }
-
-        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= fileSize || start > end) {
-          res.statusCode = 416;
-          res.setHeader("Content-Range", `bytes */${fileSize}`);
-          return res.end();
-        }
-
-        res.statusCode = 206;
-        res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
-        res.setHeader("Content-Length", String(end - start + 1));
+      if (resolvedRange.statusCode === 206) {
+        res.statusCode = resolvedRange.statusCode;
+        res.setHeader("Content-Range", resolvedRange.contentRange ?? "");
+        res.setHeader("Content-Length", String(resolvedRange.contentLength));
         if (isHead) return res.end();
-        createReadStream(seekablePath, { start, end }).pipe(res as never);
+        createReadStream(seekablePath, { start: resolvedRange.start, end: resolvedRange.end }).pipe(res as never);
         return;
       }
 
       res.statusCode = 200;
-      res.setHeader("Content-Length", String(fileSize));
+      res.setHeader("Content-Length", String(resolvedRange.contentLength));
       if (isHead) return res.end();
       createReadStream(seekablePath).pipe(res as never);
     } catch (error) {
@@ -599,6 +786,9 @@ export function createHttpHandlers() {
     importSvetSerialuHandler,
     importBombujHandler,
     searchHandler,
+    providerModulesHandler,
+    providerFeedHandler,
+    providerSearchHandler,
     refreshArtworkHandler,
     searchArtworkHandler,
     exploreFeedHandler,

@@ -219,3 +219,70 @@ export type TrendingFeedResponse = {
   source: "local" | "hybrid";
   stale: boolean;
 };
+
+export type ProviderFeedKind =
+  | "new-episodes"
+  | "new-additions"
+  | "popular"
+  | "latest-episodes"
+  | "custom";
+
+export type ProviderFeedItemGranularity = "episode" | "show" | "movie";
+
+export type ProviderFeedManifest = {
+  moduleId: string;
+  providerId: IntegrationId;
+  feedId: string;
+  title: string;
+  description: string;
+  kind: ProviderFeedKind;
+  defaultEnabled: boolean;
+  pageTitle: string;
+  supportsSearch: boolean;
+  supportsOpenSource: boolean;
+  supportsImport: boolean;
+  sortMode: "newest";
+  itemGranularity: ProviderFeedItemGranularity;
+};
+
+export type ProviderModuleManifest = {
+  moduleId: string;
+  providerId: IntegrationId;
+  displayName: string;
+  version: number;
+  status: "active" | "disabled";
+  capabilities: {
+    import: boolean;
+    player: boolean;
+    search: boolean;
+    download: boolean;
+    feeds: ProviderFeedManifest[];
+  };
+  publishedAt: number;
+  updatedAt: number;
+};
+
+export type EnabledProviderFeed = {
+  moduleId: string;
+  feedId: string;
+};
+
+export type ProviderFeedResponse = {
+  generatedAt: number;
+  stale: boolean;
+  moduleId: string;
+  feedId: string;
+  items: ExploreItem[];
+  continueCursor: string | null;
+};
+
+export type ProviderFeedCatalogEntry = {
+  moduleId: string;
+  feedId: string;
+  providerId: IntegrationId;
+  providerName: string;
+  title: string;
+  description: string;
+  pageTitle: string;
+  enabled: boolean;
+};

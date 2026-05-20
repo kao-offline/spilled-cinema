@@ -309,6 +309,23 @@ function createChildEnv(extraEnv = {}) {
   return childEnv;
 }
 
+function inferControlPlaneUrl() {
+  if (process.env.SPILLED_CONTROL_PLANE_URL) {
+    return process.env.SPILLED_CONTROL_PLANE_URL;
+  }
+
+  if (process.env.SPILLED_DASHBOARD_URL) {
+    return `${process.env.SPILLED_DASHBOARD_URL.replace(/\/$/, "")}/api/server`;
+  }
+
+  const workspaceEnv = loadWorkspaceEnv();
+  if (workspaceEnv.CONVEX_SITE_URL) {
+    return `${workspaceEnv.CONVEX_SITE_URL.replace(/\/$/, "")}/server`;
+  }
+
+  return undefined;
+}
+
 function getAllowedDashboardOrigins() {
   const origins = new Set();
   const candidates = [
@@ -415,6 +432,7 @@ async function startLocalServer() {
       PORT: SERVER_PORT,
       HOST: "127.0.0.1",
       SPILLED_NODE_ENDPOINT_URL: `http://127.0.0.1:${SERVER_PORT}`,
+      SPILLED_CONTROL_PLANE_URL: inferControlPlaneUrl(),
       ...vaultEnv,
     }),
     stdio: "inherit",
