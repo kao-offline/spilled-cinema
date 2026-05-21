@@ -10,7 +10,7 @@ export type LocalRuntimeStatus = {
 
 export function getConnectionModeLabel(status: LocalRuntimeStatus): string {
   if (!status.available || status.transport === null) {
-    return "Connected through fetch server";
+    return "Local runtime offline";
   }
 
   if (status.transport === "native" || status.transport === "direct") {
@@ -25,7 +25,7 @@ export function getConnectionModeLabel(status: LocalRuntimeStatus): string {
     return "Running local node server";
   }
 
-  return "Connected through fetch server";
+  return "Local runtime offline";
 }
 
 const REQUEST_TYPE = "SPILLEDCINEMA_EXTENSION_REQUEST";
@@ -36,7 +36,7 @@ function nextRequestId() {
 }
 
 function canUseDirectLocalFetch() {
-  return window.location.protocol === "http:" || ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  return true;
 }
 
 function requestExtension(message: {
