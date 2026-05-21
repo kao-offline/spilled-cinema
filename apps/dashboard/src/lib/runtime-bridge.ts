@@ -1,4 +1,4 @@
-export type LocalRuntimeTransport = "native" | "extension" | "direct" | "node" | null;
+export type LocalRuntimeTransport = "native" | "extension" | "direct" | "node" | "fetch-server" | null;
 
 export type LocalRuntimeStatus = {
   available: boolean;
@@ -23,6 +23,10 @@ export function getConnectionModeLabel(status: LocalRuntimeStatus): string {
 
   if (status.transport === "node") {
     return "Running local node server";
+  }
+
+  if (status.transport === "fetch-server") {
+    return "Connected through fetch server";
   }
 
   return "Local runtime offline";
@@ -118,6 +122,39 @@ async function probeSameOriginLocalNode() {
   }
 }
 
+async function probeFetchServer() {
+  try {
+    const response = await fetch("/api/server/discovery/nodes?capability=fetch&limit=1");
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json() as {
+      candidates?: Array<{
+        record?: {
+          endpoints?: Array<{ protocol?: string; url?: string }>;
+        };
+      }>;
+    };
+    const endpoint = payload.candidates
+      ?.flatMap((candidate) => candidate.record?.endpoints ?? [])
+      .find((entry) => entry.url && (entry.protocol === "https" || entry.url.startsWith("https://")));
+
+    if (!endpoint?.url) {
+      return null;
+    }
+
+    return {
+      available: true,
+      transport: "fetch-server" as const,
+      origin: endpoint.url.replace(/\/$/, ""),
+      details: payload,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function probeLocalRuntime(): Promise<LocalRuntimeStatus> {
   if (window.spilledNative?.getStatus) {
     try {
@@ -156,6 +193,11 @@ export async function probeLocalRuntime(): Promise<LocalRuntimeStatus> {
       if (direct) {
         return direct;
       }
+    }
+
+    const fetchServer = await probeFetchServer();
+    if (fetchServer) {
+      return fetchServer;
     }
 
     return {

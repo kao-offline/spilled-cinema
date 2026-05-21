@@ -5,5 +5,8 @@
   "scripts": {
     "dev": "tsx src/standalone.ts",
     "start": "tsx src/standalone.ts"
+  },
+  "dependencies": {
+    "localtunnel": "^2.0.2"
   }
 }

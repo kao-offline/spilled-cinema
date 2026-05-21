@@ -3,7 +3,7 @@ type RuntimeApiResult<T> = {
   status: number;
   data: T;
   origin?: string;
-  transport: "native" | "extension" | "direct" | "node";
+  transport: "native" | "extension" | "direct" | "node" | "fetch-server";
 };
 
 type JsonRequestInit = {
@@ -168,6 +168,83 @@ async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit):
   };
 }
 
+type FetchServerCandidate = {
+  record?: {
+    endpoints?: Array<{
+      protocol?: string;
+      url?: string;
+    }>;
+  };
+};
+
+function canUseFetchServerEndpoint(endpoint: { protocol?: string; url?: string }) {
+  if (!endpoint.url || !/^https?:\/\//i.test(endpoint.url)) {
+    return false;
+  }
+
+  if (endpoint.protocol === "https" || endpoint.url.startsWith("https://")) {
+    return true;
+  }
+
+  try {
+    const url = new URL(endpoint.url);
+    return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchFetchServerCandidates() {
+  const response = await fetchWithTimeout("/api/server/discovery/nodes?capability=fetch&limit=8", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = await readJsonSafe<{ candidates?: FetchServerCandidate[] }>(response);
+  return (payload?.candidates ?? [])
+    .flatMap((candidate) => candidate.record?.endpoints ?? [])
+    .filter(canUseFetchServerEndpoint)
+    .map((endpoint) => endpoint.url!.replace(/\/$/, ""));
+}
+
+async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  let origins: string[] = [];
+  try {
+    origins = Array.from(new Set(await fetchFetchServerCandidates()));
+  } catch {
+    return null;
+  }
+
+  for (const origin of origins) {
+    try {
+      const response = await fetchWithTimeout(`${origin}${path}`, {
+        method: init.method ?? "GET",
+        headers: {
+          "Content-Type": "application/json",
+          ...(init.headers ?? {}),
+        },
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      }, getRuntimeTimeoutMs(path));
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        data: (await readJsonSafe<T>(response)) as T,
+        origin,
+        transport: "fetch-server",
+      };
+    } catch {
+      // Try the next public fetch server.
+    }
+  }
+
+  return null;
+}
+
+
 export function resolveRuntimeUrl(url: string, origin?: string) {
   if (!origin || !url.startsWith("/")) {
     return url;
@@ -217,8 +294,17 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
       return direct;
     }
   } catch {
-    // Fall through to remote.
+    // Fall through to discovered fetch servers.
   }
 
-  throw new Error(`Local runtime is required for ${path}. Start the node server with "npm run start:server".`);
+  try {
+    const fetchServer = await fetchViaFetchServer<T>(path, init);
+    if (fetchServer) {
+      return fetchServer;
+    }
+  } catch {
+    // Fall through to the final error.
+  }
+
+  throw new Error(`No runtime or fetch server is available for ${path}. Start a local node or wait for a public fetch server to register.`);
 }
