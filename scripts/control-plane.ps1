@@ -4,7 +4,8 @@ param(
   [string]$DashboardUrl = "",
   [string]$ConvexSiteUrl = "",
   [string]$Secret = "",
-  [string]$Environment = "production"
+  [string]$Environment = "production",
+  [string]$ProjectName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,8 +55,47 @@ function Write-DotEnvValue([string]$Path, [string]$Key, [string]$Value) {
 
 function New-ControlPlaneSecret {
   $bytes = [byte[]]::new(32)
-  [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($bytes)
+  } finally {
+    $rng.Dispose()
+  }
   return [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/", "_").TrimEnd("=")
+}
+
+function Get-NpxCommand {
+  if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    return "npx.cmd"
+  }
+  return "npx"
+}
+
+function Add-VercelEnvValue([string]$Name, [string]$Value, [string]$TargetEnvironment) {
+  $npx = Get-NpxCommand
+  $Value | & $npx vercel env add $Name $TargetEnvironment
+}
+
+function Get-LinkedVercelProject {
+  $projectPath = Join-Path $RepoRoot "apps/dashboard/.vercel/project.json"
+  if (!(Test-Path $projectPath)) {
+    return $null
+  }
+  return Get-Content -Raw -LiteralPath $projectPath | ConvertFrom-Json
+}
+
+function Assert-LinkedVercelProject {
+  param([string]$ExpectedProjectName)
+
+  $linked = Get-LinkedVercelProject
+  if (!$linked) {
+    throw "apps/dashboard is not linked to a Vercel project. Run: cd apps/dashboard; npx vercel link --project spilled-cinema"
+  }
+
+  Write-Host "Linked Vercel project: $($linked.projectName) ($($linked.projectId))"
+  if ($ExpectedProjectName -and $linked.projectName -ne $ExpectedProjectName) {
+    throw "Wrong Vercel project linked. Expected '$ExpectedProjectName', got '$($linked.projectName)'. Run: cd apps/dashboard; npx vercel link --project $ExpectedProjectName"
+  }
 }
 
 function Get-ControlPlaneConfig {
@@ -85,6 +125,7 @@ Commands:
   npm run control-plane -- seed-providers
   npm run control-plane -- print-node-env -DashboardUrl https://your-app.vercel.app
   npm run control-plane -- vercel-env -DashboardUrl https://your-app.vercel.app -ConvexSiteUrl https://your.convex.site
+  npm run control-plane -- vercel-env -ProjectName spilled-cinema -DashboardUrl https://your-app.vercel.app -ConvexSiteUrl https://your.convex.site
   npm run control-plane -- convex-env
 
 What it manages:
@@ -155,6 +196,7 @@ Then run:
 "@ | Write-Host
   }
   "vercel-env" {
+    Assert-LinkedVercelProject $ProjectName
     $config = Get-ControlPlaneConfig
     if (!$config.ConvexSiteUrl) {
       throw "Pass -ConvexSiteUrl. The Vercel dashboard API proxy needs CONVEX_SITE_URL."
@@ -167,10 +209,10 @@ Then run:
     Write-Host "Adding Vercel env vars for $Environment. Run this from the linked Vercel dashboard project."
     Push-Location (Join-Path $RepoRoot "apps/dashboard")
     try {
-      $config.ConvexSiteUrl | vercel env add CONVEX_SITE_URL $Environment
-      $config.Secret | vercel env add SPILLED_CONTROL_PLANE_SECRET $Environment
+      Add-VercelEnvValue "CONVEX_SITE_URL" $config.ConvexSiteUrl $Environment
+      Add-VercelEnvValue "SPILLED_CONTROL_PLANE_SECRET" $config.Secret $Environment
       if ($config.DashboardUrl) {
-        $config.DashboardUrl | vercel env add SPILLED_DASHBOARD_URL $Environment
+        Add-VercelEnvValue "SPILLED_DASHBOARD_URL" $config.DashboardUrl $Environment
       }
     } finally {
       Pop-Location
