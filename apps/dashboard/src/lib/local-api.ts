@@ -3,7 +3,7 @@ type RuntimeApiResult<T> = {
   status: number;
   data: T;
   origin?: string;
-  transport: "native" | "extension" | "direct" | "node" | "fetch-server";
+  transport: "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted";
 };
 
 type JsonRequestInit = {
@@ -14,6 +14,10 @@ type JsonRequestInit = {
 
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
+
+function canUseHostedSameOriginApi() {
+  return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
 
 function getRuntimeTimeoutMs(path: string) {
   if (
@@ -46,6 +50,30 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+
+async function fetchHostedSameOriginApi<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!canUseHostedSameOriginApi() || !path.startsWith("/api/")) {
+    return null;
+  }
+
+  const response = await fetchWithTimeout(`${window.location.origin}${path}`, {
+    method: init.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  }, getRuntimeTimeoutMs(path));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: (await readJsonSafe<T>(response)) as T,
+    origin: window.location.origin,
+    transport: "hosted",
+  };
 }
 
 async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
@@ -127,11 +155,11 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
     try {
       const response = await fetchWithTimeout(`${origin}${path}`, {
         method: init.method ?? "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...(init.headers ?? {}),
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        headers: {
+          "Content-Type": "application/json",
+          ...(init.headers ?? {}),
+        },
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
       }, getRuntimeTimeoutMs(path));
 
       return {
@@ -276,7 +304,16 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
       return native;
     }
   } catch {
-    // Fall through to same-origin/extension/direct/remote.
+    // Fall through to hosted/local/extension/direct/remote.
+  }
+
+  try {
+    const hosted = await fetchHostedSameOriginApi<T>(path, init);
+    if (hosted) {
+      return hosted;
+    }
+  } catch {
+    // Fall through to local/extension/direct/remote.
   }
 
   try {

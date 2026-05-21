@@ -1,4 +1,4 @@
-export type LocalRuntimeTransport = "native" | "extension" | "direct" | "node" | "fetch-server" | null;
+export type LocalRuntimeTransport = "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted" | null;
 
 export type LocalRuntimeStatus = {
   available: boolean;
@@ -23,6 +23,10 @@ export function getConnectionModeLabel(status: LocalRuntimeStatus): string {
 
   if (status.transport === "node") {
     return "Running local node server";
+  }
+
+  if (status.transport === "hosted") {
+    return "Running hosted dashboard";
   }
 
   if (status.transport === "fetch-server") {
