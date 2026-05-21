@@ -2742,7 +2742,7 @@ function App() {
                 </div>
 
                 <div
-                  className="animate-fade-in grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-5 opacity-0 md:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
+                  className="animate-fade-in grid grid-cols-[repeat(auto-fill,minmax(150px,182px))] justify-start gap-5 opacity-0 sm:grid-cols-[repeat(auto-fill,minmax(168px,190px))] xl:grid-cols-[repeat(auto-fill,minmax(182px,210px))]"
                   style={{ animationDelay: "0.2s" }}
                 >
                   {filteredShows.map((show: ImportedShow) => (

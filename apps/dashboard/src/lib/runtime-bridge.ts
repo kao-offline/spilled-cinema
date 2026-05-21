@@ -40,7 +40,7 @@ function nextRequestId() {
 }
 
 function canUseDirectLocalFetch() {
-  return true;
+  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 }
 
 function requestExtension(message: {
@@ -79,6 +79,10 @@ function requestExtension(message: {
 }
 
 async function probeDirectLocalRuntime() {
+  if (!canUseDirectLocalFetch()) {
+    return null;
+  }
+
   const origins = ["http://127.0.0.1:8787", "http://localhost:8787"];
   for (const origin of origins) {
     try {
@@ -124,7 +128,7 @@ async function probeSameOriginLocalNode() {
 
 async function probeFetchServer() {
   try {
-    const response = await fetch("/api/server/discovery/nodes?capability=fetch&limit=1");
+    const response = await fetch("/api/server/discovery/nodes?capability=fetch&limit=8");
     if (!response.ok) {
       return null;
     }
@@ -136,20 +140,32 @@ async function probeFetchServer() {
         };
       }>;
     };
-    const endpoint = payload.candidates
+    const endpoints = payload.candidates
       ?.flatMap((candidate) => candidate.record?.endpoints ?? [])
-      .find((entry) => entry.url && (entry.protocol === "https" || entry.url.startsWith("https://")));
+      .filter((entry) => entry.url && (entry.protocol === "https" || entry.url.startsWith("https://"))) ?? [];
 
-    if (!endpoint?.url) {
-      return null;
+    for (const endpoint of endpoints) {
+      const origin = endpoint.url!.replace(/\/$/, "");
+      try {
+        const statusResponse = await fetch(`${origin}/api/status`, {
+          headers: { "bypass-tunnel-reminder": "true" },
+        });
+        if (!statusResponse.ok) {
+          continue;
+        }
+
+        return {
+          available: true,
+          transport: "fetch-server" as const,
+          origin,
+          details: await statusResponse.json(),
+        };
+      } catch {
+        // Try the next discovered fetch server.
+      }
     }
 
-    return {
-      available: true,
-      transport: "fetch-server" as const,
-      origin: endpoint.url.replace(/\/$/, ""),
-      details: payload,
-    };
+    return null;
   } catch {
     return null;
   }
@@ -188,11 +204,9 @@ export async function probeLocalRuntime(): Promise<LocalRuntimeStatus> {
       details: payload.data,
     };
   } catch (error) {
-    if (canUseDirectLocalFetch()) {
-      const direct = await probeDirectLocalRuntime();
-      if (direct) {
-        return direct;
-      }
+    const direct = await probeDirectLocalRuntime();
+    if (direct) {
+      return direct;
     }
 
     const fetchServer = await probeFetchServer();

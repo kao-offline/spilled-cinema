@@ -135,17 +135,35 @@ function getSeasonNumbers(episodesListHtml: string) {
   return [...new Set(seasons)].filter(Number.isFinite);
 }
 
+function getAccordionSeasons(showHtml: string) {
+  const seasons: Array<{ seasonNumber: number; accordionId: string }> = [];
+  const pattern = /<div class="accordion accordionId(\d+)">[\s\S]*?<h2[^>]*>[\s\S]*?<i>\s*(\d+)\.\s*<\/i>/gi;
+
+  for (const match of showHtml.matchAll(pattern)) {
+    const seasonNumber = Number.parseInt(match[2], 10);
+    if (Number.isFinite(seasonNumber)) {
+      seasons.push({ seasonNumber, accordionId: match[1] });
+    }
+  }
+
+  return seasons;
+}
+
 function getEpisodesFromList(html: string, seasonNumber: number) {
   const episodes: ParsedEpisode[] = [];
   const pattern =
-    /<a href="(\/serial\/[^"]+\/s\d+e\d+)" class="[^"]*seasonLinks[^"]*?">([\s\S]*?)<\/a>/gi;
+    /<a href="(\/serial\/[^"]+\/s\d+e\d+)" class="[^"]*(?:seasonLinks|accordionLink)[^"]*?">([\s\S]*?)<\/a>/gi;
 
   for (const match of html.matchAll(pattern)) {
     const href = match[1];
     const block = match[2];
     const codeMatch = href.match(/\/(s\d+e\d+)$/i);
     const episodeNumber = Number.parseInt(
-      stripTags(matchOne(block, /<span class="ep_numb[^"]*">([\s\S]*?)<\/span>/i) ?? ""),
+      stripTags(
+        matchOne(block, /<span class="ep_numb[^"]*">([\s\S]*?)<\/span>/i) ??
+          matchOne(block, /<span class="number_eps[^"]*">([\s\S]*?)<\/span>/i) ??
+          "",
+      ),
       10,
     );
     const episodeTitle = stripTags(
@@ -412,30 +430,43 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
   const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl);
   const tvShowId = matchOne(firstEpisodeHtml, /\/episodes-list\?tvShowId=(\d+)/i);
 
-  if (!tvShowId) {
-    throw new Error(`Could not find tvShowId for "${slug}".`);
-  }
-
   const firstSeason = Number.parseInt(firstEpisodeUrl.match(/\/s(\d+)e\d+$/i)?.[1] ?? "1", 10);
-  const firstSeasonListHtml = await fetchText(
-    `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${firstSeason}&episode=1`,
-    firstEpisodeUrl,
-  );
-  console.log(`[svetserialu] first season list length=${firstSeasonListHtml.length} tvShowId=${tvShowId}`);
+  let availableSeasons: number[] = [];
+  let seasonLists: ParsedEpisode[][] = [];
 
-  const availableSeasons = getSeasonNumbers(firstSeasonListHtml);
-  const seasonLists = await mapWithConcurrency(availableSeasons, 4, async (seasonNumber) => {
-    const html =
-      seasonNumber === firstSeason
-        ? firstSeasonListHtml
-        : await fetchText(
-            `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${seasonNumber}&episode=1`,
-            showUrl,
-          );
+  if (tvShowId) {
+    const firstSeasonListHtml = await fetchText(
+      `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${firstSeason}&episode=1`,
+      firstEpisodeUrl,
+    );
+    console.log(`[svetserialu] first season list length=${firstSeasonListHtml.length} tvShowId=${tvShowId}`);
 
-    console.log(`[svetserialu] season=${seasonNumber} list length=${html.length}`);
-    return getEpisodesFromList(html, seasonNumber);
-  });
+    availableSeasons = getSeasonNumbers(firstSeasonListHtml);
+    seasonLists = await mapWithConcurrency(availableSeasons, 4, async (seasonNumber) => {
+      const html =
+        seasonNumber === firstSeason
+          ? firstSeasonListHtml
+          : await fetchText(
+              `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${seasonNumber}&episode=1`,
+              showUrl,
+            );
+
+      console.log(`[svetserialu] season=${seasonNumber} list length=${html.length}`);
+      return getEpisodesFromList(html, seasonNumber);
+    });
+  } else {
+    const accordionSeasons = getAccordionSeasons(showHtml);
+    if (accordionSeasons.length === 0) {
+      throw new Error(`Could not find season list for "${slug}".`);
+    }
+
+    availableSeasons = accordionSeasons.map((season) => season.seasonNumber);
+    seasonLists = await mapWithConcurrency(accordionSeasons, 4, async (season) => {
+      const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl);
+      console.log(`[svetserialu] season=${season.seasonNumber} accordion=${season.accordionId} list length=${html.length}`);
+      return getEpisodesFromList(html, season.seasonNumber);
+    });
+  }
 
   const parsedEpisodes = seasonLists.flat();
   console.log(`[svetserialu] parsed episodes=${parsedEpisodes.length} seasons=${availableSeasons.length}`);

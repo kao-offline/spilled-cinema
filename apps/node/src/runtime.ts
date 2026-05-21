@@ -60,7 +60,7 @@ export class SpilledCinemaNodeRuntime {
     );
   }
 
-  setEndpointUrl(endpointUrl: string) {
+  setEndpointUrl(endpointUrl?: string) {
     this.options.endpointUrl = endpointUrl;
   }
 

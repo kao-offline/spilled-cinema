@@ -22,13 +22,10 @@ import { getExploreFeed } from "../../../apps/dashboard/src/server/explore-feed"
 import { loadProviderFeed } from "../../../apps/dashboard/src/server/provider-feed";
 import { loadProviderModulesFromControlPlane } from "../../../apps/dashboard/src/server/provider-modules";
 import { searchProviderModule } from "../../../apps/dashboard/src/server/provider-search";
-import { searchSvetSerialu } from "../../../apps/dashboard/src/server/svetserialu";
+import { fetchSvetSerialuShow, searchSvetSerialu } from "../../../apps/dashboard/src/server/svetserialu";
 import { getTrendingFeed } from "../../../apps/dashboard/src/server/trending-feed";
 import { SpilledCinemaNodeRuntime } from "../../../apps/server/src/runtime";
 import { sha256 } from "../../security/src";
-// The shared importer lives in a JS module so both dashboard API routes and the node runtime use one parser.
-// @ts-ignore -- runtime import is valid; this package has no local declaration for the shared JS helper.
-import { fetchSvetSerialuShow } from "../../../apps/dashboard/api/_lib/svetserialu.js";
 
 function inferEndpointUrl() {
   if (process.env.SPILLED_NODE_ENDPOINT_URL) {
@@ -54,7 +51,7 @@ export function getNodeRuntime() {
   return runtime;
 }
 
-export function setNodeEndpointUrl(endpointUrl: string) {
+export function setNodeEndpointUrl(endpointUrl?: string) {
   runtime.setEndpointUrl(endpointUrl);
 }
 

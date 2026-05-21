@@ -376,6 +376,9 @@ export function createHttpHandlers() {
         yearHint?: string | null;
         description?: string | null;
         mediaType: "movie" | "tv";
+        posterUrl?: string | null;
+        backdropUrl?: string | null;
+        clearLogoUrl?: string | null;
         artworkSources?: { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
       }>(req);
       sendJson(res, 200, {
@@ -385,6 +388,9 @@ export function createHttpHandlers() {
           altTitle: body.altTitle ?? null,
           yearHint: body.yearHint ?? parseYearHint(body.years),
           description: body.description ?? null,
+          currentPosterUrl: body.posterUrl ?? null,
+          currentBackdropUrl: body.backdropUrl ?? null,
+          currentClearLogoUrl: body.clearLogoUrl ?? null,
           sources: body.artworkSources,
         }),
       });

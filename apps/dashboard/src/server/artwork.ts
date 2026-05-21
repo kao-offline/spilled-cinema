@@ -7,7 +7,7 @@ type ArtworkBundle = {
 };
 
 export type ArtworkAssetKind = "poster" | "backdrop" | "logo";
-export type ArtworkAssetSource = "tmdb" | "fanart" | "tvdb";
+export type ArtworkAssetSource = "tmdb" | "fanart" | "tvdb" | "current";
 
 export type ArtworkAsset = {
   url: string;
@@ -155,6 +155,25 @@ function getFanartClientKey() {
 
 function getTvdbApiKey() {
   return process.env.TVDB_API_KEY?.trim() || "";
+}
+
+function getMissingArtworkEnvNames(sources: ArtworkSourceSettings | undefined) {
+  const missing = new Set<string>();
+  const tmdbEnabled = isSourceEnabled(sources, "tmdb");
+  const fanartEnabled = isSourceEnabled(sources, "fanart");
+  const tvdbEnabled = isSourceEnabled(sources, "tvdb");
+
+  if (tmdbEnabled && !getTmdbReadToken()) {
+    missing.add("TMDB_API_READ_TOKEN");
+  }
+  if (fanartEnabled && !getFanartApiKey()) {
+    missing.add("FANART_API_KEY");
+  }
+  if (tvdbEnabled && !getTvdbApiKey()) {
+    missing.add("TVDB_API_KEY");
+  }
+
+  return Array.from(missing);
 }
 
 function toAsciiSearchText(value: string | null | undefined) {
@@ -942,8 +961,59 @@ export async function searchArtworkAssets(options: {
   altTitle?: string | null;
   yearHint?: string;
   description?: string | null;
+  currentPosterUrl?: string | null;
+  currentBackdropUrl?: string | null;
+  currentClearLogoUrl?: string | null;
   sources?: ArtworkSourceSettings;
 }) {
+  const fallbackAssets: ArtworkAsset[] = [];
+  if (options.currentPosterUrl) {
+    fallbackAssets.push({
+      url: options.currentPosterUrl,
+      kind: "poster",
+      source: "current",
+      label: "Current Poster",
+      language: null,
+      score: 1,
+      hasText: null,
+    });
+  }
+  if (options.currentBackdropUrl) {
+    fallbackAssets.push({
+      url: options.currentBackdropUrl,
+      kind: "backdrop",
+      source: "current",
+      label: "Current Backdrop",
+      language: null,
+      score: 1,
+      hasText: null,
+    });
+  }
+  if (options.currentClearLogoUrl) {
+    fallbackAssets.push({
+      url: options.currentClearLogoUrl,
+      kind: "logo",
+      source: "current",
+      label: "Current Logo",
+      language: null,
+      score: 1,
+      hasText: true,
+    });
+  }
+
+  const missingEnvNames = getMissingArtworkEnvNames(options.sources);
+  const hasAnyConfiguredProvider =
+    (isSourceEnabled(options.sources, "tmdb") && Boolean(getTmdbReadToken())) ||
+    (isSourceEnabled(options.sources, "fanart") && Boolean(getFanartApiKey())) ||
+    (isSourceEnabled(options.sources, "tvdb") && Boolean(getTvdbApiKey()));
+
+  if (!hasAnyConfiguredProvider) {
+    if (fallbackAssets.length > 0) {
+      return dedupeArtworkAssets(fallbackAssets);
+    }
+    throw new Error(`Artwork providers are not configured. Add ${missingEnvNames.join(", ")} to the running fetch node environment.`);
+  }
+
   const tmdbEnabled = isSourceEnabled(options.sources, "tmdb");
   const fanartEnabled = isSourceEnabled(options.sources, "fanart");
   const tvdbEnabled = isSourceEnabled(options.sources, "tvdb");
@@ -1086,7 +1156,7 @@ export async function searchArtworkAssets(options: {
     }
   }
 
-  return dedupeArtworkAssets(assets);
+  return dedupeArtworkAssets([...fallbackAssets, ...assets]);
 }
 
 export async function enrichArtwork(options: {

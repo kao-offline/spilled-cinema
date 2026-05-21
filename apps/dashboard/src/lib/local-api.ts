@@ -119,6 +119,10 @@ async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<R
 }
 
 async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!canUseDirectLocalFetch()) {
+    return null;
+  }
+
   for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
     try {
       const response = await fetchWithTimeout(`${origin}${path}`, {
@@ -143,6 +147,10 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
   }
 
   return null;
+}
+
+function canUseDirectLocalFetch() {
+  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 }
 
 async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
@@ -224,6 +232,7 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
         method: init.method ?? "GET",
         headers: {
           "Content-Type": "application/json",
+          "bypass-tunnel-reminder": "true",
           ...(init.headers ?? {}),
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
