@@ -609,8 +609,18 @@ function App() {
       }
     }
 
-    setDownloadedEpisodeIds(next);
-    setDownloadedEpisodeFileById(nextFiles);
+    const idsChanged = next.size !== downloadedEpisodeIds.size || [...next].some((episodeId) => !downloadedEpisodeIds.has(episodeId));
+    const filesChanged =
+      nextFiles.size !== downloadedEpisodeFileById.size ||
+      [...nextFiles.entries()].some(([episodeId, fileName]) => downloadedEpisodeFileById.get(episodeId) !== fileName);
+
+    if (idsChanged) {
+      setDownloadedEpisodeIds(next);
+    }
+
+    if (filesChanged) {
+      setDownloadedEpisodeFileById(nextFiles);
+    }
   }
 
   function getOutputFileName(outputPath: string | undefined, episodeId: string) {
