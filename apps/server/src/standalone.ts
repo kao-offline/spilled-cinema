@@ -1,9 +1,51 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-handlers";
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
 import { readRelayMeshOptionsFromEnv, SecureRelayMesh } from "./mesh";
+import { setNodeEndpointUrl } from "../../../packages/node-client/src/index";
 
 type RouteHandler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
+
+function loadRootEnvLocal() {
+  let searchDir = process.cwd();
+  let envPath = "";
+  for (let index = 0; index < 6; index += 1) {
+    const candidate = resolve(searchDir, ".env.local");
+    if (existsSync(candidate)) {
+      envPath = candidate;
+      break;
+    }
+    const parent = dirname(searchDir);
+    if (parent === searchDir) {
+      break;
+    }
+    searchDir = parent;
+  }
+  if (!envPath) {
+    return;
+  }
+
+  try {
+    const content = readFileSync(envPath, "utf8");
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
+        continue;
+      }
+      const [key, ...rest] = trimmed.split("=");
+      if (!key || process.env[key] !== undefined) {
+        continue;
+      }
+      process.env[key] = rest.join("=").trim().replace(/^["']|["']$/g, "");
+    }
+  } catch {
+    // Running without a repo .env.local is supported.
+  }
+}
+
+loadRootEnvLocal();
 
 const handlers = createHttpHandlers();
 const port = Number.parseInt(process.env.PORT || "8787", 10);
@@ -11,6 +53,7 @@ const host = process.env.HOST || "0.0.0.0";
 const mesh = new SecureRelayMesh(handlers.runtime, readRelayMeshOptionsFromEnv());
 const controlPlaneOptions = readControlPlaneReporterOptionsFromEnv();
 const controlPlane = controlPlaneOptions ? new ControlPlaneReporter(handlers.runtime, controlPlaneOptions) : null;
+let publicTunnel: { url: string; close: () => void } | null = null;
 
 const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/status", handler: handlers.statusHandler },
@@ -102,15 +145,60 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(port, host, () => {
+  void startServerServices();
+});
+
+async function startPublicTunnel() {
+  if (process.env.SPILLED_NODE_ENDPOINT_URL || process.env.SPILLED_DISABLE_AUTO_TUNNEL === "1") {
+    return null;
+  }
+
+  try {
+    const localtunnelModule = await import("localtunnel");
+    const createTunnel = localtunnelModule.default ?? localtunnelModule;
+    const tunnel = await createTunnel({
+      port,
+      local_host: "127.0.0.1",
+    });
+
+    tunnel.on?.("close", () => {
+      console.warn("[spilledcinema-server] public fetch tunnel closed");
+    });
+    tunnel.on?.("error", (error: unknown) => {
+      console.warn("[spilledcinema-server] public fetch tunnel error", error instanceof Error ? error.message : String(error));
+    });
+
+    return {
+      url: String(tunnel.url).replace(/\/$/, ""),
+      close: () => tunnel.close(),
+    };
+  } catch (error) {
+    console.warn("[spilledcinema-server] auto public fetch tunnel failed", error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function startServerServices() {
   console.log(`[spilledcinema-server] listening on http://${host}:${port}`);
+  publicTunnel = await startPublicTunnel();
+  if (publicTunnel) {
+    setNodeEndpointUrl(publicTunnel.url);
+    console.log(`[spilledcinema-server] public fetch server ${publicTunnel.url}`);
+  } else if (process.env.SPILLED_NODE_ENDPOINT_URL) {
+    console.log(`[spilledcinema-server] public fetch server ${process.env.SPILLED_NODE_ENDPOINT_URL}`);
+  } else {
+    console.warn("[spilledcinema-server] no public fetch tunnel available; this node is local-only");
+  }
+
   mesh.start();
   controlPlane?.start();
-});
+}
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     mesh.stop();
     controlPlane?.stop();
+    publicTunnel?.close();
     server.close(() => process.exit(0));
   });
 }

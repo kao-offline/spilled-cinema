@@ -1,0 +1,13 @@
+
+> start:server
+> npm run start -w @spilledcinema/server
+
+
+> start
+> tsx src/standalone.ts
+
+[INIT] Server initialized. Vault path: NOT SET
+[spilledcinema-server] listening on http://0.0.0.0:8787
+[spilledcinema-server] public fetch server https://nasty-mugs-laugh.loca.lt
+[svetserialu:fetch] GET https://svetserialu.to/?searchfor=will%20trent
+[svetserialu:fetch] 200 OK https://svetserialu.to/?searchfor=will%20trent

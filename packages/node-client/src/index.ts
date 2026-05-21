@@ -54,6 +54,10 @@ export function getNodeRuntime() {
   return runtime;
 }
 
+export function setNodeEndpointUrl(endpointUrl: string) {
+  runtime.setEndpointUrl(endpointUrl);
+}
+
 export async function getNodeStatus() {
   const [status, mediaTools] = await Promise.all([runtime.getStatus(), getMediaToolStatus()]);
   return {

@@ -60,6 +60,10 @@ export class SpilledCinemaNodeRuntime {
     );
   }
 
+  setEndpointUrl(endpointUrl: string) {
+    this.options.endpointUrl = endpointUrl;
+  }
+
   private async loadState() {
     if (!this.statePromise) {
       this.statePromise = this.storage.read();
