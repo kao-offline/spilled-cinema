@@ -1,4 +1,6 @@
 import { cachedFetchText } from "./provider-discovery-shared";
+import { getBombujMovieSections, getBombujSeriesSections, hydrateBombujItem } from "./bombuj-discovery";
+import { searchBombuj } from "./bombuj";
 import { hydrateSvetItem, parseSvetEpisodeCards } from "./svetserialu-discovery";
 import { searchSvetSerialu } from "./svetserialu";
 import type { IntegrationId } from "../lib/integrations";
@@ -71,6 +73,36 @@ function createSvetSearchItem(result: Awaited<ReturnType<typeof searchSvetSerial
   };
 }
 
+function createBombujSearchItem(result: Awaited<ReturnType<typeof searchBombuj>>[number]): ExploreItem {
+  return {
+    id: `bombuj:search:${result.mediaType ?? "unknown"}:${result.slug}`,
+    title: result.title,
+    slug: result.slug,
+    importSlug: result.slug,
+    provider: "bombuj",
+    mediaType: result.mediaType ?? "movie",
+    detailUrl: result.mediaType === "serial"
+      ? `https://serialy.bombuj.si/serial-${result.slug}`
+      : `https://www.bombuj.si/online-film-${result.slug}`,
+    posterUrl: result.posterUrl ?? null,
+    backdropUrl: null,
+    year: result.year ?? null,
+    yearLabel: result.year ?? null,
+    description: null,
+    genres: [],
+    audioBuckets: ["all"],
+    languages: [],
+    network: null,
+    directors: [],
+    actors: [],
+    sectionKeys: [],
+    inVault: false,
+    availableNow: true,
+    matchScore: result.matchScore,
+    recommendationReasons: [],
+  };
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -95,6 +127,15 @@ async function mapWithConcurrency<T, R>(
 async function hydrateFeedItem(item: ExploreItem) {
   try {
     const hydrated = await hydrateSvetItem(item);
+    return hydrated.value;
+  } catch {
+    return item;
+  }
+}
+
+async function hydrateBombujFeedItem(item: ExploreItem) {
+  try {
+    const hydrated = await hydrateBombujItem(item);
     return hydrated.value;
   } catch {
     return item;
@@ -152,6 +193,28 @@ async function loadSvetNewEpisodesFeed(cursor?: string | null, limit = 24): Prom
   };
 }
 
+async function loadBombujFeed(feedId: string, cursor?: string | null, limit = 24): Promise<ProviderFeedResponse> {
+  const requestedLimit = Math.max(1, limit);
+  const page = parseProviderPageCursor(cursor);
+  const source = feedId === "latest-movies"
+    ? await getBombujMovieSections()
+    : await getBombujSeriesSections();
+  const sectionKey = feedId === "latest-movies" ? "newest" : "novinky";
+  const baseItems = source.items.filter((item) => item.sectionKeys.includes(sectionKey));
+  const start = page * requestedLimit;
+  const slice = baseItems.slice(start, start + requestedLimit);
+  const items = await mapWithConcurrency(slice, 4, hydrateBombujFeedItem);
+
+  return {
+    generatedAt: Date.now(),
+    stale: source.stale,
+    moduleId: "bombuj",
+    feedId,
+    items,
+    continueCursor: start + requestedLimit < baseItems.length ? String(page + 1) : null,
+  };
+}
+
 const providerAdapters: Record<string, ProviderModuleAdapter> = {
   svetserialu: {
     moduleId: "svetserialu",
@@ -165,6 +228,20 @@ const providerAdapters: Record<string, ProviderModuleAdapter> = {
     async search(query) {
       const results = await searchSvetSerialu(query);
       return results.map(createSvetSearchItem);
+    },
+  },
+  bombuj: {
+    moduleId: "bombuj",
+    providerId: "bombuj",
+    async getFeed(feedId, args) {
+      if (feedId !== "latest-movies" && feedId !== "latest-series") {
+        throw new Error(`Unsupported Bombuj feed "${feedId}".`);
+      }
+      return await loadBombujFeed(feedId, args.cursor, args.limit ?? 24);
+    },
+    async search(query) {
+      const results = await searchBombuj(query);
+      return results.map(createBombujSearchItem);
     },
   },
 };

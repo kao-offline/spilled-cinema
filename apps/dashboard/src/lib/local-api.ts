@@ -3,7 +3,7 @@ type RuntimeApiResult<T> = {
   status: number;
   data: T;
   origin?: string;
-  transport: "native" | "extension" | "direct" | "node" | "remote";
+  transport: "native" | "extension" | "direct" | "node";
 };
 
 type JsonRequestInit = {
@@ -119,10 +119,6 @@ async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<R
 }
 
 async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
-  if (!(window.location.protocol === "http:" || ["localhost", "127.0.0.1"].includes(window.location.hostname))) {
-    return null;
-  }
-
   for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
     try {
       const response = await fetchWithTimeout(`${origin}${path}`, {
@@ -184,9 +180,6 @@ export function buildRuntimeUrl(path: string) {
     return `${window.spilledNative.serverUrl}${path}`;
   }
 
-  // If we are on localhost, we can use the same origin (it will be handled by the Vite plugin)
-  // or we can hit the standalone server. To match native behavior and fix the web version,
-  // we prefer the standalone server on port 8787 for these local-only resources.
   return `http://127.0.0.1:8787${path}`;
 }
 
@@ -227,19 +220,5 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     // Fall through to remote.
   }
 
-  const response = await fetchWithTimeout(path, {
-    method: init.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-  }, getRuntimeTimeoutMs(path));
-
-  return {
-    ok: response.ok,
-    status: response.status,
-    data: (await readJsonSafe<T>(response)) as T,
-    transport: "remote",
-  };
+  throw new Error(`Local runtime is required for ${path}. Start the node server with "npm run start:server".`);
 }

@@ -77,11 +77,32 @@ function Add-VercelEnvValue([string]$Name, [string]$Value, [string]$TargetEnviro
 }
 
 function Get-LinkedVercelProject {
-  $projectPath = Join-Path $RepoRoot "apps/dashboard/.vercel/project.json"
-  if (!(Test-Path $projectPath)) {
-    return $null
+  $dashboardProjectPath = Join-Path $RepoRoot "apps/dashboard/.vercel/project.json"
+  if (Test-Path $dashboardProjectPath) {
+    $project = Get-Content -Raw -LiteralPath $dashboardProjectPath | ConvertFrom-Json
+    return @{
+      projectName = $project.projectName
+      projectId = $project.projectId
+      orgId = $project.orgId
+      source = $dashboardProjectPath
+    }
   }
-  return Get-Content -Raw -LiteralPath $projectPath | ConvertFrom-Json
+
+  $repoPath = Join-Path $RepoRoot ".vercel/repo.json"
+  if (Test-Path $repoPath) {
+    $repo = Get-Content -Raw -LiteralPath $repoPath | ConvertFrom-Json
+    $dashboardProject = @($repo.projects) | Where-Object { $_.directory -eq "apps/dashboard" } | Select-Object -First 1
+    if ($dashboardProject) {
+      return @{
+        projectName = $dashboardProject.name
+        projectId = $dashboardProject.id
+        orgId = $dashboardProject.orgId
+        source = $repoPath
+      }
+    }
+  }
+
+  return $null
 }
 
 function Assert-LinkedVercelProject {
@@ -92,7 +113,7 @@ function Assert-LinkedVercelProject {
     throw "apps/dashboard is not linked to a Vercel project. Run: cd apps/dashboard; npx vercel link --project spilled-cinema"
   }
 
-  Write-Host "Linked Vercel project: $($linked.projectName) ($($linked.projectId))"
+  Write-Host "Linked Vercel project: $($linked.projectName) ($($linked.projectId)) from $($linked.source)"
   if ($ExpectedProjectName -and $linked.projectName -ne $ExpectedProjectName) {
     throw "Wrong Vercel project linked. Expected '$ExpectedProjectName', got '$($linked.projectName)'. Run: cd apps/dashboard; npx vercel link --project $ExpectedProjectName"
   }
