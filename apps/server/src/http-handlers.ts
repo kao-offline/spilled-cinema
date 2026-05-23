@@ -38,6 +38,7 @@ import {
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const RATE_LIMITS = new Map<string, { count: number; resetAt: number }>();
 
 export type JsonResponse = {
   statusCode: number;
@@ -64,6 +65,44 @@ function sendJson(res: JsonResponse, statusCode: number, payload: unknown) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(payload));
+}
+
+function getBearerToken(req: RequestLike) {
+  const raw = req.headers?.authorization;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const match = value?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim();
+}
+
+function getRequestOrigin(req: RequestLike) {
+  const origin = req.headers?.origin;
+  if (typeof origin === "string" && /^https?:\/\//i.test(origin)) {
+    return origin;
+  }
+  const forwardedProto = Array.isArray(req.headers?.["x-forwarded-proto"]) ? req.headers?.["x-forwarded-proto"][0] : req.headers?.["x-forwarded-proto"];
+  const host = Array.isArray(req.headers?.host) ? req.headers?.host[0] : req.headers?.host;
+  return `${forwardedProto || "http"}://${host || "127.0.0.1"}`;
+}
+
+function getRequestAddress(req: RequestLike) {
+  const forwardedFor = req.headers?.["x-forwarded-for"];
+  const value = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+  return value?.split(",")[0]?.trim() || "local";
+}
+
+function checkRateLimit(req: RequestLike, action: string, limit = 8, windowMs = 10 * 60 * 1000) {
+  const now = Date.now();
+  const key = `${action}:${getRequestAddress(req)}`;
+  const existing = RATE_LIMITS.get(key);
+  if (!existing || existing.resetAt <= now) {
+    RATE_LIMITS.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (existing.count >= limit) {
+    return false;
+  }
+  existing.count += 1;
+  return true;
 }
 
 function getQueryParams(url = "") {
@@ -376,6 +415,9 @@ export function createHttpHandlers() {
         yearHint?: string | null;
         description?: string | null;
         mediaType: "movie" | "tv";
+        posterUrl?: string | null;
+        backdropUrl?: string | null;
+        clearLogoUrl?: string | null;
         artworkSources?: { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
       }>(req);
       sendJson(res, 200, {
@@ -385,6 +427,9 @@ export function createHttpHandlers() {
           altTitle: body.altTitle ?? null,
           yearHint: body.yearHint ?? parseYearHint(body.years),
           description: body.description ?? null,
+          currentPosterUrl: body.posterUrl ?? null,
+          currentBackdropUrl: body.backdropUrl ?? null,
+          currentClearLogoUrl: body.clearLogoUrl ?? null,
           sources: body.artworkSources,
         }),
       });
@@ -701,6 +746,255 @@ export function createHttpHandlers() {
     }
   };
 
+  const privateAccountsHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, { accounts: await runtime.listPrivateAccounts() });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to list private accounts." });
+    }
+  };
+
+  const privateMeHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method === "GET") {
+      try {
+        sendJson(res, 200, await runtime.getPrivateMe(getBearerToken(req)));
+      } catch (error) {
+        sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+      }
+      return;
+    }
+    if (req.method === "POST") {
+      try {
+        sendJson(res, 200, await runtime.logoutPrivateSession(getBearerToken(req)));
+      } catch (error) {
+        sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to log out." });
+      }
+      return;
+    }
+    return sendJson(res, 405, { error: "Method not allowed." });
+  };
+
+  const passkeyRegisterOptionsHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "passkey-register-options", 6)) {
+        return sendJson(res, 429, { error: "Too many passkey enrollment attempts. Try again later." });
+      }
+      const body = await readJsonBody<{ accountId?: string; setupSecret?: string; origin?: string }>(req);
+      if (!body.accountId || !body.setupSecret) return sendJson(res, 400, { error: "Missing accountId or setupSecret." });
+      sendJson(res, 200, await runtime.createPasskeyRegistrationOptions({
+        accountId: body.accountId,
+        setupSecret: body.setupSecret,
+        origin: body.origin || getRequestOrigin(req),
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Failed to create passkey registration options." });
+    }
+  };
+
+  const passkeyRegisterVerifyHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "passkey-register-verify", 10)) {
+        return sendJson(res, 429, { error: "Too many passkey verification attempts. Try again later." });
+      }
+      const body = await readJsonBody<{ accountId?: string; response?: unknown; origin?: string }>(req);
+      if (!body.accountId || !body.response) return sendJson(res, 400, { error: "Missing accountId or response." });
+      sendJson(res, 200, await runtime.verifyPasskeyRegistration({
+        accountId: body.accountId,
+        response: body.response as never,
+        origin: body.origin || getRequestOrigin(req),
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Failed to verify passkey registration." });
+    }
+  };
+
+  const passkeyLoginOptionsHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "passkey-login-options", 12)) {
+        return sendJson(res, 429, { error: "Too many passkey login attempts. Try again later." });
+      }
+      const body = await readJsonBody<{ accountId?: string; origin?: string }>(req);
+      if (!body.accountId) return sendJson(res, 400, { error: "Missing accountId." });
+      sendJson(res, 200, await runtime.createPasskeyLoginOptions({
+        accountId: body.accountId,
+        origin: body.origin || getRequestOrigin(req),
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Failed to create passkey login options." });
+    }
+  };
+
+  const passkeyLoginVerifyHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "passkey-login-verify", 12)) {
+        return sendJson(res, 429, { error: "Too many passkey login attempts. Try again later." });
+      }
+      const body = await readJsonBody<{ accountId?: string; response?: unknown; origin?: string; profileId?: string }>(req);
+      if (!body.accountId || !body.response) return sendJson(res, 400, { error: "Missing accountId or response." });
+      sendJson(res, 200, await runtime.verifyPasskeyLogin({
+        accountId: body.accountId,
+        response: body.response as never,
+        origin: body.origin || getRequestOrigin(req),
+        profileId: body.profileId,
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Failed to verify passkey login." });
+    }
+  };
+
+  const oidcProvidersHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, { providers: await runtime.listOidcProviders() });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to list OIDC providers." });
+    }
+  };
+
+  const oidcStartHandler = async (_req: RequestLike, res: JsonResponse) => {
+    sendJson(res, 501, { error: "OIDC provider discovery is implemented; browser redirect login is not wired yet." });
+  };
+
+  const oidcFinishHandler = async (_req: RequestLike, res: JsonResponse) => {
+    sendJson(res, 501, { error: "OIDC callback validation is not wired yet." });
+  };
+
+  const privateProfilesHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, { profiles: await runtime.listPrivateProfiles(getBearerToken(req)) });
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const privateProfileSelectHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{ profileId?: string }>(req);
+      if (!body.profileId) return sendJson(res, 400, { error: "Missing profileId." });
+      sendJson(res, 200, await runtime.selectPrivateProfile(getBearerToken(req), body.profileId));
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const privateLibraryHandler = async (req: RequestLike, res: JsonResponse) => {
+    const profileId = getQueryParams(req.url).get("profileId");
+    if (!profileId) return sendJson(res, 400, { error: "Missing profileId." });
+    try {
+      if (req.method === "GET") {
+        sendJson(res, 200, { profile: await runtime.getPrivateLibrary(getBearerToken(req), profileId) });
+        return;
+      }
+      if (req.method === "PUT") {
+        const body = await readJsonBody<Record<string, unknown>>(req);
+        sendJson(res, 200, { profile: await runtime.putPrivateLibrary(getBearerToken(req), profileId, body as never) });
+        return;
+      }
+      return sendJson(res, 405, { error: "Method not allowed." });
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const privateStorageHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, await runtime.getPrivateStorageSummary(getBearerToken(req)));
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const privateDownloadsHandler = async (req: RequestLike, res: JsonResponse) => {
+    try {
+      if (req.method === "GET") {
+        sendJson(res, 200, { downloads: await runtime.listPrivateDownloads(getBearerToken(req), getQueryParams(req.url).get("profileId") ?? undefined) });
+        return;
+      }
+      if (req.method === "DELETE") {
+        const downloadId = getQueryParams(req.url).get("downloadId");
+        if (!downloadId) return sendJson(res, 400, { error: "Missing downloadId." });
+        sendJson(res, 200, { download: await runtime.deletePrivateDownload(getBearerToken(req), downloadId) });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody<{
+          downloadId?: string;
+          profileId?: string;
+          episodeId?: string;
+          contentId?: string;
+          fileName?: string;
+          filePath?: string;
+          sizeBytes?: number;
+          mimeType?: string;
+          sha256?: string;
+          spillshareEnabled?: boolean;
+        }>(req);
+        if (!body.downloadId || !body.profileId || !body.contentId || !body.fileName || !body.filePath || typeof body.sizeBytes !== "number") {
+          return sendJson(res, 400, { error: "Missing download metadata." });
+        }
+        sendJson(res, 200, {
+          download: await runtime.registerPrivateDownload(getBearerToken(req), {
+            downloadId: body.downloadId,
+            profileId: body.profileId,
+            episodeId: body.episodeId,
+            contentId: body.contentId,
+            fileName: body.fileName,
+            filePath: body.filePath,
+            sizeBytes: body.sizeBytes,
+            mimeType: body.mimeType || "video/mp4",
+            sha256: body.sha256,
+            spillshareEnabled: body.spillshareEnabled === true,
+          }),
+        });
+        return;
+      }
+      return sendJson(res, 405, { error: "Method not allowed." });
+    } catch (error) {
+      sendJson(res, /quota/i.test(error instanceof Error ? error.message : "") ? 409 : 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const privateDownloadFileHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const downloadId = getQueryParams(req.url).get("downloadId");
+      if (!downloadId) return sendJson(res, 400, { error: "Missing downloadId." });
+      const download = await runtime.getPrivateDownloadFile(getBearerToken(req), downloadId);
+      const fileStats = await stat(download.filePath);
+      const rangeHeader = Array.isArray(req.headers?.range) ? req.headers?.range[0] : req.headers?.range;
+      const byteRange = resolveDownloadByteRange(fileStats.size, rangeHeader);
+      if (!byteRange) {
+        res.statusCode = 416;
+        res.setHeader("Content-Range", `bytes */${fileStats.size}`);
+        res.end();
+        return;
+      }
+      res.statusCode = byteRange.statusCode;
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Type", download.mimeType || "application/octet-stream");
+      res.setHeader("Content-Length", String(byteRange.contentLength));
+      res.setHeader("Content-Disposition", `inline; filename="${download.fileName.replace(/"/g, "")}"`);
+      if (byteRange.contentRange) {
+        res.setHeader("Content-Range", byteRange.contentRange);
+      }
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      createReadStream(download.filePath, { start: byteRange.start, end: byteRange.end }).pipe(res as unknown as NodeJS.WritableStream);
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
   const pairingStartHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
@@ -808,6 +1102,21 @@ export function createHttpHandlers() {
     subtitleFileHandler,
     subtitleProxyHandler,
     anonymousGrantHandler,
+    privateAccountsHandler,
+    privateMeHandler,
+    passkeyRegisterOptionsHandler,
+    passkeyRegisterVerifyHandler,
+    passkeyLoginOptionsHandler,
+    passkeyLoginVerifyHandler,
+    oidcProvidersHandler,
+    oidcStartHandler,
+    oidcFinishHandler,
+    privateProfilesHandler,
+    privateProfileSelectHandler,
+    privateLibraryHandler,
+    privateStorageHandler,
+    privateDownloadsHandler,
+    privateDownloadFileHandler,
     pairingStartHandler,
     pairingApproveHandler,
     privateSessionHandler,

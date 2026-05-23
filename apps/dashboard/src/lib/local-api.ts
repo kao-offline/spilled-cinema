@@ -3,7 +3,7 @@ type RuntimeApiResult<T> = {
   status: number;
   data: T;
   origin?: string;
-  transport: "native" | "extension" | "direct" | "node" | "fetch-server";
+  transport: "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted";
 };
 
 type JsonRequestInit = {
@@ -14,6 +14,14 @@ type JsonRequestInit = {
 
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
+
+function canUseHostedSameOriginApi() {
+  return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function isHostedSameOriginApiPath(path: string) {
+  return path === "/api/artwork/search" || path === "/api/artwork/refresh";
+}
 
 function getRuntimeTimeoutMs(path: string) {
   if (
@@ -46,6 +54,30 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+
+async function fetchHostedSameOriginApi<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!canUseHostedSameOriginApi() || !isHostedSameOriginApiPath(path)) {
+    return null;
+  }
+
+  const response = await fetchWithTimeout(`${window.location.origin}${path}`, {
+    method: init.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  }, getRuntimeTimeoutMs(path));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data: (await readJsonSafe<T>(response)) as T,
+    origin: window.location.origin,
+    transport: "hosted",
+  };
 }
 
 async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
@@ -119,15 +151,19 @@ async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<R
 }
 
 async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (!canUseDirectLocalFetch()) {
+    return null;
+  }
+
   for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
     try {
       const response = await fetchWithTimeout(`${origin}${path}`, {
         method: init.method ?? "GET",
-      headers: {
-        "Content-Type": "application/json",
-        ...(init.headers ?? {}),
-      },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        headers: {
+          "Content-Type": "application/json",
+          ...(init.headers ?? {}),
+        },
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
       }, getRuntimeTimeoutMs(path));
 
       return {
@@ -143,6 +179,10 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
   }
 
   return null;
+}
+
+function canUseDirectLocalFetch() {
+  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 }
 
 async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
@@ -224,15 +264,23 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
         method: init.method ?? "GET",
         headers: {
           "Content-Type": "application/json",
+          "bypass-tunnel-reminder": "true",
           ...(init.headers ?? {}),
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
       }, getRuntimeTimeoutMs(path));
+      const data = (await readJsonSafe<T>(response)) as T;
+
+      if (!response.ok && response.status >= 500) {
+        // A public fetch node can be stale, restarting, or missing optional env.
+        // Try the next advertised node before surfacing the error.
+        continue;
+      }
 
       return {
         ok: response.ok,
         status: response.status,
-        data: (await readJsonSafe<T>(response)) as T,
+        data,
         origin,
         transport: "fetch-server",
       };
@@ -267,7 +315,7 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
       return native;
     }
   } catch {
-    // Fall through to same-origin/extension/direct/remote.
+    // Fall through to hosted/local/extension/direct/remote.
   }
 
   try {
@@ -298,9 +346,27 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
   }
 
   try {
+    const hosted = await fetchHostedSameOriginApi<T>(path, init);
+    if (hosted?.ok) {
+      return hosted;
+    }
+  } catch {
+    // Fall through to discovered fetch servers.
+  }
+
+  try {
     const fetchServer = await fetchViaFetchServer<T>(path, init);
     if (fetchServer) {
       return fetchServer;
+    }
+  } catch {
+    // Fall through to hosted artwork APIs or the final error.
+  }
+
+  try {
+    const hosted = await fetchHostedSameOriginApi<T>(path, init);
+    if (hosted) {
+      return hosted;
     }
   } catch {
     // Fall through to the final error.

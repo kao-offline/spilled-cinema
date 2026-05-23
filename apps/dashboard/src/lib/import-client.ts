@@ -5,7 +5,7 @@ import { requestRuntimeJson } from "./local-api";
 export type ArtworkAsset = {
   url: string;
   kind: "poster" | "backdrop" | "logo";
-  source: "tmdb" | "fanart" | "tvdb";
+  source: "current" | "tmdb" | "fanart" | "tvdb";
   label: string;
   language?: string | null;
   width?: number | null;
@@ -125,6 +125,9 @@ export async function searchArtworkAssetsForShow(
       years: show.years ?? null,
       yearHint: parseYearHint(show.years),
       description: show.description ?? null,
+      posterUrl: show.posterUrl ?? null,
+      backdropUrl: show.backdropUrl ?? null,
+      clearLogoUrl: show.clearLogoUrl ?? null,
       mediaType: show.episodes.length === 1 && show.episodes[0]?.episodeCode === "movie" ? "movie" : "tv",
       artworkSources: sources,
     },

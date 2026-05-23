@@ -5,6 +5,7 @@ import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
 import { readRelayMeshOptionsFromEnv, SecureRelayMesh } from "./mesh";
 import { setNodeEndpointUrl } from "../../../packages/node-client/src/index";
+import { loadPrivateNodeConfigFromEnv, readNodeModeFromEnv } from "../../node/src/private-config";
 
 type RouteHandler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
 
@@ -48,12 +49,20 @@ function loadRootEnvLocal() {
 loadRootEnvLocal();
 
 const handlers = createHttpHandlers();
+const nodeMode = readNodeModeFromEnv();
+const privateConfig = loadPrivateNodeConfigFromEnv(nodeMode);
 const port = Number.parseInt(process.env.PORT || "8787", 10);
 const host = process.env.HOST || "0.0.0.0";
+handlers.runtime.configure({
+  mode: nodeMode,
+  privateConfig,
+});
 const mesh = new SecureRelayMesh(handlers.runtime, readRelayMeshOptionsFromEnv());
 const controlPlaneOptions = readControlPlaneReporterOptionsFromEnv();
 const controlPlane = controlPlaneOptions ? new ControlPlaneReporter(handlers.runtime, controlPlaneOptions) : null;
 let publicTunnel: { url: string; close: () => void } | null = null;
+let publicTunnelMonitor: NodeJS.Timeout | null = null;
+let restartingPublicTunnel: Promise<void> | null = null;
 
 const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/status", handler: handlers.statusHandler },
@@ -82,7 +91,24 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/download-full/subtitle-file", handler: handlers.subtitleFileHandler },
   { path: "/api/subtitle-proxy", handler: handlers.subtitleProxyHandler },
   { path: "/api/node/auth/anonymous", handler: handlers.anonymousGrantHandler },
+  { path: "/api/node/auth/accounts", handler: handlers.privateAccountsHandler },
+  { path: "/api/node/auth/me", handler: handlers.privateMeHandler },
+  { path: "/api/node/auth/logout", handler: handlers.privateMeHandler },
+  { path: "/api/node/auth/passkey/register-options", handler: handlers.passkeyRegisterOptionsHandler },
+  { path: "/api/node/auth/passkey/register-verify", handler: handlers.passkeyRegisterVerifyHandler },
+  { path: "/api/node/auth/passkey/login-options", handler: handlers.passkeyLoginOptionsHandler },
+  { path: "/api/node/auth/passkey/login-verify", handler: handlers.passkeyLoginVerifyHandler },
+  { path: "/api/node/auth/oidc/providers", handler: handlers.oidcProvidersHandler },
+  { path: "/api/node/auth/oidc/start", handler: handlers.oidcStartHandler },
+  { path: "/api/node/auth/oidc/callback", handler: handlers.oidcFinishHandler },
+  { path: "/api/node/auth/oidc/finish", handler: handlers.oidcFinishHandler },
   { path: "/api/node/auth/private", handler: handlers.privateSessionHandler },
+  { path: "/api/node/private/profiles", handler: handlers.privateProfilesHandler },
+  { path: "/api/node/private/profile/select", handler: handlers.privateProfileSelectHandler },
+  { path: "/api/node/private/library", handler: handlers.privateLibraryHandler },
+  { path: "/api/node/private/storage", handler: handlers.privateStorageHandler },
+  { path: "/api/node/private/downloads", handler: handlers.privateDownloadsHandler },
+  { path: "/api/node/private/downloads/file", handler: handlers.privateDownloadFileHandler },
   { path: "/api/node/pairing/start", handler: handlers.pairingStartHandler },
   { path: "/api/node/pairing/approve", handler: handlers.pairingApproveHandler },
   { path: "/api/node/passkey/register-options", handler: handlers.passkeyRegistrationHandler },
@@ -96,7 +122,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
 function applyCors(res: ServerResponse) {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder");
 }
 
 function notFound(res: ServerResponse) {
@@ -163,6 +189,7 @@ async function startPublicTunnel() {
 
     tunnel.on?.("close", () => {
       console.warn("[spilledcinema-server] public fetch tunnel closed");
+      void restartPublicTunnel();
     });
     tunnel.on?.("error", (error: unknown) => {
       console.warn("[spilledcinema-server] public fetch tunnel error", error instanceof Error ? error.message : String(error));
@@ -178,6 +205,84 @@ async function startPublicTunnel() {
   }
 }
 
+async function checkPublicTunnel(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(`${url}/api/status`, {
+      headers: { "bypass-tunnel-reminder": "true" },
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function stopPublicTunnelMonitor() {
+  if (publicTunnelMonitor) {
+    clearInterval(publicTunnelMonitor);
+    publicTunnelMonitor = null;
+  }
+}
+
+function startPublicTunnelMonitor() {
+  stopPublicTunnelMonitor();
+  if (process.env.SPILLED_NODE_ENDPOINT_URL || process.env.SPILLED_DISABLE_AUTO_TUNNEL === "1") {
+    return;
+  }
+
+  publicTunnelMonitor = setInterval(() => {
+    if (!publicTunnel) {
+      void restartPublicTunnel();
+      return;
+    }
+
+    void checkPublicTunnel(publicTunnel.url).then((healthy) => {
+      if (!healthy) {
+        console.warn(`[spilledcinema-server] public fetch tunnel unhealthy ${publicTunnel?.url ?? ""}`);
+        void restartPublicTunnel();
+      }
+    });
+  }, 30_000);
+}
+
+async function restartPublicTunnel() {
+  if (restartingPublicTunnel) {
+    return restartingPublicTunnel;
+  }
+
+  restartingPublicTunnel = (async () => {
+    const previous = publicTunnel;
+    publicTunnel = null;
+    handlers.runtime.setEndpointUrl(undefined);
+    try {
+      previous?.close();
+    } catch {
+      // The tunnel may already be closed.
+    }
+
+    const nextTunnel = await startPublicTunnel();
+    if (!nextTunnel) {
+      console.warn("[spilledcinema-server] no public fetch tunnel available; this node is local-only");
+      return;
+    }
+
+    publicTunnel = nextTunnel;
+    setNodeEndpointUrl(nextTunnel.url);
+    console.log(`[spilledcinema-server] public fetch server ${nextTunnel.url}`);
+    await controlPlane?.register().catch((error) => {
+      console.warn("[control-plane] register failed", error instanceof Error ? error.message : String(error));
+    });
+  })().finally(() => {
+    restartingPublicTunnel = null;
+  });
+
+  return restartingPublicTunnel;
+}
+
 async function startServerServices() {
   console.log(`[spilledcinema-server] listening on http://${host}:${port}`);
   publicTunnel = await startPublicTunnel();
@@ -191,13 +296,19 @@ async function startServerServices() {
   }
 
   mesh.start();
-  controlPlane?.start();
+  if (publicTunnel || process.env.SPILLED_NODE_ENDPOINT_URL) {
+    controlPlane?.start();
+  } else {
+    console.warn("[control-plane] not registering a local-only node");
+  }
+  startPublicTunnelMonitor();
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     mesh.stop();
     controlPlane?.stop();
+    stopPublicTunnelMonitor();
     publicTunnel?.close();
     server.close(() => process.exit(0));
   });

@@ -92,7 +92,7 @@ export function verifyPayload(payload: Serializable, signature: string, publicKe
   return cryptoVerify(null, Buffer.from(body), publicKeyPem, base64UrlDecode(signature));
 }
 
-function createSignedToken(payload: Serializable, privateKeyPem: string) {
+export function createSignedToken(payload: Serializable, privateKeyPem: string) {
   const encodedPayload = base64UrlEncode(Buffer.from(stableStringify(payload), "utf8"));
   const signature = signPayload({ payload: encodedPayload }, privateKeyPem);
   return `${encodedPayload}.${signature}`;

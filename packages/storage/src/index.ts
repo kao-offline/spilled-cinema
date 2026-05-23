@@ -16,6 +16,59 @@ export type StoredDownloadInventory = {
   files: string[];
 };
 
+export type PrivatePasskeyCredential = {
+  credentialId: string;
+  publicKey: string;
+  counter: number;
+  transports?: string[];
+  createdAt: number;
+  lastUsedAt?: number;
+};
+
+export type PrivateAccountRuntimeState = {
+  accountId: string;
+  passkeys: PrivatePasskeyCredential[];
+  usedStorageBytes: number;
+};
+
+export type PrivateProfileState = {
+  accountId: string;
+  profileId: string;
+  libraryState: unknown;
+  settings: unknown;
+  enabledProviderFeeds: unknown;
+  downloadedLanguages: Record<string, string>;
+  updatedAt: number;
+};
+
+export type PrivateDownloadRecord = {
+  downloadId: string;
+  accountId: string;
+  profileId: string;
+  episodeId?: string;
+  contentId: string;
+  fileName: string;
+  filePath: string;
+  sizeBytes: number;
+  mimeType: string;
+  sha256?: string;
+  createdAt: number;
+  spillshareEnabled: boolean;
+};
+
+export type PrivateAuthChallenge = {
+  challengeId: string;
+  kind: "passkey-registration" | "passkey-login" | "oidc";
+  accountId?: string;
+  providerId?: string;
+  challenge: string;
+  codeVerifier?: string;
+  nonce?: string;
+  redirectUri?: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
 export type NodeStateFile = {
   node?: {
     nodeId: string;
@@ -34,6 +87,10 @@ export type NodeStateFile = {
     label?: string;
     createdAt: number;
   }>;
+  privateAccounts: PrivateAccountRuntimeState[];
+  privateProfiles: PrivateProfileState[];
+  privateDownloads: PrivateDownloadRecord[];
+  privateAuthChallenges: PrivateAuthChallenge[];
 };
 
 const DEFAULT_STATE: NodeStateFile = {
@@ -48,6 +105,10 @@ const DEFAULT_STATE: NodeStateFile = {
   },
   spillshareSources: [],
   passkeys: [],
+  privateAccounts: [],
+  privateProfiles: [],
+  privateDownloads: [],
+  privateAuthChallenges: [],
 };
 
 const RETRIABLE_WRITE_ERROR_CODES = new Set(["UNKNOWN", "EPERM", "EBUSY", "EACCES"]);
@@ -81,6 +142,10 @@ export class JsonNodeStorage {
         importedShows: Array.isArray(parsed.importedShows) ? parsed.importedShows : [],
         spillshareSources: Array.isArray(parsed.spillshareSources) ? parsed.spillshareSources : [],
         passkeys: Array.isArray(parsed.passkeys) ? parsed.passkeys : [],
+        privateAccounts: Array.isArray(parsed.privateAccounts) ? parsed.privateAccounts : [],
+        privateProfiles: Array.isArray(parsed.privateProfiles) ? parsed.privateProfiles : [],
+        privateDownloads: Array.isArray(parsed.privateDownloads) ? parsed.privateDownloads : [],
+        privateAuthChallenges: Array.isArray(parsed.privateAuthChallenges) ? parsed.privateAuthChallenges : [],
       };
     } catch {
       return structuredClone(DEFAULT_STATE);

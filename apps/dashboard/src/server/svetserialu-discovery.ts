@@ -118,8 +118,13 @@ export function parseSvetDetail(html: string) {
   const description =
     stripTags(html.match(/<div class="description[^"]*">([\s\S]*?)<\/div>/i)?.[1] ?? "") ||
     stripTags(html.match(/<meta property="og:description"\s*content="([^"]+)"/i)?.[1] ?? "");
-  const posterUrl =
-    normalizeSvetUrl(html.match(/<meta property="og:image"\s*content="([^"]+)"/i)?.[1] ?? "") || null;
+  const sourcePoster =
+    html.match(/<div class="show-image">\s*<img[^>]+src="([^"]+)"/i)?.[1] ??
+    html.match(/<img[^>]+src="([^"]+)"[^>]+(?:alt|title)="[^"]*"/i)?.[1] ??
+    "";
+  const ogImage = html.match(/<meta property="og:image"\s*content="([^"]+)"/i)?.[1] ?? "";
+  const ogImageIsGeneric = /\/assets\/img\/og-image/i.test(ogImage);
+  const posterUrl = normalizeSvetUrl(sourcePoster || (ogImageIsGeneric ? "" : ogImage)) || null;
 
   const lower = html.toLowerCase();
   const audioBuckets: ExploreAudioBucket[] = ["all"];

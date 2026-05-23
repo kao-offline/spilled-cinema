@@ -18,7 +18,7 @@ type ArtworkPickerModalProps = {
 
 export function ArtworkPickerModal({ show, open, onClose, onApplyArtwork }: ArtworkPickerModalProps) {
   const [artworkTab, setArtworkTab] = useState<"logo" | "poster" | "backdrop">("logo");
-  const [artworkSourceFilter, setArtworkSourceFilter] = useState<"all" | "tmdb" | "fanart" | "tvdb">("all");
+  const [artworkSourceFilter, setArtworkSourceFilter] = useState<"all" | "current" | "tmdb" | "fanart" | "tvdb">("all");
   const [artworkAssets, setArtworkAssets] = useState<ArtworkAsset[]>([]);
   const [artworkLoading, setArtworkLoading] = useState(false);
   const [artworkError, setArtworkError] = useState<string | null>(null);
@@ -172,7 +172,7 @@ export function ArtworkPickerModal({ show, open, onClose, onApplyArtwork }: Artw
 
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap gap-2">
-                  {(["all", "tmdb", "fanart", "tvdb"] as const).map((source) => (
+                  {(["all", "current", "tmdb", "fanart", "tvdb"] as const).map((source) => (
                     <button
                       key={source}
                       onClick={() => setArtworkSourceFilter(source)}

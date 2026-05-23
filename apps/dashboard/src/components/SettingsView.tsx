@@ -1,19 +1,24 @@
 import type { ChangeEvent, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Copy,
+  DatabaseBackup,
   Download,
   FolderOpen,
   HardDrive,
   Image as ImageIcon,
-  Play,
+  LockKeyhole,
+  Package,
+  PlugZap,
+  Plus,
   RefreshCw,
   Rss,
-  Settings as SettingsIcon,
-  ShieldAlert,
-  Tv,
+  SlidersHorizontal,
+  Terminal,
   Upload,
+  X,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { DownloadEngine, LibrarySettings, ProviderFeedCatalogEntry } from "../lib/types";
@@ -22,6 +27,20 @@ import type { LocalRuntimeStatus } from "../lib/runtime-bridge";
 import { getConnectionModeLabel } from "../lib/runtime-bridge";
 import type { VaultDiagnostics, VaultStatus } from "../lib/library-folder";
 import { isFolderConnectionSupported } from "../lib/library-folder";
+import {
+  clearPrivateNodeConnection,
+  enrollPrivateNodePasskey,
+  fetchPrivateNodeAccounts,
+  fetchPrivateNodeStatus,
+  fetchPrivateNodeStorage,
+  loginPrivateNodePasskey,
+  readPrivateNodeConnection,
+  selectPrivateNodeProfile,
+  writePrivateNodeConnection,
+  type PrivateNodeAccount,
+  type PrivateNodeConnection,
+  type PrivateNodeStorageSummary,
+} from "../lib/private-node-client";
 
 type SettingsViewProps = {
   settings: LibrarySettings;
@@ -47,9 +66,9 @@ type SettingsViewProps = {
   onToggleProviderFeed: (moduleId: string, feedId: string) => void;
 };
 
-type SettingsTab = "general" | "storage" | "integrations";
+type SettingsTab = "general" | "storage" | "sources" | "private" | "advanced";
 
-function SectionCard({
+function Panel({
   title,
   hint,
   children,
@@ -61,22 +80,37 @@ function SectionCard({
   className?: string;
 }) {
   return (
-    <section
-      className={clsx(
-        "rounded-[26px] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.035))] p-5 shadow-[0_18px_44px_rgba(0,0,0,0.18)]",
-        className,
-      )}
-    >
-      <div className="mb-4">
-        <h4 className="text-base font-semibold tracking-tight text-white">{title}</h4>
-        {hint ? <p className="mt-1 text-sm text-white/48">{hint}</p> : null}
+    <section className={clsx("rounded-2xl border border-white/8 bg-white/[0.035] p-5", className)}>
+      <div className="mb-5 flex flex-col gap-1">
+        <h3 className="text-lg font-semibold tracking-tight text-white">{title}</h3>
+        {hint ? <p className="max-w-2xl text-sm leading-6 text-white/48">{hint}</p> : null}
       </div>
       {children}
     </section>
   );
 }
 
-function StatusChip({
+function PreferenceRow({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 border-t border-white/8 py-4 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-white">{title}</div>
+        {hint ? <div className="mt-1 max-w-xl text-sm leading-6 text-white/45">{hint}</div> : null}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function StatusPill({
   tone = "neutral",
   children,
 }: {
@@ -86,7 +120,7 @@ function StatusChip({
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.22em]",
+        "inline-flex items-center rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.2em]",
         tone === "good" && "bg-emerald-500/14 text-emerald-200",
         tone === "warn" && "bg-amber-500/14 text-amber-200",
         tone === "neutral" && "bg-white/8 text-white/58",
@@ -97,116 +131,106 @@ function StatusChip({
   );
 }
 
-function SummaryTile({
-  label,
-  value,
-  accent = "neutral",
-}: {
-  label: string;
-  value: string;
-  accent?: "neutral" | "good" | "warn";
-}) {
-  return (
-    <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3">
-      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">{label}</div>
-      <div
-        className={clsx(
-          "mt-2 text-sm font-semibold",
-          accent === "good" && "text-emerald-200",
-          accent === "warn" && "text-amber-200",
-          accent === "neutral" && "text-white",
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function ToggleRow({
-  title,
-  hint,
+function Toggle({
   checked,
   onToggle,
+  label,
 }: {
-  title: string;
-  hint?: string;
   checked: boolean;
   onToggle: () => void;
+  label: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/8 bg-black/20 px-4 py-3">
-      <div className="min-w-0">
-        <div className="font-medium text-white">{title}</div>
-        {hint ? <div className="mt-1 text-sm text-white/42">{hint}</div> : null}
-      </div>
-      <button
-        type="button"
-        onClick={onToggle}
+    <button
+      type="button"
+      onClick={onToggle}
+      className={clsx(
+        "relative inline-flex h-7 w-12 items-center rounded-full transition-colors",
+        checked ? "bg-orange-500" : "bg-white/12",
+      )}
+      aria-label={label}
+      aria-pressed={checked}
+    >
+      <span
         className={clsx(
-          "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors",
-          checked ? "bg-orange-500" : "bg-white/10",
+          "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+          checked ? "translate-x-6" : "translate-x-1",
         )}
-        aria-pressed={checked}
-      >
-        <span
+      />
+    </button>
+  );
+}
+
+function SegmentedChoice<T extends string | number>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-full border border-white/8 bg-black/20 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
           className={clsx(
-            "inline-block h-4 w-4 transform rounded-full bg-white transition",
-            checked ? "translate-x-6" : "translate-x-1",
+            "rounded-full px-3 py-1.5 text-xs font-bold transition-colors",
+            value === option.value ? "bg-white text-black" : "text-white/55 hover:text-white",
           )}
-        />
-      </button>
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
 
-function ChoiceButton({
-  selected,
-  title,
-  hint,
+function ActionButton({
+  children,
   onClick,
+  disabled,
+  variant = "secondary",
 }: {
-  selected: boolean;
-  title: string;
-  hint?: string;
-  onClick: () => void;
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+  variant?: "primary" | "secondary";
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={clsx(
-        "rounded-2xl border px-4 py-3 text-left transition-colors",
-        selected
-          ? "border-orange-400/60 bg-orange-500/10 text-white"
-          : "border-white/8 bg-black/20 text-white/72 hover:border-white/16 hover:bg-white/[0.04]",
+        "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-55",
+        variant === "primary" ? "bg-white text-black hover:bg-orange-200" : "bg-white/10 text-white hover:bg-white/18",
       )}
     >
-      <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">{title}</span>
-        {selected ? <StatusChip tone="good">On</StatusChip> : null}
-      </div>
-      {hint ? <div className="mt-1 text-sm text-white/42">{hint}</div> : null}
+      {children}
     </button>
   );
 }
 
-function IntegrationCard({
-  domain,
-  shortLabel,
-  note,
+function SourceRow({
+  title,
+  hint,
+  children,
 }: {
-  domain: string;
-  shortLabel: string;
-  note?: string;
+  title: string;
+  hint?: string;
+  children: ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="font-medium text-white">{domain}</div>
-        <StatusChip tone="good">{shortLabel}</StatusChip>
+    <div className="flex min-h-[4.5rem] items-center justify-between gap-4 rounded-2xl border border-white/8 bg-black/18 px-4 py-3">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-white">{title}</div>
+        {hint ? <div className="mt-1 line-clamp-2 text-sm leading-5 text-white/42">{hint}</div> : null}
       </div>
-      {note ? <p className="mt-2 text-sm text-white/45">{note}</p> : null}
+      <div className="shrink-0">{children}</div>
     </div>
   );
 }
@@ -237,28 +261,89 @@ export function SettingsView({
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [folderBusy, setFolderBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
+  const [feedModuleId, setFeedModuleId] = useState<IntegrationId | null>(null);
+  const [privateNode, setPrivateNode] = useState<PrivateNodeConnection>(() => readPrivateNodeConnection());
+  const [privateNodeInput, setPrivateNodeInput] = useState(() => readPrivateNodeConnection().nodeUrl);
+  const [privateNodeStatus, setPrivateNodeStatus] = useState<Awaited<ReturnType<typeof fetchPrivateNodeStatus>> | null>(null);
+  const [privateAccounts, setPrivateAccounts] = useState<PrivateNodeAccount[]>([]);
+  const [privateAccountId, setPrivateAccountId] = useState("");
+  const [privateSetupSecret, setPrivateSetupSecret] = useState("");
+  const [privateStorage, setPrivateStorage] = useState<PrivateNodeStorageSummary | null>(null);
+  const [privateNodeBusy, setPrivateNodeBusy] = useState(false);
+  const [privateNodeMessage, setPrivateNodeMessage] = useState<string | null>(null);
+  const [showPrivateSetup, setShowPrivateSetup] = useState(false);
+  const [setupAccountName, setSetupAccountName] = useState("Owner");
+  const [setupAccountId, setSetupAccountId] = useState("acct_owner");
+  const [setupProfileNames, setSetupProfileNames] = useState("Owner");
+  const [setupQuotaGb, setSetupQuotaGb] = useState(500);
+  const [setupNodeName, setSetupNodeName] = useState("Home Server");
+  const [setupCommandSecret, setSetupCommandSecret] = useState("");
 
   const tabs = [
-    { id: "general" as const, label: "Watching", icon: Play },
+    { id: "general" as const, label: "General", icon: SlidersHorizontal },
     { id: "storage" as const, label: "Storage", icon: HardDrive },
-    { id: "integrations" as const, label: "Sources", icon: Rss },
+    { id: "sources" as const, label: "Sources", icon: Rss },
+    { id: "private" as const, label: "Private Node", icon: LockKeyhole },
+    { id: "advanced" as const, label: "Advanced", icon: PlugZap },
   ];
 
   const usageMb = Math.round(offlineUsageBytes / (1024 * 1024));
   const usagePercent = Math.min(100, Math.round((usageMb / Math.max(settings.offlineSizeLimitMb, 1)) * 100));
+  const offlineCacheTitle =
+    usageMb > 0
+      ? `${usageMb} MB used`
+      : offlineEpisodeCount > 0
+        ? `${offlineEpisodeCount} saved ${offlineEpisodeCount === 1 ? "episode" : "episodes"}`
+        : "No saved episodes";
+  const offlineCacheHint =
+    usageMb > 0
+      ? `${offlineEpisodeCount} saved ${offlineEpisodeCount === 1 ? "episode" : "episodes"} out of ${settings.offlineSizeLimitMb} MB.`
+      : offlineEpisodeCount > 0
+        ? "Saved in the vault. File size is not stored for these older downloads yet."
+        : "Nothing is saved in the vault or browser cache.";
   const connectionModeLabel = getConnectionModeLabel(localRuntimeStatus);
-  const downloadEngines: Array<{ id: DownloadEngine; label: string; note: string }> = [
-    {
-      id: "localffmpeg",
-      label: "Desktop app",
-      note: "Best for bigger saves and background downloads.",
-    },
-    {
-      id: "wasm",
-      label: "Browser only",
-      note: "Works without the desktop app, but is lighter-duty.",
-    },
-  ];
+  const isDesktopHelper =
+    localRuntimeStatus.available &&
+    (localRuntimeStatus.transport === "native" ||
+      localRuntimeStatus.transport === "direct" ||
+      localRuntimeStatus.transport === "node" ||
+      localRuntimeStatus.transport === "extension");
+  const isFetchServer = localRuntimeStatus.available && localRuntimeStatus.transport === "fetch-server";
+  const helperTitle = isFetchServer ? "Fetch server" : "Desktop helper";
+  const helperHint = isDesktopHelper
+    ? "Ready for local playback and downloads."
+    : isFetchServer
+      ? "Connected through a public fetch node, not your desktop helper."
+      : "Not found on this device.";
+  const helperStatus = isDesktopHelper ? "Connected" : isFetchServer ? "Fetch server" : "Not found";
+  const connectionReady = ["ready", "read_error", "write_error"].includes(vaultStatus.code);
+  const resolvedFolderName = vaultStatus.folderName ?? null;
+
+  const folderStateLabel =
+    vaultStatus.code === "unsupported"
+      ? "Not supported"
+      : vaultStatus.code === "disconnected"
+        ? "Not connected"
+        : vaultStatus.code === "stored_handle_needs_access"
+          ? "Needs access"
+          : vaultStatus.code === "read_error"
+            ? "Read issue"
+            : vaultStatus.code === "write_error"
+              ? "Save issue"
+              : "Ready";
+
+  const folderStateHint =
+    vaultStatus.code === "unsupported"
+      ? "This browser cannot link folders."
+      : vaultStatus.code === "disconnected"
+        ? "Choose a folder for downloads and library data."
+        : vaultStatus.code === "stored_handle_needs_access"
+          ? "The browser needs permission again."
+          : vaultStatus.code === "read_error"
+            ? "Linked, but reading failed last time."
+            : vaultStatus.code === "write_error"
+              ? "Linked, but saving failed last time."
+              : "Linked and ready.";
 
   const seriesOptions = useMemo(
     () => INTEGRATIONS.filter((integration) => integration.kind === "mixed" || integration.kind === "series"),
@@ -268,46 +353,129 @@ export function SettingsView({
     () => INTEGRATIONS.filter((integration) => integration.kind === "mixed" || integration.kind === "movies"),
     [],
   );
-
-  async function handleConnectFolder() {
-    setFolderBusy(true);
-    try {
-      await onConnectVault();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Folder connection failed.");
-    } finally {
-      setFolderBusy(false);
+  const feedsByProvider = useMemo(() => {
+    const grouped = new Map<IntegrationId, ProviderFeedCatalogEntry[]>();
+    for (const integration of INTEGRATIONS) {
+      grouped.set(integration.id, []);
     }
-  }
-
-  async function handleDisconnectFolder() {
-    setFolderBusy(true);
-    try {
-      await onDisconnectVault();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Failed to disconnect folder.");
-    } finally {
-      setFolderBusy(false);
+    for (const feed of providerFeeds) {
+      grouped.get(feed.providerId)?.push(feed);
     }
-  }
+    return grouped;
+  }, [providerFeeds]);
+  const selectedFeedModule = feedModuleId ? INTEGRATIONS.find((integration) => integration.id === feedModuleId) : null;
+  const selectedModuleFeeds = feedModuleId ? (feedsByProvider.get(feedModuleId) ?? []) : [];
+  const privateSetupCommand = useMemo(() => {
+    const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+    const normalizedAccountId = (setupAccountId.trim() || "acct_owner")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, "_")
+      .replace(/_+/g, "_");
+    const profileNames = setupProfileNames
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    const profiles = (profileNames.length > 0 ? profileNames : [setupAccountName.trim() || "Owner"])
+      .map((displayName, index) => {
+        const profileId = `prof_${displayName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_") || index + 1}`;
+        return `@{ profileId = ${psQuote(profileId)}; displayName = ${psQuote(displayName)}; avatar = 'default' }`;
+      })
+      .join(", ");
+    const quotaBytes = Math.max(1, Math.round(setupQuotaGb)) * 1024 * 1024 * 1024;
+    const dashboardOrigin = typeof window === "undefined" ? "https://spilled.overload.studio" : window.location.origin;
+    return [
+      `$setupSecret = ${psQuote(setupCommandSecret || "change-this-setup-secret")}`,
+      "$setupHash = node -e \"const c=require('crypto'); process.stdout.write('sha256:'+c.createHash('sha256').update(process.argv[1]).digest('hex'))\" $setupSecret",
+      "$config = @{",
+      "  privateNode = @{",
+      "    enabled = $true",
+      `    nodeName = ${psQuote(setupNodeName.trim() || "Home Server")}`,
+      "    setupSecretHash = $setupHash",
+      "    allowPublicFetch = $true",
+      `    allowedOrigins = @(${psQuote(dashboardOrigin)})`,
+      "  }",
+      "  accounts = @(",
+      "    @{",
+      `      accountId = ${psQuote(normalizedAccountId)}`,
+      `      displayName = ${psQuote(setupAccountName.trim() || "Owner")}`,
+      "      role = 'admin'",
+      `      quotaBytes = ${quotaBytes}`,
+      `      profiles = @(${profiles})`,
+      "      allowedOidcSubjects = @()",
+      "    }",
+      "  )",
+      "  oidcProviders = @()",
+      "  storage = @{ root = './spilled-data'; defaultAccountQuotaBytes = 214748364800 }",
+      "}",
+      "$config | ConvertTo-Json -Depth 10 | Set-Content -Path .\\spilled.private.json -Encoding utf8",
+      "$env:SPILLED_NODE_MODE = 'full'",
+      "$env:SPILLED_PRIVATE_CONFIG = (Resolve-Path .\\spilled.private.json)",
+      "npm run start:server",
+    ].join("\n");
+  }, [setupAccountId, setupAccountName, setupCommandSecret, setupNodeName, setupProfileNames, setupQuotaGb]);
 
-  async function handleReconnectAccess() {
-    setFolderBusy(true);
-    try {
-      await onReconnectVaultAccess();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Failed to restore folder access.");
-    } finally {
-      setFolderBusy(false);
+  useEffect(() => {
+    if (privateAccounts.length > 0 && !privateAccountId) {
+      setPrivateAccountId(privateAccounts[0].accountId);
     }
-  }
+  }, [privateAccountId, privateAccounts]);
 
-  async function handleResetVaultLink() {
+  useEffect(() => {
+    if (!privateNode.nodeUrl) {
+      return;
+    }
+    let canceled = false;
+    void Promise.all([
+      fetchPrivateNodeStatus(privateNode.nodeUrl),
+      fetchPrivateNodeAccounts(privateNode.nodeUrl),
+    ])
+      .then(([status, accounts]) => {
+        if (canceled) {
+          return;
+        }
+        setPrivateNodeStatus(status);
+        setPrivateAccounts(accounts);
+        setPrivateAccountId((current) => current || privateNode.accountId || accounts[0]?.accountId || "");
+      })
+      .catch(() => {
+        if (!canceled) {
+          setPrivateNodeStatus(null);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [privateNode.accountId, privateNode.nodeUrl]);
+
+  useEffect(() => {
+    if (!privateNode.nodeUrl || !privateNode.token) {
+      setPrivateStorage(null);
+      return;
+    }
+    let canceled = false;
+    void fetchPrivateNodeStorage(privateNode.nodeUrl, privateNode.token)
+      .then((summary) => {
+        if (!canceled) {
+          setPrivateStorage(summary);
+        }
+      })
+      .catch(() => {
+        if (!canceled) {
+          setPrivateStorage(null);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [privateNode.nodeUrl, privateNode.token]);
+
+  async function runFolderAction(action: () => Promise<void>, fallback: string) {
     setFolderBusy(true);
     try {
-      await onResetVaultLink();
+      await action();
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Failed to reset folder link.");
+      window.alert(error instanceof Error ? error.message : fallback);
     } finally {
       setFolderBusy(false);
     }
@@ -330,379 +498,355 @@ export function SettingsView({
     }
   }
 
-  const resolvedFolderName = vaultStatus.folderName ?? null;
-  const connectionReady =
-    vaultStatus.code === "ready" ||
-    vaultStatus.code === "read_error" ||
-    vaultStatus.code === "write_error";
-  const folderStateLabel =
-    vaultStatus.code === "unsupported"
-      ? "Not supported"
-      : vaultStatus.code === "disconnected"
-        ? "Not connected"
-        : vaultStatus.code === "stored_handle_needs_access"
-          ? "Needs access"
-          : vaultStatus.code === "read_error"
-            ? "Read issue"
-            : vaultStatus.code === "write_error"
-              ? "Save issue"
-              : "Ready";
-  const folderStateHint =
-    vaultStatus.code === "unsupported"
-      ? "This browser cannot link folders."
-      : vaultStatus.code === "disconnected"
-        ? "Pick a folder to keep downloads and library data together."
-        : vaultStatus.code === "stored_handle_needs_access"
-          ? "The browser needs permission again."
-          : vaultStatus.code === "read_error"
-            ? "The folder is linked, but reading failed last time."
-            : vaultStatus.code === "write_error"
-              ? "The folder is linked, but saving failed last time."
-              : "Everything is linked and ready.";
-
-  const connectionShortText = localRuntimeStatus.available ? "Connected" : "Not found";
-  const folderShortText = resolvedFolderName ?? folderStateLabel;
-  const saveModeShortText = settings.downloadEngine === "localffmpeg" ? "Desktop app" : "Browser only";
-
   function handleSetPreferredSource(key: "preferredSeriesSource" | "preferredMovieSource", value: IntegrationId) {
     onSettingsChange({ [key]: value } as Partial<LibrarySettings>);
   }
 
+  function renderFolderActions() {
+    if (!isFolderConnectionSupported()) {
+      return <StatusPill tone="warn">Unavailable</StatusPill>;
+    }
+
+    if (vaultStatus.code === "disconnected") {
+      return (
+        <ActionButton
+          variant="primary"
+          disabled={folderBusy}
+          onClick={() => void runFolderAction(onConnectVault, "Folder connection failed.")}
+        >
+          <FolderOpen className="h-4 w-4" />
+          {folderBusy ? "Connecting" : "Choose folder"}
+        </ActionButton>
+      );
+    }
+
+    if (vaultStatus.code === "stored_handle_needs_access") {
+      return (
+        <div className="flex flex-wrap justify-end gap-2">
+          <ActionButton
+            variant="primary"
+            disabled={folderBusy}
+            onClick={() => void runFolderAction(onReconnectVaultAccess, "Failed to restore folder access.")}
+          >
+            Restore access
+          </ActionButton>
+          <ActionButton
+            disabled={folderBusy}
+            onClick={() => void runFolderAction(onResetVaultLink, "Failed to reset folder link.")}
+          >
+            Reset
+          </ActionButton>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-wrap justify-end gap-2">
+        <ActionButton
+          disabled={folderBusy}
+          onClick={() => void runFolderAction(onConnectVault, "Folder connection failed.")}
+        >
+          Change
+        </ActionButton>
+        <ActionButton
+          disabled={folderBusy}
+          onClick={() => void runFolderAction(onDisconnectVault, "Failed to disconnect folder.")}
+        >
+          Disconnect
+        </ActionButton>
+      </div>
+    );
+  }
+
+  async function handleConnectPrivateNode() {
+    const nodeUrl = privateNodeInput.trim().replace(/\/+$/, "");
+    if (!nodeUrl) {
+      setPrivateNodeMessage("Enter a private node URL.");
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      const [status, accounts] = await Promise.all([
+        fetchPrivateNodeStatus(nodeUrl),
+        fetchPrivateNodeAccounts(nodeUrl),
+      ]);
+      setPrivateNodeStatus(status);
+      setPrivateAccounts(accounts);
+      setPrivateAccountId((current) => current || accounts[0]?.accountId || "");
+      const next = writePrivateNodeConnection({
+        ...privateNode,
+        nodeUrl,
+      });
+      setPrivateNode(next);
+      setPrivateNodeMessage(status.auth?.privateAuthEnabled ? "Private node connected." : "Node found, but private auth is not enabled.");
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Failed to connect private node.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
+  function persistPrivateLogin(input: {
+    nodeUrl: string;
+    token: string;
+    account: { accountId: string; displayName: string };
+    profiles: Array<{ profileId: string; displayName: string }>;
+    session: { profileId?: string | null };
+  }) {
+    const profileId = input.session.profileId ?? input.profiles[0]?.profileId ?? null;
+    const profileName = input.profiles.find((profile) => profile.profileId === profileId)?.displayName ?? null;
+    const next = writePrivateNodeConnection({
+      nodeUrl: input.nodeUrl,
+      token: input.token,
+      accountId: input.account.accountId,
+      profileId,
+      accountName: input.account.displayName,
+      profileName,
+    });
+    setPrivateNode(next);
+    setPrivateSetupSecret("");
+    setPrivateNodeMessage("Signed in to private node.");
+  }
+
+  async function handleEnrollPrivatePasskey() {
+    if (!privateNode.nodeUrl || !privateAccountId || !privateSetupSecret) {
+      setPrivateNodeMessage("Connect a node, choose an account, and enter the setup secret.");
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      persistPrivateLogin({
+        nodeUrl: privateNode.nodeUrl,
+        ...(await enrollPrivateNodePasskey({
+          nodeUrl: privateNode.nodeUrl,
+          accountId: privateAccountId,
+          setupSecret: privateSetupSecret,
+        })),
+      });
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Passkey enrollment failed.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
+  async function handleLoginPrivatePasskey() {
+    if (!privateNode.nodeUrl || !privateAccountId) {
+      setPrivateNodeMessage("Connect a node and choose an account.");
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      persistPrivateLogin({
+        nodeUrl: privateNode.nodeUrl,
+        ...(await loginPrivateNodePasskey({
+          nodeUrl: privateNode.nodeUrl,
+          accountId: privateAccountId,
+          profileId: privateNode.profileId,
+        })),
+      });
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Passkey login failed.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
+  async function handleSelectPrivateProfile(profileId: string) {
+    if (!privateNode.nodeUrl || !privateNode.token) {
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      persistPrivateLogin({
+        nodeUrl: privateNode.nodeUrl,
+        ...(await selectPrivateNodeProfile({
+          nodeUrl: privateNode.nodeUrl,
+          token: privateNode.token,
+          profileId,
+        })),
+      });
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Profile switch failed.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
+  function handleDisconnectPrivateNode() {
+    const next = clearPrivateNodeConnection();
+    setPrivateNode(next);
+    setPrivateNodeInput("");
+    setPrivateNodeStatus(null);
+    setPrivateAccounts([]);
+    setPrivateAccountId("");
+    setPrivateStorage(null);
+    setPrivateNodeMessage("Private node disconnected.");
+  }
+
+  async function handleCopyPrivateSetupCommand() {
+    try {
+      await navigator.clipboard.writeText(privateSetupCommand);
+      setPrivateNodeMessage("Setup command copied.");
+    } catch {
+      setPrivateNodeMessage("Copy failed. Select the command and copy it manually.");
+    }
+  }
+
   return (
     <div className="relative z-10 animate-fade-in px-4 py-6 pb-20 lg:px-6">
-      <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-4 shadow-[0_16px_40px_rgba(0,0,0,0.18)]">
-          <div className="px-2 pb-4">
-            <div className="text-[10px] font-black uppercase tracking-[0.28em] text-white/34">Control Room</div>
-            <h2 className="mt-2 text-2xl font-bold tracking-tight text-white">Settings</h2>
+      <div className="mx-auto max-w-6xl">
+        <header className="mb-6 flex flex-col gap-4 border-b border-white/8 pb-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-[0.28em] text-white/34">Preferences</div>
+            <h2 className="mt-2 text-3xl font-bold tracking-tight text-white">Settings</h2>
           </div>
-          <nav className="flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
+          <nav className="flex gap-2 overflow-x-auto pb-1">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
                 className={clsx(
-                  "flex min-w-[8.5rem] items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition-colors lg:min-w-0",
-                  activeTab === tab.id
-                    ? "bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.14)]"
-                    : "bg-white/[0.03] text-white/54 hover:bg-white/[0.06] hover:text-white",
+                  "inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full px-4 text-sm font-semibold transition-colors",
+                  activeTab === tab.id ? "bg-white text-black" : "bg-white/8 text-white/58 hover:bg-white/12 hover:text-white",
                 )}
               >
-                <tab.icon className="h-4 w-4 shrink-0" />
+                <tab.icon className="h-4 w-4" />
                 {tab.label}
               </button>
             ))}
           </nav>
-        </aside>
+        </header>
 
-        <div className="space-y-6">
-          <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035))] p-5 shadow-[0_18px_44px_rgba(0,0,0,0.18)]">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <div className="text-[10px] font-black uppercase tracking-[0.28em] text-white/34">
-                  {activeTab === "general" ? "Watching" : activeTab === "storage" ? "Storage" : "Sources"}
-                </div>
-                <h3 className="mt-2 text-2xl font-bold tracking-tight text-white">
-                  {activeTab === "general"
-                    ? "Make the app feel simpler"
-                    : activeTab === "storage"
-                      ? "Control where things are saved"
-                      : "Choose where art and imports come from"}
-                </h3>
-                <p className="mt-2 max-w-2xl text-sm text-white/48">
-                  {activeTab === "general"
-                    ? "Keep only the choices that matter while watching and downloading."
-                    : activeTab === "storage"
-                      ? "Folder link, cache limit, and backup tools live here."
-                      : "Set your preferred source and keep cover art fresh."}
-                </p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <SummaryTile
-                  label="Desktop link"
-                  value={connectionShortText}
-                  accent={localRuntimeStatus.available ? "good" : "warn"}
-                />
-                <SummaryTile
-                  label="Library folder"
-                  value={folderShortText}
-                  accent={connectionReady ? "good" : "warn"}
-                />
-                <SummaryTile label="Save mode" value={saveModeShortText} />
-              </div>
-            </div>
-          </div>
-
-          {activeTab === "general" ? (
-            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-              <SectionCard title="Playback" hint="Small choices that change everyday watching.">
-                <ToggleRow
-                  title="Play the next episode automatically"
-                  hint="Moves to the next episode when one ends."
+        {activeTab === "general" ? (
+          <div className="grid gap-4">
+            <Panel title="Watching">
+              <PreferenceRow title="Autoplay next episode" hint="Continue to the next saved episode when playback ends.">
+                <Toggle
+                  label="Toggle autoplay"
                   checked={settings.autoplayNext}
                   onToggle={() => onSettingsChange({ autoplayNext: !settings.autoplayNext })}
                 />
-              </SectionCard>
-
-              <SectionCard title="Desktop link" hint="Needed for the strongest download flow.">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/20 px-4 py-3">
-                    <div>
-                      <div className="font-medium text-white">{connectionModeLabel}</div>
-                      <div className="mt-1 text-sm text-white/42">
-                        {localRuntimeStatus.available ? "Your local helper is ready." : "The app did not find a local helper."}
-                      </div>
-                    </div>
-                    <StatusChip tone={localRuntimeStatus.available ? "good" : "warn"}>{connectionShortText}</StatusChip>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onRefreshLocalRuntime}
-                    className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/18"
-                  >
+              </PreferenceRow>
+              <PreferenceRow title="Download engine" hint="Use the desktop helper for full downloads or keep downloads browser-only.">
+                <SegmentedChoice<DownloadEngine>
+                  value={settings.downloadEngine}
+                  options={[
+                    { value: "localffmpeg", label: "Desktop" },
+                    { value: "wasm", label: "Browser" },
+                  ]}
+                  onChange={(downloadEngine) => onSettingsChange({ downloadEngine })}
+                />
+              </PreferenceRow>
+              <PreferenceRow title={helperTitle} hint={helperHint}>
+                <div className="flex items-center justify-end gap-2">
+                  <StatusPill tone={isDesktopHelper ? "good" : isFetchServer ? "neutral" : "warn"}>
+                    {helperStatus}
+                  </StatusPill>
+                  <ActionButton onClick={onRefreshLocalRuntime}>
                     <RefreshCw className="h-4 w-4" />
-                    Check again
-                  </button>
+                    Check
+                  </ActionButton>
                 </div>
-              </SectionCard>
+              </PreferenceRow>
+            </Panel>
 
-              <SectionCard
-                title="Save method"
-                hint="Pick how full downloads should be created."
-                className="xl:col-span-2"
-              >
-                <div className="grid gap-3 md:grid-cols-2">
-                  {downloadEngines.map((engine) => (
-                    <ChoiceButton
-                      key={engine.id}
-                      selected={settings.downloadEngine === engine.id}
-                      title={engine.label}
-                      hint={engine.note}
-                      onClick={() => onSettingsChange({ downloadEngine: engine.id })}
-                    />
-                  ))}
+            <Panel title="Defaults" hint="These decide which provider is tried first when there are multiple choices.">
+              <PreferenceRow title="Series source">
+                <SegmentedChoice<IntegrationId>
+                  value={settings.preferredSeriesSource}
+                  options={seriesOptions.map((integration) => ({ value: integration.id, label: integration.name }))}
+                  onChange={(value) => handleSetPreferredSource("preferredSeriesSource", value)}
+                />
+              </PreferenceRow>
+              <PreferenceRow title="Movie source">
+                <SegmentedChoice<IntegrationId>
+                  value={settings.preferredMovieSource}
+                  options={movieOptions.map((integration) => ({ value: integration.id, label: integration.name }))}
+                  onChange={(value) => handleSetPreferredSource("preferredMovieSource", value)}
+                />
+              </PreferenceRow>
+            </Panel>
+          </div>
+        ) : null}
+
+        {activeTab === "storage" ? (
+          <div className="grid gap-4">
+            <Panel title="Library folder">
+              <PreferenceRow title={resolvedFolderName ?? folderStateLabel} hint={folderStateHint}>
+                <div className="flex items-center justify-end gap-2">
+                  <StatusPill tone={connectionReady ? "good" : "warn"}>{folderStateLabel}</StatusPill>
+                  {renderFolderActions()}
                 </div>
-              </SectionCard>
+              </PreferenceRow>
+              <PreferenceRow title="Refresh folder status" hint="Re-check the linked folder without changing it.">
+                <ActionButton onClick={() => void onRefreshVaultStatus()}>
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </ActionButton>
+              </PreferenceRow>
+            </Panel>
 
-              <SectionCard title="Default source for series" hint="Used when more than one source can import a show.">
-                <div className="grid gap-3">
-                  {seriesOptions.map((integration) => (
-                    <ChoiceButton
-                      key={integration.id}
-                      selected={settings.preferredSeriesSource === integration.id}
-                      title={integration.name}
-                      hint={integration.copy.notes}
-                      onClick={() => handleSetPreferredSource("preferredSeriesSource", integration.id)}
-                    />
-                  ))}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Default source for movies" hint="Choose the movie source you want first.">
-                <div className="grid gap-3">
-                  {movieOptions.map((integration) => (
-                    <ChoiceButton
-                      key={integration.id}
-                      selected={settings.preferredMovieSource === integration.id}
-                      title={integration.name}
-                      hint={integration.copy.notes}
-                      onClick={() => handleSetPreferredSource("preferredMovieSource", integration.id)}
-                    />
-                  ))}
-                </div>
-              </SectionCard>
-            </div>
-          ) : null}
-
-          {activeTab === "storage" ? (
-            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-              <SectionCard title="Library folder" hint="Keep downloads and library data together in one place.">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/20 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        {connectionReady ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-                        ) : (
-                          <AlertTriangle className="h-4 w-4 text-amber-300" />
-                        )}
-                        <div className="font-medium text-white">{resolvedFolderName ?? folderStateLabel}</div>
-                      </div>
-                      <div className="mt-1 text-sm text-white/42">{folderStateHint}</div>
-                    </div>
-                    <StatusChip tone={connectionReady ? "good" : "warn"}>{folderStateLabel}</StatusChip>
-                  </div>
-
-                  {isFolderConnectionSupported() ? (
-                    <div className="flex flex-wrap gap-2">
-                      {vaultStatus.code === "disconnected" ? (
-                        <button
-                          type="button"
-                          onClick={handleConnectFolder}
-                          disabled={folderBusy}
-                          className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-orange-200 disabled:opacity-60"
-                        >
-                          {folderBusy ? "Connecting..." : "Choose folder"}
-                        </button>
-                      ) : null}
-
-                      {vaultStatus.code === "stored_handle_needs_access" ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={handleReconnectAccess}
-                            disabled={folderBusy}
-                            className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-orange-200 disabled:opacity-60"
-                          >
-                            {folderBusy ? "Fixing..." : "Restore access"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleResetVaultLink}
-                            disabled={folderBusy}
-                            className="rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/18 disabled:opacity-60"
-                          >
-                            Reset link
-                          </button>
-                        </>
-                      ) : null}
-
-                      {(vaultStatus.code === "ready" || vaultStatus.code === "read_error" || vaultStatus.code === "write_error") ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={handleConnectFolder}
-                            disabled={folderBusy}
-                            className="rounded-full bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-orange-200 disabled:opacity-60"
-                          >
-                            Change folder
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleDisconnectFolder}
-                            disabled={folderBusy}
-                            className="rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/18 disabled:opacity-60"
-                          >
-                            Disconnect
-                          </button>
-                        </>
-                      ) : null}
-
-                      <button
-                        type="button"
-                        onClick={() => void onRefreshVaultStatus()}
-                        className="rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/18"
-                      >
-                        Refresh
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/45">
-                      Folder linking is not available in this browser.
-                    </div>
-                  )}
-
-                  <details className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/55">
-                    <summary className="flex cursor-pointer list-none items-center gap-2 font-medium text-white marker:hidden">
-                      <ShieldAlert className="h-4 w-4 text-white/70" />
-                      Advanced details
-                    </summary>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      <div>Support: <span className="text-white/80">{vaultStatus.supported ? "yes" : "no"}</span></div>
-                      <div>Permission: <span className="text-white/80">{vaultStatus.permission}</span></div>
-                      <div>Stored link: <span className="text-white/80">{vaultStatus.handleStored ? "yes" : "no"}</span></div>
-                      <div>State: <span className="font-mono text-white/80">{vaultStatus.code}</span></div>
-                    </div>
-                    {(vaultDiagnostics.lastPermissionError || vaultDiagnostics.lastReadError || vaultDiagnostics.lastWriteError) ? (
-                      <div className="mt-3 space-y-2 text-xs text-white/55">
-                        {vaultDiagnostics.lastPermissionError ? <div>Permission: {vaultDiagnostics.lastPermissionError}</div> : null}
-                        {vaultDiagnostics.lastReadError ? <div>Read: {vaultDiagnostics.lastReadError}</div> : null}
-                        {vaultDiagnostics.lastWriteError ? <div>Write: {vaultDiagnostics.lastWriteError}</div> : null}
-                      </div>
-                    ) : null}
-                  </details>
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Download limit" hint="How much local space the app should use before it stops caching.">
-                <div className="space-y-4">
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {[512, 2048, 8192].map((size) => (
-                      <button
-                        key={size}
-                        type="button"
-                        onClick={() => onSettingsChange({ offlineSizeLimitMb: size })}
-                        className={clsx(
-                          "rounded-2xl border px-3 py-3 text-sm font-medium transition-colors",
-                          settings.offlineSizeLimitMb === size
-                            ? "border-orange-400/60 bg-orange-500/10 text-white"
-                            : "border-white/8 bg-black/20 text-white/70 hover:border-white/16 hover:bg-white/[0.04]",
-                        )}
-                      >
-                        {size >= 1024 ? `${size / 1024} GB` : `${size} MB`}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="number"
-                      min={128}
-                      step={128}
-                      value={settings.offlineSizeLimitMb}
-                      onChange={(event) => {
-                        const value = Number.parseInt(event.target.value, 10);
-                        if (!Number.isFinite(value)) {
-                          return;
-                        }
+            <Panel title="Offline cache">
+              <PreferenceRow title="Cache limit" hint="Maximum space the app should use for downloaded episodes.">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <SegmentedChoice<number>
+                    value={settings.offlineSizeLimitMb}
+                    options={[
+                      { value: 512, label: "512 MB" },
+                      { value: 2048, label: "2 GB" },
+                      { value: 8192, label: "8 GB" },
+                    ]}
+                    onChange={(offlineSizeLimitMb) => onSettingsChange({ offlineSizeLimitMb })}
+                  />
+                  <input
+                    type="number"
+                    min={128}
+                    step={128}
+                    value={settings.offlineSizeLimitMb}
+                    onChange={(event) => {
+                      const value = Number.parseInt(event.target.value, 10);
+                      if (Number.isFinite(value)) {
                         onSettingsChange({ offlineSizeLimitMb: Math.max(128, value) });
-                      }}
-                      className="w-36 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none"
-                    />
-                    <span className="text-sm text-white/48">MB</span>
-                  </div>
+                      }
+                    }}
+                    className="h-10 w-28 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none"
+                    aria-label="Custom cache limit in MB"
+                  />
                 </div>
-              </SectionCard>
-
-              <SectionCard title="Used now" hint="Quick view of current cache usage.">
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-2xl font-semibold text-white">{usageMb} MB</div>
-                      <div className="mt-1 text-sm text-white/42">
-                        {offlineEpisodeCount} saved {offlineEpisodeCount === 1 ? "episode" : "episodes"}
-                      </div>
+              </PreferenceRow>
+              <PreferenceRow
+                title={offlineCacheTitle}
+                hint={offlineCacheHint}
+              >
+                <div className="flex min-w-56 items-center justify-end gap-3">
+                  {usageMb > 0 ? (
+                    <div className="h-2 w-28 overflow-hidden rounded-full bg-black/50">
+                      <div className="h-full rounded-full bg-orange-500" style={{ width: `${usagePercent}%` }} />
                     </div>
-                    <button
-                      type="button"
-                      onClick={onClearOffline}
-                      className="rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/18"
-                    >
-                      Clear cache
-                    </button>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-black/50">
-                    <div className="h-full rounded-full bg-orange-500" style={{ width: `${usagePercent}%` }} />
-                  </div>
-                  <div className="text-sm text-white/42">
-                    {usageMb} MB of {settings.offlineSizeLimitMb} MB used
-                  </div>
+                  ) : offlineEpisodeCount > 0 ? (
+                    <StatusPill tone="good">Vault</StatusPill>
+                  ) : null}
+                  <ActionButton onClick={onClearOffline}>Clear</ActionButton>
                 </div>
-              </SectionCard>
+              </PreferenceRow>
+            </Panel>
 
-              <SectionCard title="Backup" hint="Export your library or bring one back in.">
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={onExportLibrary}
-                    className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-medium text-black transition-colors hover:bg-orange-200"
-                  >
+            <Panel title="Backup">
+              <PreferenceRow title="Library backup" hint="Export or restore the local library snapshot.">
+                <div className="flex flex-wrap justify-end gap-2">
+                  <ActionButton variant="primary" onClick={onExportLibrary}>
                     <Download className="h-4 w-4" />
-                    Export backup
-                  </button>
-                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-white/18">
+                    Export
+                  </ActionButton>
+                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/18">
                     <Upload className="h-4 w-4" />
-                    {importBusy ? "Importing..." : "Import backup"}
+                    {importBusy ? "Importing" : "Import"}
                     <input
                       type="file"
                       accept="application/json,.json"
@@ -713,136 +857,383 @@ export function SettingsView({
                     />
                   </label>
                 </div>
-              </SectionCard>
-            </div>
-          ) : null}
+              </PreferenceRow>
+            </Panel>
+          </div>
+        ) : null}
 
-          {activeTab === "integrations" ? (
-            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-              <SectionCard title="Cover art" hint="Choose where posters, backdrops, and logos can come from.">
-                <div className="space-y-3">
-                  {[
-                    {
-                      key: "tmdb" as const,
-                      label: "TMDB",
-                      note: "Best default for posters and backdrops.",
-                    },
-                    {
-                      key: "fanart" as const,
-                      label: "Fanart.tv",
-                      note: "Great for logos and extra artwork.",
-                    },
-                    {
-                      key: "tvdb" as const,
-                      label: "TVDB",
-                      note: "Helpful fallback when the others miss.",
-                    },
-                  ].map((source) => {
-                    const enabled = settings.artworkSources[source.key];
-                    return (
-                      <ToggleRow
-                        key={source.key}
-                        title={source.label}
-                        hint={source.note}
-                        checked={enabled}
-                        onToggle={() =>
-                          onSettingsChange({
-                            artworkSources: {
-                              ...settings.artworkSources,
-                              [source.key]: !enabled,
-                            },
-                          })
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Refresh art" hint="Update covers and backdrops for titles you already imported.">
-                <div className="space-y-4">
-                  <button
-                    type="button"
-                    onClick={() => void onRefreshArtwork()}
-                    disabled={artworkRefreshBusy}
-                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-medium text-black transition-colors hover:bg-orange-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <ImageIcon className="h-4 w-4" />
-                    {artworkRefreshBusy ? "Refreshing..." : "Refresh covers"}
-                  </button>
-                  {artworkRefreshSummary ? (
-                    <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/50">
-                      {artworkRefreshSummary}
-                    </div>
-                  ) : (
-                    <div className="text-sm text-white/42">Uses the sources you turned on above.</div>
-                  )}
-                </div>
-              </SectionCard>
-
-              <SectionCard title="Import sources" hint="Modules currently available in the app." className="xl:col-span-2">
-                <div className="grid gap-3 md:grid-cols-2">
-                  {INTEGRATIONS.map((integration) => (
-                    <IntegrationCard
-                      key={integration.id}
-                      domain={integration.domain}
-                      shortLabel={integration.copy.shortLabel}
-                      note={integration.copy.notes}
+        {activeTab === "sources" ? (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+            <Panel title="Artwork" hint="Turn artwork providers on or off, then refresh existing titles when needed.">
+              {[
+                { key: "tmdb" as const, label: "TMDB", hint: "Posters and backdrops." },
+                { key: "fanart" as const, label: "Fanart.tv", hint: "Logos and alternate art." },
+                { key: "tvdb" as const, label: "TVDB", hint: "Series artwork fallback." },
+              ].map((source) => {
+                const enabled = settings.artworkSources[source.key];
+                return (
+                  <SourceRow key={source.key} title={source.label} hint={source.hint}>
+                    <Toggle
+                      label={`Toggle ${source.label}`}
+                      checked={enabled}
+                      onToggle={() =>
+                        onSettingsChange({
+                          artworkSources: {
+                            ...settings.artworkSources,
+                            [source.key]: !enabled,
+                          },
+                        })
+                      }
                     />
-                  ))}
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/44">
-                  <span className="inline-flex items-center gap-1 rounded-full border border-white/8 bg-black/20 px-3 py-1.5">
-                    <Tv className="h-3.5 w-3.5" />
-                    Series + movies
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-full border border-white/8 bg-black/20 px-3 py-1.5">
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    Import ready
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-full border border-white/8 bg-black/20 px-3 py-1.5">
-                    <SettingsIcon className="h-3.5 w-3.5" />
-                    Download aware
-                  </span>
-                </div>
-              </SectionCard>
-
-              <SectionCard
-                title="Provider Feeds"
-                hint="Add standalone provider pages so new episodes land directly inside Spilled."
-                className="xl:col-span-2"
-              >
-                <div className="grid gap-3">
-                  {providerFeeds.map((feed) => (
-                    <div key={`${feed.moduleId}:${feed.feedId}`} className="rounded-2xl border border-white/8 bg-black/20 px-4 py-4">
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="font-medium text-white">{feed.title}</div>
-                            <StatusChip tone={feed.enabled ? "good" : "neutral"}>{feed.providerName}</StatusChip>
-                          </div>
-                          <p className="mt-2 text-sm text-white/45">{feed.description}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => onToggleProviderFeed(feed.moduleId, feed.feedId)}
-                          className={clsx(
-                            "inline-flex items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
-                            feed.enabled
-                              ? "bg-white/10 text-white hover:bg-white/18"
-                              : "bg-white text-black hover:bg-orange-200",
-                          )}
-                        >
-                          {feed.enabled ? "Remove" : "Add to Spilled"}
-                        </button>
-                      </div>
+                  </SourceRow>
+                );
+              })}
+              <div className="mt-4 rounded-2xl border border-white/8 bg-black/18 px-4 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-white">Refresh existing artwork</div>
+                    <div className="mt-1 text-sm leading-5 text-white/42">
+                      {artworkRefreshSummary ?? "Update covers, backdrops, and logos for imported titles."}
                     </div>
+                  </div>
+                <ActionButton
+                  variant="primary"
+                  disabled={artworkRefreshBusy}
+                  onClick={() => void onRefreshArtwork()}
+                >
+                  <ImageIcon className="h-4 w-4" />
+                  {artworkRefreshBusy ? "Refreshing" : "Refresh"}
+                </ActionButton>
+                </div>
+              </div>
+            </Panel>
+
+            <Panel title="Import modules" hint="Installed modules the app can use for search, import, playback, and downloads.">
+              <div className="grid gap-3">
+                {INTEGRATIONS.map((integration) => {
+                  const feeds = feedsByProvider.get(integration.id) ?? [];
+                  const enabledCount = feeds.filter((feed) => feed.enabled).length;
+                  return (
+                    <SourceRow key={integration.id} title={integration.name} hint={integration.copy.notes}>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <StatusPill tone="good">{integration.copy.shortLabel}</StatusPill>
+                        {feeds.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setFeedModuleId(integration.id)}
+                            className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-white/18"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            Feeds {enabledCount > 0 ? `${enabledCount}/${feeds.length}` : feeds.length}
+                          </button>
+                        ) : null}
+                      </div>
+                    </SourceRow>
+                  );
+                })}
+              </div>
+            </Panel>
+          </div>
+        ) : null}
+
+        {activeTab === "private" ? (
+          <div className="grid gap-4">
+            <Panel title="Private node" hint="Connect to your own server for private profiles, library sync, and node-side downloads.">
+              <PreferenceRow title="Node URL" hint="Use the public HTTPS URL for your private server when using the hosted dashboard.">
+                <div className="flex min-w-[min(34rem,100%)] flex-col gap-2 sm:flex-row">
+                  <input
+                    value={privateNodeInput}
+                    onChange={(event) => setPrivateNodeInput(event.target.value)}
+                    placeholder="https://your-private-node.example.com"
+                    className="h-10 min-w-0 flex-1 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  />
+                  <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleConnectPrivateNode()}>
+                    {privateNodeBusy ? "Checking" : "Connect"}
+                  </ActionButton>
+                </div>
+              </PreferenceRow>
+              <PreferenceRow title="Status" hint={privateNodeStatus?.auth?.privateAuthEnabled ? "Private auth is available on this node." : "Connect to a private node to see auth support."}>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <StatusPill tone={privateNodeStatus ? "good" : "neutral"}>{privateNodeStatus ? "Found" : "Not connected"}</StatusPill>
+                  {privateNodeStatus?.node?.mode === "full" ? <StatusPill tone="good">Private + fetch</StatusPill> : null}
+                  {privateNodeStatus?.auth?.passkeysEnabled ? <StatusPill tone="good">Passkeys</StatusPill> : null}
+                  {privateNodeStatus?.auth?.oidcProviders?.length ? <StatusPill>{privateNodeStatus.auth.oidcProviders.length} SSO</StatusPill> : null}
+                  <ActionButton onClick={() => setShowPrivateSetup((current) => !current)}>
+                    <Terminal className="h-4 w-4" />
+                    Setup
+                  </ActionButton>
+                </div>
+              </PreferenceRow>
+              {privateNodeMessage ? (
+                <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/55">
+                  {privateNodeMessage}
+                </div>
+              ) : null}
+            </Panel>
+
+            {showPrivateSetup ? (
+              <Panel title="Setup private node" hint="Create a private node config and start the server in full mode, which keeps fetch/search working while enabling private profiles and storage.">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <SourceRow title="Node name" hint="Shown in status and discovery.">
+                    <input
+                      value={setupNodeName}
+                      onChange={(event) => setSetupNodeName(event.target.value)}
+                      className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
+                    />
+                  </SourceRow>
+                  <SourceRow title="Admin account" hint="The local account configured on your server.">
+                    <input
+                      value={setupAccountName}
+                      onChange={(event) => {
+                        setSetupAccountName(event.target.value);
+                        if (!setupAccountId || setupAccountId === "acct_owner") {
+                          setSetupAccountId(`acct_${event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_") || "owner"}`);
+                        }
+                      }}
+                      className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
+                    />
+                  </SourceRow>
+                  <SourceRow title="Account id" hint="Stable id stored in the private config.">
+                    <input
+                      value={setupAccountId}
+                      onChange={(event) => setSetupAccountId(event.target.value)}
+                      className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
+                    />
+                  </SourceRow>
+                  <SourceRow title="Profiles" hint="Comma-separated profile names.">
+                    <input
+                      value={setupProfileNames}
+                      onChange={(event) => setSetupProfileNames(event.target.value)}
+                      className="h-10 w-56 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
+                    />
+                  </SourceRow>
+                  <SourceRow title="Quota" hint="Shared account storage in GB.">
+                    <input
+                      type="number"
+                      min={1}
+                      value={setupQuotaGb}
+                      onChange={(event) => setSetupQuotaGb(Math.max(1, Number.parseInt(event.target.value, 10) || 1))}
+                      className="h-10 w-32 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
+                    />
+                  </SourceRow>
+                  <SourceRow title="Setup secret" hint="Used once to enroll your first passkey.">
+                    <input
+                      type="password"
+                      value={setupCommandSecret}
+                      onChange={(event) => setSetupCommandSecret(event.target.value)}
+                      placeholder="change-this-secret"
+                      className="h-10 w-56 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                    />
+                  </SourceRow>
+                </div>
+                <div className="mt-4 rounded-2xl border border-white/8 bg-black/30">
+                  <div className="flex items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
+                    <div className="text-sm font-semibold text-white">PowerShell command</div>
+                    <ActionButton onClick={() => void handleCopyPrivateSetupCommand()}>
+                      <Copy className="h-4 w-4" />
+                      Copy
+                    </ActionButton>
+                  </div>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap p-4 text-xs leading-5 text-white/70">
+                    {privateSetupCommand}
+                  </pre>
+                </div>
+              </Panel>
+            ) : null}
+
+            {privateAccounts.length > 0 && !privateNode.token ? (
+              <Panel title="Sign in">
+                <PreferenceRow title="Account" hint="Accounts and profiles are configured on the private server, not created here.">
+                  <select
+                    value={privateAccountId}
+                    onChange={(event) => setPrivateAccountId(event.target.value)}
+                    className="h-10 rounded-full border border-white/10 bg-black/40 px-4 text-sm text-white outline-none"
+                  >
+                    {privateAccounts.map((account) => (
+                      <option key={account.accountId} value={account.accountId}>
+                        {account.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </PreferenceRow>
+                <PreferenceRow title="Passkey login" hint="Use an enrolled passkey for this account.">
+                  <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePasskey()}>
+                    Sign in
+                  </ActionButton>
+                </PreferenceRow>
+                <PreferenceRow title="Enroll passkey" hint="Requires the setup secret from the private server config. The app never stores it.">
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="password"
+                      value={privateSetupSecret}
+                      onChange={(event) => setPrivateSetupSecret(event.target.value)}
+                      placeholder="Setup secret"
+                      className="h-10 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                    />
+                    <ActionButton disabled={privateNodeBusy} onClick={() => void handleEnrollPrivatePasskey()}>
+                      Enroll
+                    </ActionButton>
+                  </div>
+                </PreferenceRow>
+                <PreferenceRow title="SSO" hint="OIDC providers are listed when configured on the private server. Redirect login comes after passkey support.">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {(privateNodeStatus?.auth?.oidcProviders ?? []).length === 0 ? (
+                      <StatusPill>No providers</StatusPill>
+                    ) : (
+                      privateNodeStatus?.auth?.oidcProviders?.map((provider) => (
+                        <StatusPill key={provider.providerId}>{provider.displayName}</StatusPill>
+                      ))
+                    )}
+                  </div>
+                </PreferenceRow>
+              </Panel>
+            ) : null}
+
+            {privateNode.token ? (
+              <Panel title="Signed in">
+                <PreferenceRow title={privateNode.accountName ?? "Private account"} hint="This session is signed by your private node.">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <StatusPill tone="good">Signed in</StatusPill>
+                    <ActionButton onClick={handleDisconnectPrivateNode}>Disconnect</ActionButton>
+                  </div>
+                </PreferenceRow>
+                <PreferenceRow title="Profile" hint="Profiles are separate library views under the same account quota.">
+                  <SegmentedChoice<string>
+                    value={privateNode.profileId ?? ""}
+                    options={(privateAccounts.find((account) => account.accountId === privateNode.accountId)?.profiles ?? [])
+                      .map((profile) => ({ value: profile.profileId, label: profile.displayName }))}
+                    onChange={(profileId) => void handleSelectPrivateProfile(profileId)}
+                  />
+                </PreferenceRow>
+                <PreferenceRow
+                  title="Storage"
+                  hint={privateStorage ? `${Math.round(privateStorage.usedBytes / (1024 * 1024))} MB used of ${Math.round(privateStorage.quotaBytes / (1024 * 1024))} MB.` : "Storage summary will appear after sign in."}
+                >
+                  <StatusPill tone={privateStorage ? "good" : "neutral"}>
+                    {privateStorage ? `${Math.round(privateStorage.availableBytes / (1024 * 1024))} MB free` : "Loading"}
+                  </StatusPill>
+                </PreferenceRow>
+                <PreferenceRow title="Library mode" hint="Local stays separate by default. Integrated view and explicit merge will be wired in the next private-library pass.">
+                  <StatusPill>Local separate</StatusPill>
+                </PreferenceRow>
+              </Panel>
+            ) : null}
+          </div>
+        ) : null}
+
+        {selectedFeedModule ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Module feeds</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedFeedModule.name}</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFeedModuleId(null)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close feeds"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {selectedModuleFeeds.length === 0 ? (
+                <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/45">
+                  This module has no feed adders yet.
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {selectedModuleFeeds.map((feed) => (
+                    <SourceRow key={`${feed.moduleId}:${feed.feedId}`} title={feed.title} hint={feed.description}>
+                      <button
+                        type="button"
+                        onClick={() => onToggleProviderFeed(feed.moduleId, feed.feedId)}
+                        className={clsx(
+                          "rounded-full px-4 py-2.5 text-sm font-semibold transition-colors",
+                          feed.enabled ? "bg-white/10 text-white hover:bg-white/18" : "bg-white text-black hover:bg-orange-200",
+                        )}
+                      >
+                        {feed.enabled ? "Remove" : "Add"}
+                      </button>
+                    </SourceRow>
                   ))}
                 </div>
-              </SectionCard>
+              )}
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
+
+        {activeTab === "advanced" ? (
+          <div className="grid gap-4">
+            <Panel title="Runtime details" hint="Use this when something needs debugging.">
+              <PreferenceRow title="Connection mode" hint={connectionModeLabel}>
+                <StatusPill tone={isDesktopHelper ? "good" : isFetchServer ? "neutral" : "warn"}>
+                  {helperStatus}
+                </StatusPill>
+              </PreferenceRow>
+              <PreferenceRow title="Vault state" hint={folderStateHint}>
+                <StatusPill tone={connectionReady ? "good" : "warn"}>{vaultStatus.code}</StatusPill>
+              </PreferenceRow>
+              <PreferenceRow title="Folder permission" hint={`Stored link: ${vaultStatus.handleStored ? "yes" : "no"}`}>
+                <StatusPill>{vaultStatus.permission}</StatusPill>
+              </PreferenceRow>
+            </Panel>
+
+            <Panel title="Last folder errors">
+              {vaultDiagnostics.lastPermissionError || vaultDiagnostics.lastReadError || vaultDiagnostics.lastWriteError ? (
+                <div className="space-y-3 text-sm leading-6 text-white/55">
+                  {vaultDiagnostics.lastPermissionError ? (
+                    <div className="rounded-2xl border border-amber-400/16 bg-amber-500/8 px-4 py-3">
+                      Permission: {vaultDiagnostics.lastPermissionError}
+                    </div>
+                  ) : null}
+                  {vaultDiagnostics.lastReadError ? (
+                    <div className="rounded-2xl border border-amber-400/16 bg-amber-500/8 px-4 py-3">
+                      Read: {vaultDiagnostics.lastReadError}
+                    </div>
+                  ) : null}
+                  {vaultDiagnostics.lastWriteError ? (
+                    <div className="rounded-2xl border border-amber-400/16 bg-amber-500/8 px-4 py-3">
+                      Write: {vaultDiagnostics.lastWriteError}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/55">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-300" />
+                  No recent folder errors.
+                </div>
+              )}
+            </Panel>
+
+            <Panel title="Maintenance">
+              <PreferenceRow title="Refresh all checks" hint="Re-run runtime and folder checks.">
+                <div className="flex flex-wrap justify-end gap-2">
+                  <ActionButton onClick={onRefreshLocalRuntime}>
+                    <Package className="h-4 w-4" />
+                    Runtime
+                  </ActionButton>
+                  <ActionButton onClick={() => void onRefreshVaultStatus()}>
+                    <DatabaseBackup className="h-4 w-4" />
+                    Vault
+                  </ActionButton>
+                </div>
+              </PreferenceRow>
+              <PreferenceRow title="Folder warning" hint="This appears only when the folder needs attention.">
+                {connectionReady ? (
+                  <StatusPill tone="good">Clean</StatusPill>
+                ) : (
+                  <span className="inline-flex items-center gap-2 text-sm text-amber-200">
+                    <AlertTriangle className="h-4 w-4" />
+                    {folderStateLabel}
+                  </span>
+                )}
+              </PreferenceRow>
+            </Panel>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -19,6 +19,12 @@
     },
     "api/import-bombuj.js": {
       "maxDuration": 30
+    },
+    "api/artwork/refresh.ts": {
+      "maxDuration": 60
+    },
+    "api/artwork/search.ts": {
+      "maxDuration": 30
     }
   }
 }

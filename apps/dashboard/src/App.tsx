@@ -609,8 +609,18 @@ function App() {
       }
     }
 
-    setDownloadedEpisodeIds(next);
-    setDownloadedEpisodeFileById(nextFiles);
+    const idsChanged = next.size !== downloadedEpisodeIds.size || [...next].some((episodeId) => !downloadedEpisodeIds.has(episodeId));
+    const filesChanged =
+      nextFiles.size !== downloadedEpisodeFileById.size ||
+      [...nextFiles.entries()].some(([episodeId, fileName]) => downloadedEpisodeFileById.get(episodeId) !== fileName);
+
+    if (idsChanged) {
+      setDownloadedEpisodeIds(next);
+    }
+
+    if (filesChanged) {
+      setDownloadedEpisodeFileById(nextFiles);
+    }
   }
 
   function getOutputFileName(outputPath: string | undefined, episodeId: string) {
@@ -898,6 +908,13 @@ function App() {
     () => Object.values(state.offlineDownloads).reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0),
     [state.offlineDownloads],
   );
+  const totalDownloadedEpisodeCount = useMemo(() => {
+    const ids = new Set(Object.keys(state.offlineDownloads));
+    for (const id of downloadedEpisodeIds) {
+      ids.add(id);
+    }
+    return ids.size;
+  }, [downloadedEpisodeIds, state.offlineDownloads]);
   const featuredShow = state.shows.length > 0 ? state.shows[heroIndex % state.shows.length] : null;
   const latestEpisodeOfFeatured = featuredShow?.episodes[featuredShow.episodes.length - 1];
   const downloadedCountByShow = useMemo(() => {
@@ -1208,6 +1225,10 @@ function App() {
       cacheExploreFeed(JSON.stringify({ query: deferredExploreQuery, filters: discoveryState.exploreFilters }), feed);
     } catch (error) {
       setExploreError(error instanceof Error ? error.message : "Failed to load Explore.");
+      if (!cursor) {
+        setExploreFeed(null);
+        setExploreCursor(null);
+      }
     } finally {
       setExploreLoading(false);
     }
@@ -2632,9 +2653,9 @@ function App() {
             />
           ) : activeView === "settings" ? (
             <SettingsView 
-               settings={state.settings}
+              settings={state.settings}
               offlineUsageBytes={totalOfflineBytes}
-              offlineEpisodeCount={Object.keys(state.offlineDownloads).length}
+              offlineEpisodeCount={totalDownloadedEpisodeCount}
               onClearOffline={handleClearOffline}
               onRefreshArtwork={handleRefreshArtwork}
               artworkRefreshBusy={artworkRefreshBusy}
@@ -2742,7 +2763,7 @@ function App() {
                 </div>
 
                 <div
-                  className="animate-fade-in grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-5 opacity-0 md:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
+                  className="animate-fade-in grid grid-cols-[repeat(auto-fill,minmax(150px,182px))] justify-start gap-5 opacity-0 sm:grid-cols-[repeat(auto-fill,minmax(168px,190px))] xl:grid-cols-[repeat(auto-fill,minmax(182px,210px))]"
                   style={{ animationDelay: "0.2s" }}
                 >
                   {filteredShows.map((show: ImportedShow) => (

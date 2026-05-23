@@ -6,20 +6,41 @@ import {
 } from "./provider-modules-shared";
 import type { ExploreItem, ProviderFeedResponse, ProviderModuleManifest } from "./types";
 
-export async function fetchProviderModules() {
-  const response = await requestRuntimeJson<{ modules?: ProviderModuleRecord[]; error?: string }>("/api/provider-modules", {
+async function fetchControlPlaneProviderModules() {
+  const response = await fetch("/api/server/provider-modules", {
     method: "GET",
+    headers: { Accept: "application/json" },
   });
-
   if (!response.ok) {
-    throw new Error(response.data?.error ?? "Failed to load provider modules.");
+    throw new Error(`Control plane provider modules failed (${response.status}).`);
   }
 
-  if (!Array.isArray(response.data?.modules) || response.data.modules.length === 0) {
+  const payload = await response.json() as { modules?: ProviderModuleRecord[] };
+  if (!Array.isArray(payload.modules) || payload.modules.length === 0) {
     return DEFAULT_PROVIDER_MODULES;
   }
 
-  return hydrateProviderModules(response.data.modules) as ProviderModuleManifest[];
+  return hydrateProviderModules(payload.modules) as ProviderModuleManifest[];
+}
+
+export async function fetchProviderModules() {
+  try {
+    return await fetchControlPlaneProviderModules();
+  } catch {
+    const response = await requestRuntimeJson<{ modules?: ProviderModuleRecord[]; error?: string }>("/api/provider-modules", {
+      method: "GET",
+    });
+
+    if (!response.ok) {
+      throw new Error(response.data?.error ?? "Failed to load provider modules.");
+    }
+
+    if (!Array.isArray(response.data?.modules) || response.data.modules.length === 0) {
+      return DEFAULT_PROVIDER_MODULES;
+    }
+
+    return hydrateProviderModules(response.data.modules) as ProviderModuleManifest[];
+  }
 }
 
 export async function fetchProviderFeed(input: {

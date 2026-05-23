@@ -1,4 +1,4 @@
-import { normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking";
+import { normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking.js";
 
 type ArtworkBundle = {
   posterUrl?: string | null;
@@ -7,7 +7,7 @@ type ArtworkBundle = {
 };
 
 export type ArtworkAssetKind = "poster" | "backdrop" | "logo";
-export type ArtworkAssetSource = "tmdb" | "fanart" | "tvdb";
+export type ArtworkAssetSource = "tmdb" | "fanart" | "tvdb" | "current";
 
 export type ArtworkAsset = {
   url: string;
@@ -942,8 +942,55 @@ export async function searchArtworkAssets(options: {
   altTitle?: string | null;
   yearHint?: string;
   description?: string | null;
+  currentPosterUrl?: string | null;
+  currentBackdropUrl?: string | null;
+  currentClearLogoUrl?: string | null;
   sources?: ArtworkSourceSettings;
 }) {
+  const fallbackAssets: ArtworkAsset[] = [];
+  if (options.currentPosterUrl) {
+    fallbackAssets.push({
+      url: options.currentPosterUrl,
+      kind: "poster",
+      source: "current",
+      label: "Current Poster",
+      language: null,
+      score: 1,
+      hasText: null,
+    });
+  }
+  if (options.currentBackdropUrl) {
+    fallbackAssets.push({
+      url: options.currentBackdropUrl,
+      kind: "backdrop",
+      source: "current",
+      label: "Current Backdrop",
+      language: null,
+      score: 1,
+      hasText: null,
+    });
+  }
+  if (options.currentClearLogoUrl) {
+    fallbackAssets.push({
+      url: options.currentClearLogoUrl,
+      kind: "logo",
+      source: "current",
+      label: "Current Logo",
+      language: null,
+      score: 1,
+      hasText: true,
+    });
+  }
+
+  const hasAnyConfiguredProvider =
+    (isSourceEnabled(options.sources, "tmdb") && Boolean(getTmdbReadToken())) ||
+    (isSourceEnabled(options.sources, "fanart") && Boolean(getFanartApiKey())) ||
+    (isSourceEnabled(options.sources, "tvdb") && Boolean(getTvdbApiKey()));
+
+  if (!hasAnyConfiguredProvider) {
+    return dedupeArtworkAssets(fallbackAssets);
+  }
+
   const tmdbEnabled = isSourceEnabled(options.sources, "tmdb");
   const fanartEnabled = isSourceEnabled(options.sources, "fanart");
   const tvdbEnabled = isSourceEnabled(options.sources, "tvdb");
@@ -1086,7 +1133,7 @@ export async function searchArtworkAssets(options: {
     }
   }
 
-  return dedupeArtworkAssets(assets);
+  return dedupeArtworkAssets([...fallbackAssets, ...assets]);
 }
 
 export async function enrichArtwork(options: {
