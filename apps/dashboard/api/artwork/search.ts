@@ -1,5 +1,5 @@
-import type { ArtworkSourceSettings } from "../../src/lib/types";
-import { searchArtworkAssets } from "../../src/server/artwork";
+import type { ArtworkSourceSettings } from "../../src/lib/types.js";
+import { searchArtworkAssets } from "../../src/server/artwork.js";
 
 type RequestBody = {
   mediaType?: unknown;

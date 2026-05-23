@@ -5,6 +5,7 @@ import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
 import { readRelayMeshOptionsFromEnv, SecureRelayMesh } from "./mesh";
 import { setNodeEndpointUrl } from "../../../packages/node-client/src/index";
+import { loadPrivateNodeConfigFromEnv, readNodeModeFromEnv } from "../../node/src/private-config";
 
 type RouteHandler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
 
@@ -48,8 +49,14 @@ function loadRootEnvLocal() {
 loadRootEnvLocal();
 
 const handlers = createHttpHandlers();
+const nodeMode = readNodeModeFromEnv();
+const privateConfig = loadPrivateNodeConfigFromEnv(nodeMode);
 const port = Number.parseInt(process.env.PORT || "8787", 10);
 const host = process.env.HOST || "0.0.0.0";
+handlers.runtime.configure({
+  mode: nodeMode,
+  privateConfig,
+});
 const mesh = new SecureRelayMesh(handlers.runtime, readRelayMeshOptionsFromEnv());
 const controlPlaneOptions = readControlPlaneReporterOptionsFromEnv();
 const controlPlane = controlPlaneOptions ? new ControlPlaneReporter(handlers.runtime, controlPlaneOptions) : null;
@@ -84,7 +91,24 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/download-full/subtitle-file", handler: handlers.subtitleFileHandler },
   { path: "/api/subtitle-proxy", handler: handlers.subtitleProxyHandler },
   { path: "/api/node/auth/anonymous", handler: handlers.anonymousGrantHandler },
+  { path: "/api/node/auth/accounts", handler: handlers.privateAccountsHandler },
+  { path: "/api/node/auth/me", handler: handlers.privateMeHandler },
+  { path: "/api/node/auth/logout", handler: handlers.privateMeHandler },
+  { path: "/api/node/auth/passkey/register-options", handler: handlers.passkeyRegisterOptionsHandler },
+  { path: "/api/node/auth/passkey/register-verify", handler: handlers.passkeyRegisterVerifyHandler },
+  { path: "/api/node/auth/passkey/login-options", handler: handlers.passkeyLoginOptionsHandler },
+  { path: "/api/node/auth/passkey/login-verify", handler: handlers.passkeyLoginVerifyHandler },
+  { path: "/api/node/auth/oidc/providers", handler: handlers.oidcProvidersHandler },
+  { path: "/api/node/auth/oidc/start", handler: handlers.oidcStartHandler },
+  { path: "/api/node/auth/oidc/callback", handler: handlers.oidcFinishHandler },
+  { path: "/api/node/auth/oidc/finish", handler: handlers.oidcFinishHandler },
   { path: "/api/node/auth/private", handler: handlers.privateSessionHandler },
+  { path: "/api/node/private/profiles", handler: handlers.privateProfilesHandler },
+  { path: "/api/node/private/profile/select", handler: handlers.privateProfileSelectHandler },
+  { path: "/api/node/private/library", handler: handlers.privateLibraryHandler },
+  { path: "/api/node/private/storage", handler: handlers.privateStorageHandler },
+  { path: "/api/node/private/downloads", handler: handlers.privateDownloadsHandler },
+  { path: "/api/node/private/downloads/file", handler: handlers.privateDownloadFileHandler },
   { path: "/api/node/pairing/start", handler: handlers.pairingStartHandler },
   { path: "/api/node/pairing/approve", handler: handlers.pairingApproveHandler },
   { path: "/api/node/passkey/register-options", handler: handlers.passkeyRegistrationHandler },

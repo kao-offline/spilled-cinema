@@ -908,6 +908,13 @@ function App() {
     () => Object.values(state.offlineDownloads).reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0),
     [state.offlineDownloads],
   );
+  const totalDownloadedEpisodeCount = useMemo(() => {
+    const ids = new Set(Object.keys(state.offlineDownloads));
+    for (const id of downloadedEpisodeIds) {
+      ids.add(id);
+    }
+    return ids.size;
+  }, [downloadedEpisodeIds, state.offlineDownloads]);
   const featuredShow = state.shows.length > 0 ? state.shows[heroIndex % state.shows.length] : null;
   const latestEpisodeOfFeatured = featuredShow?.episodes[featuredShow.episodes.length - 1];
   const downloadedCountByShow = useMemo(() => {
@@ -1218,6 +1225,10 @@ function App() {
       cacheExploreFeed(JSON.stringify({ query: deferredExploreQuery, filters: discoveryState.exploreFilters }), feed);
     } catch (error) {
       setExploreError(error instanceof Error ? error.message : "Failed to load Explore.");
+      if (!cursor) {
+        setExploreFeed(null);
+        setExploreCursor(null);
+      }
     } finally {
       setExploreLoading(false);
     }
@@ -2642,9 +2653,9 @@ function App() {
             />
           ) : activeView === "settings" ? (
             <SettingsView 
-               settings={state.settings}
+              settings={state.settings}
               offlineUsageBytes={totalOfflineBytes}
-              offlineEpisodeCount={Object.keys(state.offlineDownloads).length}
+              offlineEpisodeCount={totalDownloadedEpisodeCount}
               onClearOffline={handleClearOffline}
               onRefreshArtwork={handleRefreshArtwork}
               artworkRefreshBusy={artworkRefreshBusy}

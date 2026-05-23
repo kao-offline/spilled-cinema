@@ -1,4 +1,4 @@
-import { normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking";
+import { normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking.js";
 
 type ArtworkBundle = {
   posterUrl?: string | null;
@@ -155,25 +155,6 @@ function getFanartClientKey() {
 
 function getTvdbApiKey() {
   return process.env.TVDB_API_KEY?.trim() || "";
-}
-
-function getMissingArtworkEnvNames(sources: ArtworkSourceSettings | undefined) {
-  const missing = new Set<string>();
-  const tmdbEnabled = isSourceEnabled(sources, "tmdb");
-  const fanartEnabled = isSourceEnabled(sources, "fanart");
-  const tvdbEnabled = isSourceEnabled(sources, "tvdb");
-
-  if (tmdbEnabled && !getTmdbReadToken()) {
-    missing.add("TMDB_API_READ_TOKEN");
-  }
-  if (fanartEnabled && !getFanartApiKey()) {
-    missing.add("FANART_API_KEY");
-  }
-  if (tvdbEnabled && !getTvdbApiKey()) {
-    missing.add("TVDB_API_KEY");
-  }
-
-  return Array.from(missing);
 }
 
 function toAsciiSearchText(value: string | null | undefined) {
@@ -1001,17 +982,13 @@ export async function searchArtworkAssets(options: {
     });
   }
 
-  const missingEnvNames = getMissingArtworkEnvNames(options.sources);
   const hasAnyConfiguredProvider =
     (isSourceEnabled(options.sources, "tmdb") && Boolean(getTmdbReadToken())) ||
     (isSourceEnabled(options.sources, "fanart") && Boolean(getFanartApiKey())) ||
     (isSourceEnabled(options.sources, "tvdb") && Boolean(getTvdbApiKey()));
 
   if (!hasAnyConfiguredProvider) {
-    if (fallbackAssets.length > 0) {
-      return dedupeArtworkAssets(fallbackAssets);
-    }
-    throw new Error(`Artwork providers are not configured. Add ${missingEnvNames.join(", ")} to the running fetch node environment.`);
+    return dedupeArtworkAssets(fallbackAssets);
   }
 
   const tmdbEnabled = isSourceEnabled(options.sources, "tmdb");

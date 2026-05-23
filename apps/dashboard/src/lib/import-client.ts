@@ -5,7 +5,7 @@ import { requestRuntimeJson } from "./local-api";
 export type ArtworkAsset = {
   url: string;
   kind: "poster" | "backdrop" | "logo";
-  source: "tmdb" | "fanart" | "tvdb";
+  source: "current" | "tmdb" | "fanart" | "tvdb";
   label: string;
   language?: string | null;
   width?: number | null;

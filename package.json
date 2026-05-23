@@ -2,7 +2,9 @@
   "name": "spilled-cinema-monorepo",
   "private": true,
   "dependencies": {
-    "convex": "^1.36.1"
+    "@simplewebauthn/server": "^13.3.0",
+    "convex": "^1.36.1",
+    "openid-client": "^6.8.4"
   },
   "workspaces": [
     "apps/*",

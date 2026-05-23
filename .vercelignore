@@ -1,0 +1,11 @@
+node_modules
+apps/*/node_modules
+apps/*/*/node_modules
+packages/*/node_modules
+apps/dashboard/dist
+apps/dashboard/.vercel/output
+apps/dashboard/.vercel/node
+apps/dashboard/.spilledcinema
+apps/dashboard/.env*
+*.tsbuildinfo
+**/*.tsbuildinfo

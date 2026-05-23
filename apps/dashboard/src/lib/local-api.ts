@@ -19,6 +19,10 @@ function canUseHostedSameOriginApi() {
   return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 }
 
+function isHostedSameOriginApiPath(path: string) {
+  return path === "/api/artwork/search" || path === "/api/artwork/refresh";
+}
+
 function getRuntimeTimeoutMs(path: string) {
   if (
     path.startsWith("/api/import-") ||
@@ -54,7 +58,7 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
 
 
 async function fetchHostedSameOriginApi<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
-  if (!canUseHostedSameOriginApi() || !path.startsWith("/api/")) {
+  if (!canUseHostedSameOriginApi() || !isHostedSameOriginApiPath(path)) {
     return null;
   }
 
@@ -265,11 +269,18 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
       }, getRuntimeTimeoutMs(path));
+      const data = (await readJsonSafe<T>(response)) as T;
+
+      if (!response.ok && response.status >= 500) {
+        // A public fetch node can be stale, restarting, or missing optional env.
+        // Try the next advertised node before surfacing the error.
+        continue;
+      }
 
       return {
         ok: response.ok,
         status: response.status,
-        data: (await readJsonSafe<T>(response)) as T,
+        data,
         origin,
         transport: "fetch-server",
       };
@@ -308,15 +319,6 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
   }
 
   try {
-    const hosted = await fetchHostedSameOriginApi<T>(path, init);
-    if (hosted) {
-      return hosted;
-    }
-  } catch {
-    // Fall through to local/extension/direct/remote.
-  }
-
-  try {
     const sameOrigin = await fetchSameOriginLocalNode<T>(path, init);
     if (sameOrigin) {
       return sameOrigin;
@@ -344,9 +346,27 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
   }
 
   try {
+    const hosted = await fetchHostedSameOriginApi<T>(path, init);
+    if (hosted?.ok) {
+      return hosted;
+    }
+  } catch {
+    // Fall through to discovered fetch servers.
+  }
+
+  try {
     const fetchServer = await fetchViaFetchServer<T>(path, init);
     if (fetchServer) {
       return fetchServer;
+    }
+  } catch {
+    // Fall through to hosted artwork APIs or the final error.
+  }
+
+  try {
+    const hosted = await fetchHostedSameOriginApi<T>(path, init);
+    if (hosted) {
+      return hosted;
     }
   } catch {
     // Fall through to the final error.

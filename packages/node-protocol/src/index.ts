@@ -10,9 +10,11 @@ export const NODE_CAPABILITIES = [
 ] as const;
 
 export const NODE_VISIBILITY = ["public", "paired", "private"] as const;
+export const NODE_MODES = ["public-fetch", "private", "full"] as const;
 
 export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
 export type NodeVisibility = (typeof NODE_VISIBILITY)[number];
+export type NodeMode = (typeof NODE_MODES)[number];
 
 export type CapabilityPolicy = {
   visibility: NodeVisibility;
@@ -133,4 +135,63 @@ export type SpillshareSource = {
   size: number;
   mimeType: string;
   sha256?: string;
+};
+
+export type PrivateNodeSessionToken = {
+  kind: "private";
+  sessionId: string;
+  nodeId: string;
+  accountId: string;
+  profileId?: string;
+  role: "admin" | "user";
+  scope: {
+    capabilities: Array<"library" | "download" | "spillshare" | "settings">;
+  };
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type NodeCompatibilityStatus = {
+  status: "ok";
+  node: {
+    nodeId: string;
+    mode: NodeMode;
+    protocolVersion: number;
+    regionHint: string | null;
+    endpointUrl: string | null;
+    capabilities: NodeCapabilityMap;
+  };
+  auth: {
+    privateAuthEnabled: boolean;
+    passkeysEnabled: boolean;
+    oidcProviders: Array<{
+      providerId: string;
+      displayName: string;
+    }>;
+    pairedDeviceCount: number;
+  };
+  capabilities: {
+    providerSearch: boolean;
+    providerImport: boolean;
+    providerFeeds: boolean;
+    streamResolve: boolean;
+    fullDownload: boolean;
+    browserDownloadResolve: boolean;
+    spillsharePublish: boolean;
+    spillshareServe: boolean;
+    privateLibrary: boolean;
+  };
+  mediaTools: {
+    ffmpeg: boolean;
+    ffprobe: boolean;
+    canDownload: boolean;
+    canValidate: boolean;
+    canRepairSeekableMp4: boolean;
+  };
+  storage: {
+    privateStorageEnabled: boolean;
+    rootConfigured: boolean;
+    totalUsedBytes: number;
+    quotaBytes: number | null;
+  };
 };
