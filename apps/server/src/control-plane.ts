@@ -28,7 +28,14 @@ export class ControlPlaneReporter {
     try {
       const baseUrl = this.options.baseUrl.endsWith("/") ? this.options.baseUrl : `${this.options.baseUrl}/`;
       const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-      const response = await fetch(new URL(normalizedPath, baseUrl).toString(), {
+      const base = new URL(baseUrl);
+      const basePath = base.pathname.replace(/\/$/, "");
+      const target = basePath.endsWith("/api/server") ? base : new URL(normalizedPath, baseUrl);
+      if (basePath.endsWith("/api/server")) {
+        target.pathname = target.pathname.replace(/\/$/, "");
+        target.searchParams.set("path", normalizedPath);
+      }
+      const response = await fetch(target.toString(), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

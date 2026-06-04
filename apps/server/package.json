@@ -7,6 +7,7 @@
     "start": "tsx src/standalone.ts"
   },
   "dependencies": {
+    "cloudflared": "^0.7.1",
     "localtunnel": "^2.0.2"
   },
   "devDependencies": {

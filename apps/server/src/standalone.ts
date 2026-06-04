@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-handlers";
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
 import { readRelayMeshOptionsFromEnv, SecureRelayMesh } from "./mesh";
@@ -71,6 +72,21 @@ let publicTunnelFailureCount = 0;
 
 const PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT || "3", 10);
 const PUBLIC_TUNNEL_START_TIMEOUT_MS = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_START_TIMEOUT_MS || "15000", 10);
+
+function withStartTimeout<T>(promise: Promise<T>, label: string) {
+  let timeout: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} did not return a tunnel URL within ${PUBLIC_TUNNEL_START_TIMEOUT_MS}ms`));
+    }, PUBLIC_TUNNEL_START_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
 
 function sanitizeTunnelSubdomain(value: string) {
   return value
@@ -230,62 +246,111 @@ async function startPublicTunnel() {
     return null;
   }
 
-  function withTunnelStartTimeout<T>(promise: Promise<T>, label: string) {
-    let timeout: NodeJS.Timeout | null = null;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => {
-        reject(new Error(`${label} did not return a tunnel URL within ${PUBLIC_TUNNEL_START_TIMEOUT_MS}ms`));
-      }, PUBLIC_TUNNEL_START_TIMEOUT_MS);
-    });
+  const providers = process.env.SPILLED_PUBLIC_TUNNEL_PROVIDERS?.split(",").map((provider) => provider.trim().toLowerCase()).filter(Boolean) ?? ["cloudflared", "localtunnel"];
 
-    return Promise.race([promise, timeoutPromise]).finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    });
-  }
-
-  try {
-    const localtunnelModule = await import("localtunnel");
-    const createTunnel = localtunnelModule.default ?? localtunnelModule;
-
-    async function openTunnel(subdomain?: string) {
-      const label = subdomain ? `localtunnel subdomain ${subdomain}` : "localtunnel random subdomain";
-      return await withTunnelStartTimeout(createTunnel({
-        port,
-        local_host: "127.0.0.1",
-        ...(subdomain ? { subdomain } : {}),
-      }), label);
-    }
-
-    const subdomain = await getPreferredTunnelSubdomain();
-    let tunnel: Awaited<ReturnType<typeof openTunnel>>;
+  for (const provider of providers) {
     try {
-      tunnel = await openTunnel(subdomain);
+      if (provider === "cloudflared" || provider === "cloudflare") {
+        return await startCloudflaredTunnel();
+      }
+      if (provider === "localtunnel") {
+        return await startLocalTunnel();
+      }
+      console.warn(`[spilledcinema-server] unknown public tunnel provider ${provider}`);
     } catch (error) {
-      console.warn("[spilledcinema-server] preferred public fetch tunnel failed", error instanceof Error ? error.message : String(error));
-      tunnel = await openTunnel();
+      console.warn(`[spilledcinema-server] ${provider} public fetch tunnel failed`, error instanceof Error ? error.message : String(error));
     }
-    const tunnelUrl = String(tunnel.url).replace(/\/$/, "");
+  }
 
-    tunnel.on?.("close", () => {
-      console.warn("[spilledcinema-server] public fetch tunnel closed");
-      if (publicTunnel?.url === tunnelUrl) {
-        void restartPublicTunnel();
+  return null;
+}
+
+async function startLocalTunnel() {
+  const localtunnelModule = await import("localtunnel");
+  const createTunnel = localtunnelModule.default ?? localtunnelModule;
+
+  async function openTunnel(subdomain?: string) {
+    const label = subdomain ? `localtunnel subdomain ${subdomain}` : "localtunnel random subdomain";
+    return await withStartTimeout(createTunnel({
+      port,
+      local_host: "127.0.0.1",
+      ...(subdomain ? { subdomain } : {}),
+    }), label);
+  }
+
+  const subdomain = await getPreferredTunnelSubdomain();
+  let tunnel: Awaited<ReturnType<typeof openTunnel>>;
+  try {
+    tunnel = await openTunnel(subdomain);
+  } catch (error) {
+    console.warn("[spilledcinema-server] preferred localtunnel fetch tunnel failed", error instanceof Error ? error.message : String(error));
+    tunnel = await openTunnel();
+  }
+  const tunnelUrl = String(tunnel.url).replace(/\/$/, "");
+
+  tunnel.on?.("close", () => {
+    console.warn("[spilledcinema-server] public fetch tunnel closed");
+    if (publicTunnel?.url === tunnelUrl) {
+      void restartPublicTunnel();
+    }
+  });
+  tunnel.on?.("error", (error: unknown) => {
+    console.warn("[spilledcinema-server] public fetch tunnel error", error instanceof Error ? error.message : String(error));
+  });
+
+  return {
+    url: tunnelUrl,
+    close: () => tunnel.close(),
+  };
+}
+
+async function startCloudflaredTunnel() {
+  const cloudflaredCliPath = resolve(process.cwd(), "..", "..", "node_modules", "cloudflared", "lib", "cloudflared.js");
+  const child = spawn(process.execPath, [cloudflaredCliPath, "tunnel", "--url", `http://127.0.0.1:${port}`, "--no-autoupdate"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let resolved = false;
+  let stderrBuffer = "";
+
+  const tunnel = await withStartTimeout(new Promise<{ url: string; child: ChildProcess }>((resolvePromise, rejectPromise) => {
+    child.once("error", rejectPromise);
+    child.once("exit", (code, signal) => {
+      if (!resolved) {
+        rejectPromise(new Error(`cloudflared exited before publishing a tunnel URL (${signal ?? code ?? "unknown"})`));
       }
     });
-    tunnel.on?.("error", (error: unknown) => {
-      console.warn("[spilledcinema-server] public fetch tunnel error", error instanceof Error ? error.message : String(error));
-    });
 
-    return {
-      url: tunnelUrl,
-      close: () => tunnel.close(),
-    };
-  } catch (error) {
-    console.warn("[spilledcinema-server] auto public fetch tunnel failed", error instanceof Error ? error.message : String(error));
-    return null;
-  }
+    function inspectOutput(chunk: Buffer) {
+      const text = chunk.toString("utf8");
+      stderrBuffer = `${stderrBuffer}${text}`.slice(-8_000);
+      const match = stderrBuffer.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+      if (!match) {
+        return;
+      }
+      resolved = true;
+      resolvePromise({ url: match[0].replace(/\/$/, ""), child });
+    }
+
+    child.stdout?.on("data", inspectOutput);
+    child.stderr?.on("data", inspectOutput);
+  }), "cloudflared");
+
+  child.on("exit", (code, signal) => {
+    console.warn(`[spilledcinema-server] public fetch tunnel closed (${signal ?? code ?? "unknown"})`);
+    if (publicTunnel?.url === tunnel.url) {
+      void restartPublicTunnel();
+    }
+  });
+
+  return {
+    url: tunnel.url,
+    close: () => {
+      if (!child.killed) {
+        child.kill();
+      }
+    },
+  };
 }
 
 async function checkPublicTunnel(url: string) {

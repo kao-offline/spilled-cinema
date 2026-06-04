@@ -5,6 +5,7 @@ import { isAllowedNodeOrigin, isAllowedNodePath } from "../../../api/node-proxy.
 describe("node proxy allowlist", () => {
   it("allows public localtunnel fetch node origins", () => {
     expect(isAllowedNodeOrigin("https://fetch-node.loca.lt")).toBe(true);
+    expect(isAllowedNodeOrigin("https://fetch-node.trycloudflare.com")).toBe(true);
     expect(isAllowedNodeOrigin("http://fetch-node.loca.lt")).toBe(false);
     expect(isAllowedNodeOrigin("https://example.com")).toBe(false);
   });

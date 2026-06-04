@@ -178,7 +178,7 @@ async function probeFetchServer() {
 function shouldProxyFetchServerOrigin(origin: string) {
   try {
     const hostname = new URL(origin).hostname.toLowerCase();
-    return hostname === "loca.lt" || hostname.endsWith(".loca.lt");
+    return hostname === "loca.lt" || hostname.endsWith(".loca.lt") || hostname === "trycloudflare.com" || hostname.endsWith(".trycloudflare.com");
   } catch {
     return false;
   }

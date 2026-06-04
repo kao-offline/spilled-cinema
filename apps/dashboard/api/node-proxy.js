@@ -11,7 +11,7 @@ export function isAllowedNodeOrigin(origin) {
       return false;
     }
     const host = parsed.hostname.toLowerCase();
-    return host === "loca.lt" || host.endsWith(".loca.lt");
+    return host === "loca.lt" || host.endsWith(".loca.lt") || host === "trycloudflare.com" || host.endsWith(".trycloudflare.com");
   } catch {
     return false;
   }

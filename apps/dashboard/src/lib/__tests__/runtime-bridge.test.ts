@@ -14,6 +14,9 @@ describe("buildFetchServerStatusUrl", () => {
     expect(buildFetchServerStatusUrl("https://fetch-node.loca.lt")).toBe(
       "https://spilled.test/api/node-proxy?node=https%3A%2F%2Ffetch-node.loca.lt&path=%2Fapi%2Fstatus",
     );
+    expect(buildFetchServerStatusUrl("https://fetch-node.trycloudflare.com")).toBe(
+      "https://spilled.test/api/node-proxy?node=https%3A%2F%2Ffetch-node.trycloudflare.com&path=%2Fapi%2Fstatus",
+    );
   });
 
   it("checks non-localtunnel origins directly", () => {
