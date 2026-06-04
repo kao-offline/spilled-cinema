@@ -14,6 +14,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.0",
     "@videojs/react": "^10.0.0-beta.15",
     "clsx": "^2.1.1",
     "embla-carousel-react": "^8.6.0",

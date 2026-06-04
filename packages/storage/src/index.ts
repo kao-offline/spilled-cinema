@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { PairingRequest, SpillshareSource } from "../../node-protocol/src";
-import type { PairedDevice, StoredSession } from "../../security/src";
+import type { PairedDevice, PasswordHash, StoredSession } from "../../security/src";
 
 export type StoredImportedShow = {
   slug: string;
@@ -29,6 +29,36 @@ export type PrivateAccountRuntimeState = {
   accountId: string;
   passkeys: PrivatePasskeyCredential[];
   usedStorageBytes: number;
+};
+
+export type AdminAccountRuntimeState = {
+  adminId: string;
+  displayName: string;
+  passwordHash?: PasswordHash;
+  passkeys: PrivatePasskeyCredential[];
+  createdAt: number;
+  updatedAt: number;
+  disabledAt?: number;
+};
+
+export type WatcherAccountRuntimeState = {
+  watcherId: string;
+  displayName: string;
+  passwordHash?: PasswordHash;
+  passkeys: PrivatePasskeyCredential[];
+  quotaBytes: number;
+  createdAt: number;
+  updatedAt: number;
+  disabledAt?: number;
+};
+
+export type WatcherProfileRuntimeState = {
+  watcherId: string;
+  profileId: string;
+  displayName: string;
+  avatar: string;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type PrivateProfileState = {
@@ -87,6 +117,9 @@ export type NodeStateFile = {
     label?: string;
     createdAt: number;
   }>;
+  adminAccounts: AdminAccountRuntimeState[];
+  watcherAccounts: WatcherAccountRuntimeState[];
+  watcherProfiles: WatcherProfileRuntimeState[];
   privateAccounts: PrivateAccountRuntimeState[];
   privateProfiles: PrivateProfileState[];
   privateDownloads: PrivateDownloadRecord[];
@@ -105,6 +138,9 @@ const DEFAULT_STATE: NodeStateFile = {
   },
   spillshareSources: [],
   passkeys: [],
+  adminAccounts: [],
+  watcherAccounts: [],
+  watcherProfiles: [],
   privateAccounts: [],
   privateProfiles: [],
   privateDownloads: [],
@@ -142,6 +178,9 @@ export class JsonNodeStorage {
         importedShows: Array.isArray(parsed.importedShows) ? parsed.importedShows : [],
         spillshareSources: Array.isArray(parsed.spillshareSources) ? parsed.spillshareSources : [],
         passkeys: Array.isArray(parsed.passkeys) ? parsed.passkeys : [],
+        adminAccounts: Array.isArray(parsed.adminAccounts) ? parsed.adminAccounts : [],
+        watcherAccounts: Array.isArray(parsed.watcherAccounts) ? parsed.watcherAccounts : [],
+        watcherProfiles: Array.isArray(parsed.watcherProfiles) ? parsed.watcherProfiles : [],
         privateAccounts: Array.isArray(parsed.privateAccounts) ? parsed.privateAccounts : [],
         privateProfiles: Array.isArray(parsed.privateProfiles) ? parsed.privateProfiles : [],
         privateDownloads: Array.isArray(parsed.privateDownloads) ? parsed.privateDownloads : [],

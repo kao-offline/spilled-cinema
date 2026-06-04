@@ -5,7 +5,7 @@ import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
 import { readRelayMeshOptionsFromEnv, SecureRelayMesh } from "./mesh";
 import { setNodeEndpointUrl } from "../../../packages/node-client/src/index";
-import { loadPrivateNodeConfigFromEnv, readNodeModeFromEnv } from "../../node/src/private-config";
+import { getPrivateNodeConfigPathFromEnv, isPrivateSetupBootstrapEnabled, loadPrivateNodeConfigFromEnv, readNodeModeFromEnv } from "../../node/src/private-config";
 
 type RouteHandler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
 
@@ -49,13 +49,17 @@ function loadRootEnvLocal() {
 loadRootEnvLocal();
 
 const handlers = createHttpHandlers();
-const nodeMode = readNodeModeFromEnv();
-const privateConfig = loadPrivateNodeConfigFromEnv(nodeMode);
+const requestedNodeMode = readNodeModeFromEnv();
+const privateConfig = loadPrivateNodeConfigFromEnv(requestedNodeMode);
+const nodeMode = privateConfig && !process.env.SPILLED_NODE_MODE ? "full" : requestedNodeMode;
+const privateSetupEnabled = (isPrivateSetupBootstrapEnabled() || process.env.SPILLED_DISABLE_PRIVATE_SETUP !== "1") && !privateConfig;
 const port = Number.parseInt(process.env.PORT || "8787", 10);
 const host = process.env.HOST || "0.0.0.0";
 handlers.runtime.configure({
   mode: nodeMode,
   privateConfig,
+  privateSetupEnabled,
+  privateConfigPath: getPrivateNodeConfigPathFromEnv(),
 });
 const mesh = new SecureRelayMesh(handlers.runtime, readRelayMeshOptionsFromEnv());
 const controlPlaneOptions = readControlPlaneReporterOptionsFromEnv();
@@ -63,6 +67,27 @@ const controlPlane = controlPlaneOptions ? new ControlPlaneReporter(handlers.run
 let publicTunnel: { url: string; close: () => void } | null = null;
 let publicTunnelMonitor: NodeJS.Timeout | null = null;
 let restartingPublicTunnel: Promise<void> | null = null;
+let publicTunnelFailureCount = 0;
+
+const PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT || "3", 10);
+
+function sanitizeTunnelSubdomain(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63);
+}
+
+async function getPreferredTunnelSubdomain() {
+  const explicit = process.env.SPILLED_PUBLIC_TUNNEL_SUBDOMAIN?.trim();
+  if (explicit) {
+    return sanitizeTunnelSubdomain(explicit);
+  }
+
+  const record = await handlers.runtime.getNodeRecord();
+  return sanitizeTunnelSubdomain(`spilled-${record.nodeId.slice(0, 18)}`);
+}
 
 const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/status", handler: handlers.statusHandler },
@@ -91,6 +116,17 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/download-full/subtitle-file", handler: handlers.subtitleFileHandler },
   { path: "/api/subtitle-proxy", handler: handlers.subtitleProxyHandler },
   { path: "/api/node/auth/anonymous", handler: handlers.anonymousGrantHandler },
+  { path: "/api/node/setup/status", handler: handlers.privateSetupStatusHandler },
+  { path: "/api/node/setup/complete", handler: handlers.privateSetupCompleteHandler },
+  { path: "/api/node/admin/auth/login", handler: handlers.adminAuthHandler },
+  { path: "/api/node/admin/auth/logout", handler: handlers.adminAuthHandler },
+  { path: "/api/node/admin/auth/me", handler: handlers.adminAuthHandler },
+  { path: "/api/node/admin/status", handler: handlers.adminStatusHandler },
+  { path: "/api/node/admin/settings/capabilities", handler: handlers.adminCapabilitiesHandler },
+  { path: "/api/node/admin/accounts/watchers", handler: handlers.adminWatchersHandler },
+  { path: "/api/node/watcher/auth/login", handler: handlers.watcherAuthHandler },
+  { path: "/api/node/watcher/auth/logout", handler: handlers.watcherAuthHandler },
+  { path: "/api/node/watcher/auth/me", handler: handlers.watcherAuthHandler },
   { path: "/api/node/auth/accounts", handler: handlers.privateAccountsHandler },
   { path: "/api/node/auth/me", handler: handlers.privateMeHandler },
   { path: "/api/node/auth/logout", handler: handlers.privateMeHandler },
@@ -123,6 +159,7 @@ function applyCors(res: ServerResponse) {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder");
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
 }
 
 function notFound(res: ServerResponse) {
@@ -171,6 +208,19 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(port, host, () => {
+  void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
+    if (!setup?.setupCode) {
+      return;
+    }
+    console.log("");
+    console.log("[spilledcinema-server] private node setup is waiting");
+    console.log("[spilledcinema-server] open: https://spilled.overload.studio/node/setup");
+    console.log(`[spilledcinema-server] local node: http://127.0.0.1:${port}`);
+    console.log(`[spilledcinema-server] setup code: ${setup.setupCode}`);
+    console.log("[spilledcinema-server] this code expires in 15 minutes");
+    console.log(`[spilledcinema-server] config will be written to: ${setup.configPath}`);
+    console.log("");
+  });
   void startServerServices();
 });
 
@@ -180,23 +230,28 @@ async function startPublicTunnel() {
   }
 
   try {
+    const subdomain = await getPreferredTunnelSubdomain();
     const localtunnelModule = await import("localtunnel");
     const createTunnel = localtunnelModule.default ?? localtunnelModule;
     const tunnel = await createTunnel({
       port,
       local_host: "127.0.0.1",
+      ...(subdomain ? { subdomain } : {}),
     });
+    const tunnelUrl = String(tunnel.url).replace(/\/$/, "");
 
     tunnel.on?.("close", () => {
       console.warn("[spilledcinema-server] public fetch tunnel closed");
-      void restartPublicTunnel();
+      if (publicTunnel?.url === tunnelUrl) {
+        void restartPublicTunnel();
+      }
     });
     tunnel.on?.("error", (error: unknown) => {
       console.warn("[spilledcinema-server] public fetch tunnel error", error instanceof Error ? error.message : String(error));
     });
 
     return {
-      url: String(tunnel.url).replace(/\/$/, ""),
+      url: tunnelUrl,
       close: () => tunnel.close(),
     };
   } catch (error) {
@@ -241,8 +296,15 @@ function startPublicTunnelMonitor() {
     }
 
     void checkPublicTunnel(publicTunnel.url).then((healthy) => {
-      if (!healthy) {
-        console.warn(`[spilledcinema-server] public fetch tunnel unhealthy ${publicTunnel?.url ?? ""}`);
+      if (healthy) {
+        publicTunnelFailureCount = 0;
+        return;
+      }
+
+      publicTunnelFailureCount += 1;
+      console.warn(`[spilledcinema-server] public fetch tunnel unhealthy ${publicTunnel?.url ?? ""} (${publicTunnelFailureCount}/${PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT})`);
+      if (publicTunnelFailureCount >= PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT) {
+        publicTunnelFailureCount = 0;
         void restartPublicTunnel();
       }
     });
@@ -271,8 +333,14 @@ async function restartPublicTunnel() {
     }
 
     publicTunnel = nextTunnel;
+    publicTunnelFailureCount = 0;
     setNodeEndpointUrl(nextTunnel.url);
     console.log(`[spilledcinema-server] public fetch server ${nextTunnel.url}`);
+    void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
+      if (setup?.setupCode) {
+        console.log(`[spilledcinema-server] setup URL: https://spilled.overload.studio/node/setup?node=${encodeURIComponent(nextTunnel.url)}`);
+      }
+    });
     await controlPlane?.register().catch((error) => {
       console.warn("[control-plane] register failed", error instanceof Error ? error.message : String(error));
     });
@@ -289,6 +357,11 @@ async function startServerServices() {
   if (publicTunnel) {
     setNodeEndpointUrl(publicTunnel.url);
     console.log(`[spilledcinema-server] public fetch server ${publicTunnel.url}`);
+    void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
+      if (setup?.setupCode) {
+        console.log(`[spilledcinema-server] setup URL: https://spilled.overload.studio/node/setup?node=${encodeURIComponent(publicTunnel!.url)}`);
+      }
+    });
   } else if (process.env.SPILLED_NODE_ENDPOINT_URL) {
     console.log(`[spilledcinema-server] public fetch server ${process.env.SPILLED_NODE_ENDPOINT_URL}`);
   } else {

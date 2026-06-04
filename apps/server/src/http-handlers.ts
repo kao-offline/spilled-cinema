@@ -746,6 +746,204 @@ export function createHttpHandlers() {
     }
   };
 
+  const privateSetupStatusHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    const status = await runtime.getSetupBootstrapStatus();
+    sendJson(res, 200, {
+      enabled: status.enabled,
+      setupRequired: status.setupRequired,
+      reason: status.reason,
+      setupCode: null,
+      configPath: status.configPath,
+      nodeUrl: status.nodeUrl,
+      publicEndpointUrl: status.publicEndpointUrl,
+      codeRequired: status.codeRequired,
+    });
+  };
+
+  const privateSetupCompleteHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "private-setup-complete", 8)) {
+        return sendJson(res, 429, { error: "Too many setup attempts. Try again later." });
+      }
+      const body = await readJsonBody<{
+        setupCode?: string;
+        dashboardOrigin?: string;
+        nodeName?: string;
+        admin?: { adminId?: string; displayName?: string; password?: string };
+        accountId?: string;
+        displayName?: string;
+        password?: string;
+        quotaBytes?: number;
+        profiles?: Array<{ profileId?: string; displayName?: string; avatar?: string }>;
+        initialWatchers?: Array<{
+          watcherId?: string;
+          displayName?: string;
+          password?: string;
+          quotaBytes?: number;
+          profiles?: Array<{ profileId?: string; displayName?: string; avatar?: string }>;
+        }>;
+        publicCapabilities?: Record<string, boolean>;
+        allowPublicFetch?: boolean;
+      }>(req);
+      if (!body.setupCode || !(body.admin?.password || body.password)) {
+        return sendJson(res, 400, { error: "Missing setup code or admin password." });
+      }
+      const profiles = (body.profiles ?? [])
+        .filter((profile) => profile.displayName?.trim())
+        .map((profile, index) => ({
+          profileId: profile.profileId || `prof_${index + 1}`,
+          displayName: profile.displayName || `Profile ${index + 1}`,
+          avatar: profile.avatar,
+        }));
+      sendJson(res, 200, await runtime.completePrivateSetup({
+        setupCode: body.setupCode,
+        dashboardOrigin: body.dashboardOrigin || getRequestOrigin(req),
+        nodeName: body.nodeName || "Private Node",
+        admin: body.admin?.adminId && body.admin.password ? {
+          adminId: body.admin.adminId,
+          displayName: body.admin.displayName || body.admin.adminId,
+          password: body.admin.password,
+        } : undefined,
+        accountId: body.accountId,
+        displayName: body.displayName,
+        password: body.password,
+        quotaBytes: typeof body.quotaBytes === "number" ? body.quotaBytes : 500 * 1024 * 1024 * 1024,
+        profiles,
+        initialWatchers: body.initialWatchers?.map((watcher, index) => ({
+          watcherId: watcher.watcherId || `watcher_${index + 1}`,
+          displayName: watcher.displayName || `Watcher ${index + 1}`,
+          password: watcher.password,
+          quotaBytes: typeof watcher.quotaBytes === "number" ? watcher.quotaBytes : 500 * 1024 * 1024 * 1024,
+          profiles: (watcher.profiles ?? []).map((profile, profileIndex) => ({
+            profileId: profile.profileId || `prof_${profileIndex + 1}`,
+            displayName: profile.displayName || `Profile ${profileIndex + 1}`,
+            avatar: profile.avatar,
+          })),
+        })),
+        publicCapabilities: body.publicCapabilities,
+        allowPublicFetch: body.allowPublicFetch !== false,
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Private node setup failed." });
+    }
+  };
+
+  const adminAuthHandler = async (req: RequestLike, res: JsonResponse) => {
+    try {
+      if (req.method === "GET") {
+        sendJson(res, 200, await runtime.getAdminMe(getBearerToken(req)));
+        return;
+      }
+      if (req.method === "POST") {
+        const pathname = req.url?.split("?")[0] ?? "";
+        if (pathname.endsWith("/logout")) {
+          sendJson(res, 200, await runtime.logoutAdminSession(getBearerToken(req)));
+          return;
+        }
+        if (!checkRateLimit(req, "admin-password-login", 8)) {
+          return sendJson(res, 429, { error: "Too many login attempts. Try again later." });
+        }
+        const body = await readJsonBody<{ adminId?: string; password?: string }>(req);
+        if (!body.adminId || !body.password) {
+          return sendJson(res, 400, { error: "Missing username or password." });
+        }
+        sendJson(res, 200, await runtime.loginAdminPassword({ adminId: body.adminId, password: body.password }));
+        return;
+      }
+      sendJson(res, 405, { error: "Method not allowed." });
+    } catch {
+      sendJson(res, 401, { error: "Invalid username or password." });
+    }
+  };
+
+  const watcherAuthHandler = async (req: RequestLike, res: JsonResponse) => {
+    try {
+      if (req.method === "GET") {
+        sendJson(res, 200, await runtime.getPrivateMe(getBearerToken(req)));
+        return;
+      }
+      if (req.method === "POST") {
+        const pathname = req.url?.split("?")[0] ?? "";
+        if (pathname.endsWith("/logout")) {
+          sendJson(res, 200, await runtime.logoutPrivateSession(getBearerToken(req)));
+          return;
+        }
+        if (!checkRateLimit(req, "watcher-password-login", 10)) {
+          return sendJson(res, 429, { error: "Too many login attempts. Try again later." });
+        }
+        const body = await readJsonBody<{ watcherId?: string; password?: string; profileId?: string }>(req);
+        if (!body.watcherId || !body.password) {
+          return sendJson(res, 400, { error: "Missing username or password." });
+        }
+        sendJson(res, 200, await runtime.loginWatcherPassword({ watcherId: body.watcherId, password: body.password, profileId: body.profileId }));
+        return;
+      }
+      sendJson(res, 405, { error: "Method not allowed." });
+    } catch {
+      sendJson(res, 401, { error: "Invalid username or password." });
+    }
+  };
+
+  const adminStatusHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, await runtime.getAdminStatus(getBearerToken(req)));
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const adminCapabilitiesHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "PUT") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<Record<string, boolean>>(req);
+      sendJson(res, 200, await runtime.updatePublicCapabilities(getBearerToken(req), body));
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
+  const adminWatchersHandler = async (req: RequestLike, res: JsonResponse) => {
+    try {
+      if (req.method === "GET") {
+        const status = await runtime.getAdminStatus(getBearerToken(req));
+        sendJson(res, 200, { watchers: status.watchers });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody<{
+          watcherId?: string;
+          displayName?: string;
+          password?: string;
+          quotaBytes?: number;
+          profiles?: Array<{ profileId?: string; displayName?: string; avatar?: string }>;
+        }>(req);
+        if (!body.watcherId || !body.displayName) {
+          return sendJson(res, 400, { error: "Missing watcher id or display name." });
+        }
+        sendJson(res, 200, {
+          watcher: await runtime.createWatcherAccount(getBearerToken(req), {
+            watcherId: body.watcherId,
+            displayName: body.displayName,
+            password: body.password,
+            quotaBytes: body.quotaBytes ?? 200 * 1024 * 1024 * 1024,
+            profiles: body.profiles?.map((profile, index) => ({
+              profileId: profile.profileId || `prof_${index + 1}`,
+              displayName: profile.displayName || `Profile ${index + 1}`,
+              avatar: profile.avatar,
+            })),
+          }),
+        });
+        return;
+      }
+      sendJson(res, 405, { error: "Method not allowed." });
+    } catch (error) {
+      sendJson(res, 401, { error: error instanceof Error ? error.message : "Unauthorized." });
+    }
+  };
+
   const privateAccountsHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
     try {
@@ -1102,6 +1300,13 @@ export function createHttpHandlers() {
     subtitleFileHandler,
     subtitleProxyHandler,
     anonymousGrantHandler,
+    privateSetupStatusHandler,
+    privateSetupCompleteHandler,
+    adminAuthHandler,
+    watcherAuthHandler,
+    adminStatusHandler,
+    adminCapabilitiesHandler,
+    adminWatchersHandler,
     privateAccountsHandler,
     privateMeHandler,
     passkeyRegisterOptionsHandler,

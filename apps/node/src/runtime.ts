@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -9,10 +10,10 @@ import {
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import { MemoryDiscoveryRegistry, MdnsService, verifyNodeRecord } from "../../../packages/discovery/src";
 import { NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, type AnonymousSessionGrant, type CapabilityPolicy, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
-import { approvePairing, base64UrlDecode, base64UrlEncode, createPairingRequest, createPasskeyAuthenticationChallenge, createPasskeyRegistrationChallenge, createSignedToken, generateNodeIdentity, issueAnonymousSession, issuePrivateSession, randomId, signPayload, verifySignedToken, type NodeIdentity } from "../../../packages/security/src";
-import { JsonNodeStorage, type NodeStateFile, type PrivateDownloadRecord, type PrivatePasskeyCredential, type PrivateProfileState, type StoredImportedShow } from "../../../packages/storage/src";
-import type { LoadedPrivateNodeConfig, PrivateNodeAccountConfig, SpilledNodeMode } from "./private-config";
-import { verifySetupSecret } from "./private-config";
+import { approvePairing, base64UrlDecode, base64UrlEncode, createPairingRequest, createPasskeyAuthenticationChallenge, createPasskeyRegistrationChallenge, createSignedToken, generateNodeIdentity, hashPassword, issueAnonymousSession, issuePrivateSession, randomId, signPayload, verifyPassword, verifySignedToken, type NodeIdentity } from "../../../packages/security/src";
+import { JsonNodeStorage, type AdminAccountRuntimeState, type NodeStateFile, type PrivateDownloadRecord, type PrivatePasskeyCredential, type PrivateProfileState, type StoredImportedShow, type WatcherAccountRuntimeState, type WatcherProfileRuntimeState } from "../../../packages/storage/src";
+import type { LoadedPrivateNodeConfig, PrivateNodeAccountConfig, PrivateNodeConfig, SpilledNodeMode } from "./private-config";
+import { getPrivateNodeConfigPathFromEnv, hashSetupSecret, verifySetupSecret, writePrivateNodeConfig } from "./private-config";
 
 const DEFAULT_CAPABILITIES: NodeCapabilityMap = {
   fetch: { visibility: "public", requiresSession: true },
@@ -55,11 +56,44 @@ export type NodeRuntimeOptions = {
   capabilities?: Partial<Record<NodeCapability, Partial<CapabilityPolicy>>>;
   mode?: SpilledNodeMode;
   privateConfig?: LoadedPrivateNodeConfig | null;
+  privateSetupEnabled?: boolean;
+  privateConfigPath?: string;
 };
 
 export type PrivateNodeSessionScopeCapability = "library" | "download" | "spillshare" | "settings";
 
 export type PrivateNodeSessionPayload = PrivateNodeSessionToken;
+
+export type AdminNodeSessionPayload = {
+  kind: "admin";
+  sessionId: string;
+  nodeId: string;
+  adminId: string;
+  scope: {
+    capabilities: Array<"settings" | "accounts" | "storage" | "sessions">;
+  };
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type WatcherNodeSessionPayload = {
+  kind: "watcher" | "private";
+  sessionId: string;
+  nodeId: string;
+  watcherId: string;
+  accountId?: string;
+  profileId?: string;
+  role?: "user";
+  scope: {
+    capabilities: Array<"library" | "download" | "spillshare">;
+  };
+  issuedAt: number;
+  expiresAt: number;
+};
+
+function isWatcherSessionCapability(value: string): value is "library" | "download" | "spillshare" {
+  return value === "library" || value === "download" || value === "spillshare";
+}
 
 export class SpilledCinemaNodeRuntime {
   readonly storage: JsonNodeStorage;
@@ -67,6 +101,7 @@ export class SpilledCinemaNodeRuntime {
   readonly mdns = new MdnsService();
   private statePromise: Promise<NodeStateFile> | null = null;
   private readonly options: NodeRuntimeOptions;
+  private bootstrapSetupCode: string | null = null;
 
   constructor(options: NodeRuntimeOptions = {}) {
     this.options = options;
@@ -77,6 +112,7 @@ export class SpilledCinemaNodeRuntime {
 
   configure(options: Partial<NodeRuntimeOptions>) {
     Object.assign(this.options, options);
+    this.ensureBootstrapSetupCode();
   }
 
   setEndpointUrl(endpointUrl?: string) {
@@ -85,9 +121,43 @@ export class SpilledCinemaNodeRuntime {
 
   private async loadState() {
     if (!this.statePromise) {
-      this.statePromise = this.storage.read();
+      this.statePromise = this.storage.read().then((state) => this.migrateState(state));
     }
     return this.statePromise;
+  }
+
+  private migrateState(state: NodeStateFile): NodeStateFile {
+    if (state.watcherAccounts.length > 0 || state.privateAccounts.length === 0) {
+      return state;
+    }
+    const now = Date.now();
+    const configAccounts = this.options.privateConfig?.accounts ?? [];
+    const watcherAccounts: WatcherAccountRuntimeState[] = state.privateAccounts.map((account) => {
+      const configAccount = configAccounts.find((entry) => entry.accountId === account.accountId);
+      return {
+        watcherId: account.accountId,
+        displayName: configAccount?.displayName ?? account.accountId,
+        passkeys: account.passkeys,
+        quotaBytes: configAccount?.quotaBytes ?? this.options.privateConfig?.storage?.defaultAccountQuotaBytes ?? 200 * 1024 * 1024 * 1024,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
+    const watcherProfiles: WatcherProfileRuntimeState[] = configAccounts.flatMap((account) =>
+      account.profiles.map((profile) => ({
+        watcherId: account.accountId,
+        profileId: profile.profileId,
+        displayName: profile.displayName,
+        avatar: profile.avatar ?? "default",
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+    return {
+      ...state,
+      watcherAccounts,
+      watcherProfiles,
+    };
   }
 
   private async saveState(state: NodeStateFile) {
@@ -114,6 +184,14 @@ export class SpilledCinemaNodeRuntime {
       merged.library = { visibility: "private", requiresSession: true };
       merged.spillshare = { visibility: "public", requiresSession: true };
     }
+    const publicCapabilities = this.options.privateConfig?.publicCapabilities;
+    if (publicCapabilities) {
+      merged.fetch = { visibility: publicCapabilities.fetch === false ? "private" : "public", requiresSession: true };
+      merged.stream = { visibility: publicCapabilities.stream === false ? "private" : "public", requiresSession: true };
+      merged.download = { visibility: publicCapabilities.download === false ? "private" : "public", requiresSession: true };
+      merged.spillshare = { visibility: publicCapabilities.spillshare ? "public" : "private", requiresSession: true };
+      merged.relay = { visibility: publicCapabilities.relay ? "public" : "private", requiresSession: true };
+    }
     for (const capability of NODE_CAPABILITIES) {
       const override = this.options.capabilities?.[capability];
       if (override) {
@@ -133,25 +211,132 @@ export class SpilledCinemaNodeRuntime {
     return this.options.privateConfig;
   }
 
+  private ensureBootstrapSetupCode() {
+    if (!this.bootstrapSetupCode) {
+      this.bootstrapSetupCode = randomBytes(3).toString("hex").toUpperCase();
+    }
+    return this.bootstrapSetupCode;
+  }
+
+  private getSetupReason(state: NodeStateFile): "missing-config" | "missing-admin" | "missing-admin-login" | "complete" {
+    if (!this.options.privateConfig?.privateNode.enabled) {
+      return "missing-config";
+    }
+    if (state.adminAccounts.filter((account) => !account.disabledAt).length === 0) {
+      return "missing-admin";
+    }
+    if (!state.adminAccounts.some((account) => !account.disabledAt && (account.passwordHash || account.passkeys.length > 0))) {
+      return "missing-admin-login";
+    }
+    return "complete";
+  }
+
+  async getSetupBootstrapStatus() {
+    const state = await this.loadState();
+    const reason = this.getSetupReason(state);
+    const enabled = reason !== "complete";
+    if (enabled) {
+      this.ensureBootstrapSetupCode();
+    }
+    return {
+      enabled,
+      setupRequired: enabled,
+      reason,
+      setupCode: null,
+      configPath: this.options.privateConfigPath ?? getPrivateNodeConfigPathFromEnv(),
+      nodeUrl: null,
+      publicEndpointUrl: this.options.endpointUrl ?? null,
+      codeRequired: true,
+    };
+  }
+
+  async getSetupCodeForTerminal() {
+    const state = await this.loadState();
+    const reason = this.getSetupReason(state);
+    if (reason !== "complete") {
+      return {
+        setupCode: this.ensureBootstrapSetupCode(),
+        configPath: this.options.privateConfigPath ?? getPrivateNodeConfigPathFromEnv(),
+        reason,
+      };
+    }
+    return null;
+  }
+
   private getAccount(accountId: string): PrivateNodeAccountConfig {
     const config = this.requirePrivateConfig();
-    const account = config.accounts.find((entry) => entry.accountId === accountId);
+    const account = (config.accounts ?? []).find((entry) => entry.accountId === accountId);
     if (!account) {
       throw new Error("Unknown account.");
     }
     return account;
   }
 
+  private async getWatcherAccount(watcherId: string) {
+    this.requirePrivateConfig();
+    const state = await this.loadState();
+    const watcher = state.watcherAccounts.find((entry) => entry.watcherId === watcherId && !entry.disabledAt);
+    if (!watcher) {
+      const legacy = (this.options.privateConfig?.accounts ?? []).find((entry) => entry.accountId === watcherId);
+      if (!legacy) {
+        throw new Error("Unknown watcher account.");
+      }
+      return {
+        watcher: {
+          watcherId: legacy.accountId,
+          displayName: legacy.displayName,
+          passkeys: state.privateAccounts.find((entry) => entry.accountId === legacy.accountId)?.passkeys ?? [],
+          quotaBytes: legacy.quotaBytes ?? this.options.privateConfig?.storage?.defaultAccountQuotaBytes ?? 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        } satisfies WatcherAccountRuntimeState,
+        profiles: legacy.profiles.map((profile) => ({
+          watcherId: legacy.accountId,
+          profileId: profile.profileId,
+          displayName: profile.displayName,
+          avatar: profile.avatar ?? "default",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })),
+      };
+    }
+    return {
+      watcher,
+      profiles: state.watcherProfiles.filter((profile) => profile.watcherId === watcher.watcherId),
+    };
+  }
+
   private getAccountQuotaBytes(account: PrivateNodeAccountConfig) {
     return account.quotaBytes ?? this.requirePrivateConfig().storage?.defaultAccountQuotaBytes ?? 0;
   }
 
-  private assertProfile(account: PrivateNodeAccountConfig, profileId: string) {
-    const profile = account.profiles.find((entry) => entry.profileId === profileId);
-    if (!profile) {
-      throw new Error("Profile does not belong to this account.");
-    }
-    return profile;
+  private toPublicWatcherAccount(account: WatcherAccountRuntimeState, profiles: WatcherProfileRuntimeState[]) {
+    return {
+      accountId: account.watcherId,
+      watcherId: account.watcherId,
+      displayName: account.displayName,
+      role: "user" as const,
+      quotaBytes: account.quotaBytes,
+      hasPassword: Boolean(account.passwordHash),
+      passkeyCount: account.passkeys.length,
+      profiles: profiles.map((profile) => ({
+        profileId: profile.profileId,
+        displayName: profile.displayName,
+        avatar: profile.avatar,
+      })),
+    };
+  }
+
+  private toPublicAdminAccount(account: AdminAccountRuntimeState) {
+    return {
+      adminId: account.adminId,
+      displayName: account.displayName,
+      hasPassword: Boolean(account.passwordHash),
+      passkeyCount: account.passkeys.length,
+      disabledAt: account.disabledAt,
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+    };
   }
 
   private getRpId(origin: string) {
@@ -161,24 +346,27 @@ export class SpilledCinemaNodeRuntime {
   private async createPrivateSession(input: {
     accountId: string;
     profileId?: string;
-    capabilities?: PrivateNodeSessionScopeCapability[];
+    capabilities?: Array<"library" | "download" | "spillshare">;
     ttlMs?: number;
   }) {
     const identity = await this.ensureIdentity();
-    const account = this.getAccount(input.accountId);
+    const { watcher, profiles } = await this.getWatcherAccount(input.accountId);
     if (input.profileId) {
-      this.assertProfile(account, input.profileId);
+      if (!profiles.some((profile) => profile.profileId === input.profileId)) {
+        throw new Error("Profile does not belong to this watcher account.");
+      }
     }
     const issuedAt = Date.now();
-    const payload: PrivateNodeSessionPayload = {
-      kind: "private",
-      sessionId: randomId("priv"),
+    const payload: WatcherNodeSessionPayload = {
+      kind: "watcher",
+      sessionId: randomId("watcher"),
       nodeId: identity.nodeId,
-      accountId: account.accountId,
-      profileId: input.profileId,
-      role: account.role,
+      watcherId: watcher.watcherId,
+      accountId: watcher.watcherId,
+      profileId: input.profileId ?? profiles[0]?.profileId,
+      role: "user",
       scope: {
-        capabilities: input.capabilities ?? ["library", "download", "spillshare", "settings"],
+        capabilities: input.capabilities ?? ["library", "download", "spillshare"],
       },
       issuedAt,
       expiresAt: issuedAt + (input.ttlMs ?? 24 * 60 * 60 * 1000),
@@ -190,22 +378,22 @@ export class SpilledCinemaNodeRuntime {
       sessions: state.sessions
         .filter((entry) => entry.expiresAt > Date.now())
         .concat({
-          kind: "private" as const,
+          kind: "watcher" as const,
           sessionId: payload.sessionId,
           token,
           expiresAt: payload.expiresAt,
           scope: {
             capability: "library" as const,
           },
-          pairedDeviceId: account.accountId,
+          pairedDeviceId: watcher.watcherId,
         }),
     };
     await this.saveState(next);
     return {
       token,
       session: payload,
-      account: this.toPublicAccount(account),
-      profiles: account.profiles,
+      account: this.toPublicWatcherAccount(watcher, profiles),
+      profiles: this.toPublicWatcherAccount(watcher, profiles).profiles,
     };
   }
 
@@ -223,28 +411,37 @@ export class SpilledCinemaNodeRuntime {
       throw new Error("Missing private session token.");
     }
     const identity = await this.ensureIdentity();
-    const payload = verifySignedToken<PrivateNodeSessionPayload>(token, identity.publicKey);
-    if (!payload || payload.kind !== "private" || payload.nodeId !== identity.nodeId) {
+    const payload = verifySignedToken<WatcherNodeSessionPayload | PrivateNodeSessionPayload>(token, identity.publicKey);
+    if (!payload || (payload.kind !== "watcher" && payload.kind !== "private") || payload.nodeId !== identity.nodeId) {
       throw new Error("Invalid private session token.");
     }
     if (payload.expiresAt <= Date.now()) {
       throw new Error("Private session expired.");
     }
-    if (!payload.scope.capabilities.includes(capability)) {
+    if (capability === "settings" || !payload.scope.capabilities.some((entry) => entry === capability)) {
       throw new Error("Private session is missing required capability.");
     }
-    const account = this.getAccount(payload.accountId);
+    const watcherId = "watcherId" in payload ? payload.watcherId : payload.accountId;
+    const { watcher, profiles } = await this.getWatcherAccount(watcherId);
     const state = await this.loadState();
     const storedSession = state.sessions.find((entry) => entry.sessionId === payload.sessionId && entry.token === token);
     if (!storedSession || storedSession.expiresAt <= Date.now()) {
       throw new Error("Private session was revoked or expired.");
     }
     if (profileId) {
-      this.assertProfile(account, profileId);
+      if (!profiles.some((profile) => profile.profileId === profileId)) {
+        throw new Error("Profile does not belong to this watcher account.");
+      }
     }
     return {
       ...payload,
-      account,
+      scope: {
+        capabilities: payload.scope.capabilities.filter(isWatcherSessionCapability),
+      },
+      accountId: watcher.watcherId,
+      watcherId: watcher.watcherId,
+      account: watcher,
+      profiles,
     };
   }
 
@@ -315,9 +512,15 @@ export class SpilledCinemaNodeRuntime {
     const record = await this.announce();
     const state = await this.loadState();
     const privateConfig = this.options.privateConfig;
+    const enrolledPasskeyCount = state.watcherAccounts.reduce((sum, account) => sum + account.passkeys.length, 0)
+      + state.adminAccounts.reduce((sum, account) => sum + account.passkeys.length, 0);
+    const setupReason = this.getSetupReason(state);
+    if (setupReason !== "complete") {
+      this.ensureBootstrapSetupCode();
+    }
     const totalUsedBytes = state.privateDownloads.reduce((sum, entry) => sum + entry.sizeBytes, 0);
     const quotaBytes = privateConfig
-      ? privateConfig.accounts.reduce((sum, account) => sum + this.getAccountQuotaBytes(account), 0)
+      ? state.watcherAccounts.reduce((sum, account) => sum + account.quotaBytes, 0)
       : null;
     return {
       status: "ok",
@@ -332,6 +535,11 @@ export class SpilledCinemaNodeRuntime {
       auth: {
         privateAuthEnabled: Boolean(privateConfig?.privateNode.enabled),
         passkeysEnabled: Boolean(privateConfig?.privateNode.enabled),
+        setupRequired: setupReason !== "complete",
+        setupReason,
+        adminPasswordEnabled: state.adminAccounts.some((account) => Boolean(account.passwordHash)),
+        watcherPasswordEnabled: state.watcherAccounts.some((account) => Boolean(account.passwordHash)),
+        enrolledPasskeyCount,
         oidcProviders: (privateConfig?.oidcProviders ?? []).map((provider) => ({
           providerId: provider.providerId,
           displayName: provider.displayName,
@@ -566,11 +774,146 @@ export class SpilledCinemaNodeRuntime {
   }
 
   async listPrivateAccounts() {
-    const config = this.requirePrivateConfig();
-    return config.accounts.map((account) => ({
+    this.requirePrivateConfig();
+    const state = await this.loadState();
+    if (state.watcherAccounts.length > 0) {
+      return state.watcherAccounts
+        .filter((account) => !account.disabledAt)
+        .map((account) => this.toPublicWatcherAccount(
+          account,
+          state.watcherProfiles.filter((profile) => profile.watcherId === account.watcherId),
+        ));
+    }
+    return (this.options.privateConfig?.accounts ?? []).map((account) => ({
       ...this.toPublicAccount(account),
       profiles: account.profiles,
     }));
+  }
+
+  async completePrivateSetup(input: {
+    setupCode: string;
+    dashboardOrigin: string;
+    nodeName: string;
+    admin?: { adminId: string; displayName: string; password: string };
+    accountId?: string;
+    displayName?: string;
+    password?: string;
+    quotaBytes?: number;
+    profiles?: Array<{ profileId: string; displayName: string; avatar?: string }>;
+    initialWatchers?: Array<{
+      watcherId: string;
+      displayName: string;
+      password?: string;
+      quotaBytes: number;
+      profiles: Array<{ profileId: string; displayName: string; avatar?: string }>;
+    }>;
+    publicCapabilities?: {
+      fetch?: boolean;
+      search?: boolean;
+      import?: boolean;
+      stream?: boolean;
+      download?: boolean;
+      spillshare?: boolean;
+      relay?: boolean;
+    };
+    allowPublicFetch?: boolean;
+  }) {
+    const status = await this.getSetupBootstrapStatus();
+    if (!status.enabled || !this.bootstrapSetupCode) {
+      throw new Error("Private node setup is not waiting for bootstrap.");
+    }
+    if (input.setupCode.trim().toUpperCase() !== this.bootstrapSetupCode) {
+      throw new Error("Invalid setup code.");
+    }
+    const adminId = (input.admin?.adminId ?? input.accountId ?? "admin").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "admin";
+    const adminPassword = input.admin?.password ?? input.password ?? "";
+    if (adminPassword.length < 10) {
+      throw new Error("Admin password must be at least 10 characters.");
+    }
+    const now = Date.now();
+    const defaultQuota = Math.max(1, Math.round(input.quotaBytes ?? 500 * 1024 * 1024 * 1024));
+    const legacyWatcherId = (input.accountId ?? "watcher_owner").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "watcher_owner";
+    const initialWatchers = input.initialWatchers?.length
+      ? input.initialWatchers
+      : [{
+          watcherId: legacyWatcherId.startsWith("watcher_") ? legacyWatcherId : `watcher_${legacyWatcherId.replace(/^acct_/, "")}`,
+          displayName: input.displayName ?? "Owner",
+          quotaBytes: defaultQuota,
+          profiles: input.profiles?.length ? input.profiles : [{ profileId: "prof_owner", displayName: input.displayName || "Owner", avatar: "default" }],
+        }];
+    const config: PrivateNodeConfig = {
+      privateNode: {
+        enabled: true,
+        nodeName: input.nodeName.trim() || "Private Node",
+        setupSecretHash: hashSetupSecret(this.bootstrapSetupCode),
+        allowPublicFetch: input.publicCapabilities?.fetch ?? input.allowPublicFetch ?? true,
+        allowedOrigins: [input.dashboardOrigin],
+      },
+      publicCapabilities: {
+        fetch: input.publicCapabilities?.fetch ?? input.allowPublicFetch ?? true,
+        search: input.publicCapabilities?.search ?? true,
+        import: input.publicCapabilities?.import ?? true,
+        stream: input.publicCapabilities?.stream ?? true,
+        download: input.publicCapabilities?.download ?? true,
+        spillshare: input.publicCapabilities?.spillshare ?? false,
+        relay: input.publicCapabilities?.relay ?? false,
+      },
+      oidcProviders: [],
+      storage: {
+        root: "./spilled-data",
+        defaultAccountQuotaBytes: 200 * 1024 * 1024 * 1024,
+      },
+    };
+    const configPath = this.options.privateConfigPath ?? getPrivateNodeConfigPathFromEnv();
+    const loadedConfig = writePrivateNodeConfig(configPath, config);
+    this.configure({
+      mode: "full",
+      privateConfig: loadedConfig,
+      privateConfigPath: configPath,
+      privateSetupEnabled: false,
+    });
+    const state = await this.loadState();
+    const adminAccount: AdminAccountRuntimeState = {
+      adminId,
+      displayName: input.admin?.displayName?.trim() || input.displayName?.trim() || "Admin",
+      passwordHash: await hashPassword(adminPassword),
+      passkeys: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const watcherAccounts: WatcherAccountRuntimeState[] = await Promise.all(initialWatchers.map(async (watcher) => ({
+      watcherId: watcher.watcherId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || randomId("watcher"),
+      displayName: watcher.displayName.trim() || "Watcher",
+      passwordHash: watcher.password ? await hashPassword(watcher.password) : undefined,
+      passkeys: [],
+      quotaBytes: Math.max(1, Math.round(watcher.quotaBytes || defaultQuota)),
+      createdAt: now,
+      updatedAt: now,
+    })));
+    const watcherProfiles: WatcherProfileRuntimeState[] = initialWatchers.flatMap((watcher, watcherIndex) => {
+      const watcherId = watcherAccounts[watcherIndex]?.watcherId ?? watcher.watcherId;
+      return (watcher.profiles.length ? watcher.profiles : [{ profileId: "prof_owner", displayName: watcher.displayName, avatar: "default" }]).map((profile, index) => ({
+        watcherId,
+        profileId: profile.profileId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || `prof_${index + 1}`,
+        displayName: profile.displayName.trim() || `Profile ${index + 1}`,
+        avatar: profile.avatar || "default",
+        createdAt: now,
+        updatedAt: now,
+      }));
+    });
+    await this.saveState({
+      ...state,
+      adminAccounts: [adminAccount],
+      watcherAccounts,
+      watcherProfiles,
+    });
+    this.bootstrapSetupCode = null;
+    return {
+      ok: true,
+      configPath,
+      admin: this.toPublicAdminAccount(adminAccount),
+      accounts: await this.listPrivateAccounts(),
+    };
   }
 
   async listOidcProviders() {
@@ -583,6 +926,182 @@ export class SpilledCinemaNodeRuntime {
     }));
   }
 
+  private async createAdminSession(admin: AdminAccountRuntimeState) {
+    const identity = await this.ensureIdentity();
+    const issuedAt = Date.now();
+    const payload: AdminNodeSessionPayload = {
+      kind: "admin",
+      sessionId: randomId("admin"),
+      nodeId: identity.nodeId,
+      adminId: admin.adminId,
+      scope: {
+        capabilities: ["settings", "accounts", "storage", "sessions"],
+      },
+      issuedAt,
+      expiresAt: issuedAt + 8 * 60 * 60 * 1000,
+    };
+    const token = createSignedToken(payload, identity.privateKey);
+    const state = await this.loadState();
+    await this.saveState({
+      ...state,
+      sessions: state.sessions.filter((entry) => entry.expiresAt > Date.now()).concat({
+        kind: "admin",
+        sessionId: payload.sessionId,
+        token,
+        expiresAt: payload.expiresAt,
+        scope: { capability: "library" },
+        pairedDeviceId: admin.adminId,
+      }),
+    });
+    return {
+      token,
+      session: payload,
+      admin: this.toPublicAdminAccount(admin),
+    };
+  }
+
+  async loginAdminPassword(input: { adminId: string; password: string }) {
+    const state = await this.loadState();
+    const admin = state.adminAccounts.find((entry) => entry.adminId === input.adminId && !entry.disabledAt);
+    if (!admin?.passwordHash || !(await verifyPassword(input.password, admin.passwordHash))) {
+      throw new Error("Invalid username or password.");
+    }
+    return this.createAdminSession(admin);
+  }
+
+  async loginWatcherPassword(input: { watcherId: string; password: string; profileId?: string }) {
+    const { watcher, profiles } = await this.getWatcherAccount(input.watcherId);
+    if (!watcher.passwordHash || !(await verifyPassword(input.password, watcher.passwordHash))) {
+      throw new Error("Invalid username or password.");
+    }
+    const profileId = input.profileId && profiles.some((profile) => profile.profileId === input.profileId)
+      ? input.profileId
+      : profiles[0]?.profileId;
+    return this.createPrivateSession({ accountId: watcher.watcherId, profileId });
+  }
+
+  async validateAdminSession(token: string | undefined) {
+    if (!token) {
+      throw new Error("Missing admin session token.");
+    }
+    const identity = await this.ensureIdentity();
+    const payload = verifySignedToken<AdminNodeSessionPayload>(token, identity.publicKey);
+    if (!payload || payload.kind !== "admin" || payload.nodeId !== identity.nodeId || payload.expiresAt <= Date.now()) {
+      throw new Error("Invalid admin session token.");
+    }
+    const state = await this.loadState();
+    const storedSession = state.sessions.find((entry) => entry.sessionId === payload.sessionId && entry.token === token && entry.expiresAt > Date.now());
+    const admin = state.adminAccounts.find((entry) => entry.adminId === payload.adminId && !entry.disabledAt);
+    if (!storedSession || !admin) {
+      throw new Error("Admin session was revoked or expired.");
+    }
+    return { ...payload, admin };
+  }
+
+  async getAdminMe(token: string | undefined) {
+    const session = await this.validateAdminSession(token);
+    return {
+      session: {
+        sessionId: session.sessionId,
+        adminId: session.adminId,
+        expiresAt: session.expiresAt,
+        scope: session.scope,
+      },
+      admin: this.toPublicAdminAccount(session.admin),
+    };
+  }
+
+  async logoutAdminSession(token: string | undefined) {
+    const identity = await this.ensureIdentity();
+    const payload = token ? verifySignedToken<AdminNodeSessionPayload>(token, identity.publicKey) : null;
+    if (!payload) {
+      return { ok: true };
+    }
+    const state = await this.loadState();
+    await this.saveState({
+      ...state,
+      sessions: state.sessions.filter((entry) => entry.sessionId !== payload.sessionId),
+    });
+    return { ok: true };
+  }
+
+  async getAdminStatus(token: string | undefined) {
+    await this.validateAdminSession(token);
+    const status = await this.getStatus();
+    const state = await this.loadState();
+    return {
+      status,
+      admins: state.adminAccounts.map((account) => this.toPublicAdminAccount(account)),
+      watchers: state.watcherAccounts.map((account) => this.toPublicWatcherAccount(
+        account,
+        state.watcherProfiles.filter((profile) => profile.watcherId === account.watcherId),
+      )),
+      sessions: state.sessions.filter((session) => session.expiresAt > Date.now()).map((session) => ({
+        sessionId: session.sessionId,
+        kind: session.kind,
+        expiresAt: session.expiresAt,
+        pairedDeviceId: session.pairedDeviceId,
+      })),
+      storage: {
+        root: this.options.privateConfig?.storageRoot ?? null,
+        usedBytes: state.privateDownloads.reduce((sum, entry) => sum + entry.sizeBytes, 0),
+        downloadsCount: state.privateDownloads.length,
+      },
+    };
+  }
+
+  async updatePublicCapabilities(token: string | undefined, capabilities: NonNullable<PrivateNodeConfig["publicCapabilities"]>) {
+    await this.validateAdminSession(token);
+    const config = this.requirePrivateConfig();
+    const nextConfig: PrivateNodeConfig = {
+      privateNode: {
+        ...config.privateNode,
+        allowPublicFetch: capabilities.fetch !== false,
+      },
+      publicCapabilities: {
+        ...config.publicCapabilities,
+        ...capabilities,
+      },
+      oidcProviders: config.oidcProviders,
+      storage: config.storage,
+    };
+    const loadedConfig = writePrivateNodeConfig(config.configPath, nextConfig);
+    this.configure({ privateConfig: loadedConfig, mode: "full" });
+    return { ok: true, publicCapabilities: loadedConfig.publicCapabilities };
+  }
+
+  async createWatcherAccount(token: string | undefined, input: { watcherId: string; displayName: string; password?: string; quotaBytes: number; profiles?: Array<{ profileId: string; displayName: string; avatar?: string }> }) {
+    await this.validateAdminSession(token);
+    const state = await this.loadState();
+    const watcherId = input.watcherId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+    if (!watcherId) throw new Error("Watcher id is required.");
+    if (state.watcherAccounts.some((entry) => entry.watcherId === watcherId)) throw new Error("Watcher already exists.");
+    const now = Date.now();
+    const watcher: WatcherAccountRuntimeState = {
+      watcherId,
+      displayName: input.displayName.trim() || watcherId,
+      passwordHash: input.password ? await hashPassword(input.password) : undefined,
+      passkeys: [],
+      quotaBytes: Math.max(1, Math.round(input.quotaBytes || this.options.privateConfig?.storage?.defaultAccountQuotaBytes || 0)),
+      createdAt: now,
+      updatedAt: now,
+    };
+    const profiles = (input.profiles?.length ? input.profiles : [{ profileId: "prof_main", displayName: watcher.displayName, avatar: "default" }]).map((profile, index) => ({
+      watcherId,
+      profileId: profile.profileId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || `prof_${index + 1}`,
+      displayName: profile.displayName.trim() || `Profile ${index + 1}`,
+      avatar: profile.avatar || "default",
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await this.saveState({
+      ...state,
+      watcherAccounts: state.watcherAccounts.concat(watcher),
+      watcherProfiles: state.watcherProfiles.concat(profiles),
+    });
+    return this.toPublicWatcherAccount(watcher, profiles);
+  }
+
   async getPrivateMe(token: string | undefined) {
     const session = await this.validatePrivateSession(token, "library");
     return {
@@ -590,12 +1109,12 @@ export class SpilledCinemaNodeRuntime {
         sessionId: session.sessionId,
         accountId: session.accountId,
         profileId: session.profileId ?? null,
-        role: session.role,
+        role: "user",
         expiresAt: session.expiresAt,
         scope: session.scope,
       },
-      account: this.toPublicAccount(session.account),
-      profiles: session.account.profiles,
+      account: this.toPublicWatcherAccount(session.account, session.profiles),
+      profiles: this.toPublicWatcherAccount(session.account, session.profiles).profiles,
     };
   }
 
@@ -615,11 +1134,13 @@ export class SpilledCinemaNodeRuntime {
 
   async createPasskeyRegistrationOptions(input: { accountId: string; setupSecret: string; origin: string }) {
     const config = this.requirePrivateConfig();
-    if (!verifySetupSecret(input.setupSecret, config.privateNode.setupSecretHash)) {
+    const state = await this.loadState();
+    const setupSecret = input.setupSecret.trim();
+    const acceptsPrintedCode = this.bootstrapSetupCode && setupSecret.toUpperCase() === this.bootstrapSetupCode;
+    if (!acceptsPrintedCode && !verifySetupSecret(setupSecret, config.privateNode.setupSecretHash)) {
       throw new Error("Invalid setup secret.");
     }
     const account = this.getAccount(input.accountId);
-    const state = await this.loadState();
     const runtimeAccount = state.privateAccounts.find((entry) => entry.accountId === account.accountId);
     const rpID = this.getRpId(input.origin);
     const options = await generateRegistrationOptions({
@@ -783,7 +1304,7 @@ export class SpilledCinemaNodeRuntime {
 
   async listPrivateProfiles(token: string | undefined) {
     const session = await this.validatePrivateSession(token, "library");
-    return session.account.profiles;
+    return this.toPublicWatcherAccount(session.account, session.profiles).profiles;
   }
 
   async selectPrivateProfile(token: string | undefined, profileId: string) {
@@ -791,7 +1312,9 @@ export class SpilledCinemaNodeRuntime {
     return await this.createPrivateSession({
       accountId: session.accountId,
       profileId,
-      capabilities: session.scope.capabilities,
+      capabilities: session.scope.capabilities.filter((capability): capability is "library" | "download" | "spillshare" =>
+        capability === "library" || capability === "download" || capability === "spillshare"
+      ),
     });
   }
 
@@ -834,7 +1357,7 @@ export class SpilledCinemaNodeRuntime {
   async getPrivateStorageSummary(token: string | undefined) {
     const session = await this.validatePrivateSession(token, "library");
     const state = await this.loadState();
-    const quotaBytes = this.getAccountQuotaBytes(session.account);
+    const quotaBytes = session.account.quotaBytes;
     const accountDownloads = state.privateDownloads.filter((entry) => entry.accountId === session.accountId);
     const usedBytes = accountDownloads.reduce((sum, entry) => sum + entry.sizeBytes, 0);
     return {
@@ -842,7 +1365,7 @@ export class SpilledCinemaNodeRuntime {
       quotaBytes,
       usedBytes,
       availableBytes: Math.max(0, quotaBytes - usedBytes),
-      profiles: session.account.profiles.map((profile) => ({
+      profiles: session.profiles.map((profile) => ({
         profileId: profile.profileId,
         usedBytes: accountDownloads
           .filter((entry) => entry.profileId === profile.profileId)

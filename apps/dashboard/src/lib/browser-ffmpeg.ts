@@ -3,9 +3,9 @@ import { toBlobURL } from "@ffmpeg/util";
 import type { LibraryEpisode } from "./types";
 import type { BrowserResolvedDownload } from "./full-download-client";
 import { requireWritableLibraryFolder, writeBlobToLibraryVault, writeResponseToLibraryVault } from "./library-folder";
-import { buildRuntimeUrl } from "./local-api";
 
 const FFMPEG_CORE_BASE_URL = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
+const HLS_FETCH_CONCURRENCY = 6;
 
 type BrowserDownloadProgress = {
   percent: number;
@@ -21,6 +21,11 @@ type MaterializedManifest = {
   manifestText: string;
   assets: ManifestAsset[];
   sourceUrl: string;
+};
+
+type WakeLockSentinelLike = {
+  released?: boolean;
+  release: () => Promise<void>;
 };
 
 let ffmpegInstance: FFmpeg | null = null;
@@ -65,10 +70,6 @@ function getDownloadFileName(episode: Pick<LibraryEpisode, "showTitle" | "episod
   return sanitizeFileName(`${episode.showTitle} - ${title}.mp4`);
 }
 
-function buildProxyUrl(sourceUrl: string, refererUrl: string, fileName: string) {
-  return buildRuntimeUrl(`/api/download-full/browser-file?url=${encodeURIComponent(sourceUrl)}&name=${encodeURIComponent(fileName)}&referer=${encodeURIComponent(refererUrl)}`);
-}
-
 function getFileExtension(sourceUrl: string) {
   try {
     const pathname = new URL(sourceUrl).pathname;
@@ -105,20 +106,130 @@ function createLocalName(index: number, sourceUrl: string, prefix: string) {
   return `${prefix}-${String(index).padStart(4, "0")}.${getFileExtension(sourceUrl)}`;
 }
 
-async function fetchText(url: string, signal?: AbortSignal) {
-  const response = await fetch(url, { signal });
+function buildBrowserFilePath(sourceUrl: string, refererUrl: string, fileName: string) {
+  return `/api/download-full/browser-file?url=${encodeURIComponent(sourceUrl)}&referer=${encodeURIComponent(refererUrl)}&name=${encodeURIComponent(fileName)}`;
+}
+
+const RETRYABLE_PROXY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+
+function waitForRetry(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
+    const timeout = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeout);
+        reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
+function getRetryDelayMs(attempt: number) {
+  return 750 * 2 ** attempt;
+}
+
+async function acquireDownloadWakeLock() {
+  const browserNavigator = navigator as Navigator & {
+    wakeLock?: {
+      request: (type: "screen") => Promise<WakeLockSentinelLike>;
+    };
+  };
+  const wakeLock = browserNavigator.wakeLock;
+  if (!wakeLock?.request) {
+    return async () => undefined;
+  }
+
+  let released = false;
+  let sentinel: WakeLockSentinelLike | null = null;
+
+  const requestLock = async () => {
+    if (released || document.visibilityState !== "visible") {
+      return;
+    }
+
+    sentinel = await wakeLock.request("screen").catch(() => null);
+  };
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === "visible" && (!sentinel || sentinel.released)) {
+      void requestLock();
+    }
+  };
+
+  await requestLock();
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+
+  return async () => {
+    released = true;
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    await sentinel?.release().catch(() => undefined);
+  };
+}
+
+async function fetchProxyResponse(url: string, signal?: AbortSignal, maxRetries = 6) {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    signal?.throwIfAborted();
+    try {
+      const response = await fetch(url, { signal, cache: "no-store" });
+      if (response.ok || !RETRYABLE_PROXY_STATUSES.has(response.status) || attempt === maxRetries) {
+        return response;
+      }
+      lastError = new Error(`Proxy request failed (${response.status}).`);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxRetries) {
+        throw error;
+      }
+    }
+
+    await waitForRetry(getRetryDelayMs(attempt), signal);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Proxy request failed.");
+}
+
+export function buildProxyUrl(sourceUrl: string, refererUrl: string, fileName: string, downloadProxyUrl: string) {
+  const filePath = buildBrowserFilePath(sourceUrl, refererUrl, fileName);
+  const base = new URL(downloadProxyUrl, window.location.origin);
+
+  if (base.pathname === "/api/node-proxy") {
+    const nodeOrigin = base.searchParams.get("node");
+    if (!nodeOrigin) {
+      throw new Error("Download node proxy is missing its target node.");
+    }
+
+    const proxied = new URL("/api/node-proxy", window.location.origin);
+    proxied.searchParams.set("node", nodeOrigin);
+    proxied.searchParams.set("path", filePath);
+    return proxied.toString();
+  }
+
+  return `${base.origin}${filePath}`;
+}
+
+export async function fetchText(url: string, signal?: AbortSignal) {
+  const response = await fetchProxyResponse(url, signal);
   if (!response.ok) {
     throw new Error(`Proxy request failed (${response.status}).`);
   }
   return response.text();
 }
 
-async function fetchBinary(
+export async function fetchBinary(
   url: string,
   signal?: AbortSignal,
   onChunk?: (receivedBytes: number, totalBytes: number | null) => void,
 ) {
-  const response = await fetch(url, { signal });
+  const response = await fetchProxyResponse(url, signal);
   if (!response.ok || !response.body) {
     throw new Error(`Proxy request failed (${response.status}).`);
   }
@@ -178,17 +289,17 @@ function chooseHighestBandwidthVariant(manifestText: string, manifestUrl: string
 async function materializeMediaManifest(
   manifestUrl: string,
   refererUrl: string,
+  downloadProxyUrl: string,
   signal?: AbortSignal,
 ): Promise<MaterializedManifest> {
-  const proxyUrl = buildProxyUrl(manifestUrl, refererUrl, "playlist.m3u8");
-  const manifestText = await fetchText(proxyUrl, signal);
+  const manifestText = await fetchText(buildProxyUrl(manifestUrl, refererUrl, "playlist.m3u8", downloadProxyUrl), signal);
 
   if (!manifestText.includes("#EXTINF") && manifestText.includes("#EXT-X-STREAM-INF")) {
     const variantUrl = chooseHighestBandwidthVariant(manifestText, manifestUrl);
     if (!variantUrl) {
       throw new Error("Could not choose a playable HLS variant.");
     }
-    return materializeMediaManifest(variantUrl, refererUrl, signal);
+    return materializeMediaManifest(variantUrl, refererUrl, downloadProxyUrl, signal);
   }
 
   const assets = new Map<string, ManifestAsset>();
@@ -200,7 +311,7 @@ async function materializeMediaManifest(
       return line;
     }
 
-    if (trimmed.startsWith("#EXT-X-MAP:") || trimmed.startsWith("#EXT-X-KEY:")) {
+    if (trimmed.startsWith("#EXT-X-MAP:") || trimmed.startsWith("#EXT-X-KEY:") || trimmed.startsWith("#EXT-X-MEDIA:")) {
       const attributes = parseAttributeList(trimmed);
       const assetUri = attributes.URI;
       if (!assetUri) {
@@ -209,7 +320,12 @@ async function materializeMediaManifest(
 
       const absoluteUrl = getAbsoluteUrl(assetUri, manifestUrl);
       const existing = assets.get(absoluteUrl);
-      const localName = existing?.localName ?? createLocalName(++assetIndex, absoluteUrl, trimmed.startsWith("#EXT-X-KEY:") ? "key" : "asset");
+      const prefix = trimmed.startsWith("#EXT-X-KEY:")
+        ? "key"
+        : trimmed.startsWith("#EXT-X-MEDIA:")
+          ? "subtitle"
+          : "asset";
+      const localName = existing?.localName ?? createLocalName(++assetIndex, absoluteUrl, prefix);
       assets.set(absoluteUrl, { sourceUrl: absoluteUrl, localName });
 
       return line.replace(`URI="${assetUri}"`, `URI="${localName}"`);
@@ -253,6 +369,55 @@ async function getFfmpeg() {
   return ffmpegLoadPromise;
 }
 
+async function fetchAndWriteManifestAssets(
+  ffmpeg: FFmpeg,
+  manifest: MaterializedManifest,
+  resolved: BrowserResolvedDownload,
+  onProgress?: (progress: BrowserDownloadProgress) => void,
+  signal?: AbortSignal,
+) {
+  const totalAssets = manifest.assets.length;
+  if (!totalAssets) {
+    return;
+  }
+
+  let nextAssetIndex = 0;
+  let completedAssets = 0;
+  let writeQueue = Promise.resolve();
+
+  const enqueueWrite = (asset: ManifestAsset, assetData: Uint8Array) => {
+    const write = writeQueue.then(() => ffmpeg.writeFile(asset.localName, assetData));
+    writeQueue = write.then(() => undefined, () => undefined);
+    return write;
+  };
+
+  const runWorker = async () => {
+    while (true) {
+      signal?.throwIfAborted();
+      const assetIndex = nextAssetIndex;
+      nextAssetIndex += 1;
+      const asset = manifest.assets[assetIndex];
+      if (!asset) {
+        return;
+      }
+
+      const proxiedAssetUrl = buildProxyUrl(asset.sourceUrl, resolved.refererUrl, asset.localName, resolved.downloadUrl);
+      const assetData = await fetchBinary(proxiedAssetUrl, signal, (receivedBytes, totalBytes) => {
+        const fileProgress = totalBytes ? Math.min(receivedBytes / totalBytes, 1) : 0;
+        const percent = 10 + ((completedAssets + fileProgress) / totalAssets) * 65;
+        reportProgress(onProgress, percent, `Fetching video chunks ${completedAssets}/${totalAssets}`);
+      });
+      await enqueueWrite(asset, assetData);
+      completedAssets += 1;
+      reportProgress(onProgress, 10 + (completedAssets / totalAssets) * 65, `Fetched video chunks ${completedAssets}/${totalAssets}`);
+    }
+  };
+
+  const workerCount = Math.min(HLS_FETCH_CONCURRENCY, totalAssets);
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  await writeQueue;
+}
+
 export async function downloadResolvedVideoInBrowser(
   episode: Pick<LibraryEpisode, "showTitle" | "episodeTitle" | "episodeNumber">,
   resolved: BrowserResolvedDownload,
@@ -262,86 +427,80 @@ export async function downloadResolvedVideoInBrowser(
   signal?.throwIfAborted();
   const outputFileName = getDownloadFileName(episode, resolved.downloadUrl);
   await requireWritableLibraryFolder();
+  const releaseWakeLock = await acquireDownloadWakeLock();
 
-  if (!isHlsPlaylistUrl(resolved.resolvedUrl)) {
+  try {
+    if (!isHlsPlaylistUrl(resolved.resolvedUrl)) {
+      signal?.throwIfAborted();
+      reportProgress(onProgress, 4, "Connecting to vault");
+      const response = await fetch(resolved.downloadUrl, { signal });
+      const saved = await writeResponseToLibraryVault(outputFileName, response, signal, (receivedBytes, totalBytes) => {
+        const percent = totalBytes ? 8 + (receivedBytes / totalBytes) * 90 : 50;
+        reportProgress(onProgress, percent, "Writing video into vault");
+      });
+      reportProgress(onProgress, 100, "Saved into vault");
+      return { fileName: saved.fileName };
+    }
+
+    reportProgress(onProgress, 2, "Loading ffmpeg.wasm");
+    const ffmpeg = await getFfmpeg();
     signal?.throwIfAborted();
-    reportProgress(onProgress, 4, "Connecting to vault");
-    const response = await fetch(resolved.downloadUrl, { signal });
-    const saved = await writeResponseToLibraryVault(outputFileName, response, signal, (receivedBytes, totalBytes) => {
-      const percent = totalBytes ? 8 + (receivedBytes / totalBytes) * 90 : 50;
-      reportProgress(onProgress, percent, "Writing video into vault");
-    });
+
+    reportProgress(onProgress, 8, "Reading HLS playlist");
+    const manifest = await materializeMediaManifest(resolved.resolvedUrl, resolved.refererUrl, resolved.downloadUrl, signal);
+    signal?.throwIfAborted();
+
+    if (progressListener) {
+      ffmpeg.off("progress", progressListener);
+    }
+
+    progressListener = ({ progress }) => {
+      const percent = 80 + progress * 18;
+      reportProgress(onProgress, percent, "Muxing video in browser");
+    };
+    ffmpeg.on("progress", progressListener);
+
+    for (const asset of manifest.assets) {
+      await ffmpeg.deleteFile(asset.localName).catch(() => undefined);
+    }
+    await ffmpeg.deleteFile("input.m3u8").catch(() => undefined);
+    await ffmpeg.deleteFile("output.mp4").catch(() => undefined);
+
+    await fetchAndWriteManifestAssets(ffmpeg, manifest, resolved, onProgress, signal);
+
+    reportProgress(onProgress, 76, "Preparing local playlist");
+    signal?.throwIfAborted();
+    await ffmpeg.writeFile("input.m3u8", new TextEncoder().encode(manifest.manifestText));
+
+    reportProgress(onProgress, 80, "Muxing video in browser");
+    await ffmpeg.exec([
+      "-allowed_extensions",
+      "ALL",
+      "-protocol_whitelist",
+      "file,crypto,data",
+      "-i",
+      "input.m3u8",
+      "-c",
+      "copy",
+      "-movflags",
+      "+faststart",
+      "output.mp4",
+    ]);
+
+    reportProgress(onProgress, 99, "Saving video");
+    signal?.throwIfAborted();
+    const output = await ffmpeg.readFile("output.mp4");
+    if (typeof output === "string") {
+      throw new Error("ffmpeg.wasm returned text instead of a video file.");
+    }
+    const videoBytes = output instanceof Uint8Array ? output : new Uint8Array(output);
+    const blobBytes = new Uint8Array(videoBytes.byteLength);
+    blobBytes.set(videoBytes);
+    reportProgress(onProgress, 99, "Writing video into vault");
+    const saved = await writeBlobToLibraryVault(outputFileName, new Blob([blobBytes.buffer], { type: "video/mp4" }));
     reportProgress(onProgress, 100, "Saved into vault");
     return { fileName: saved.fileName };
+  } finally {
+    await releaseWakeLock();
   }
-
-  reportProgress(onProgress, 2, "Loading ffmpeg.wasm");
-  const ffmpeg = await getFfmpeg();
-  signal?.throwIfAborted();
-
-  reportProgress(onProgress, 8, "Reading HLS playlist");
-  const manifest = await materializeMediaManifest(resolved.resolvedUrl, resolved.refererUrl, signal);
-  signal?.throwIfAborted();
-
-  if (progressListener) {
-    ffmpeg.off("progress", progressListener);
-  }
-
-  progressListener = ({ progress }) => {
-    const percent = 80 + progress * 18;
-    reportProgress(onProgress, percent, "Muxing video in browser");
-  };
-  ffmpeg.on("progress", progressListener);
-
-  for (const asset of manifest.assets) {
-    await ffmpeg.deleteFile(asset.localName).catch(() => undefined);
-  }
-  await ffmpeg.deleteFile("input.m3u8").catch(() => undefined);
-  await ffmpeg.deleteFile("output.mp4").catch(() => undefined);
-
-  const totalAssets = manifest.assets.length || 1;
-  for (const [index, asset] of manifest.assets.entries()) {
-    signal?.throwIfAborted();
-    const assetProxyUrl = buildProxyUrl(asset.sourceUrl, resolved.refererUrl, asset.localName);
-    const basePercent = 10 + (index / totalAssets) * 65;
-    const assetData = await fetchBinary(assetProxyUrl, signal, (receivedBytes, totalBytes) => {
-      const fileProgress = totalBytes ? receivedBytes / totalBytes : 0;
-      const percent = basePercent + (65 / totalAssets) * fileProgress;
-      reportProgress(onProgress, percent, `Fetching video chunk ${index + 1}/${totalAssets}`);
-    });
-    await ffmpeg.writeFile(asset.localName, assetData);
-  }
-
-  reportProgress(onProgress, 76, "Preparing local playlist");
-  signal?.throwIfAborted();
-  await ffmpeg.writeFile("input.m3u8", new TextEncoder().encode(manifest.manifestText));
-
-  reportProgress(onProgress, 80, "Muxing video in browser");
-  await ffmpeg.exec([
-    "-allowed_extensions",
-    "ALL",
-    "-protocol_whitelist",
-    "file,crypto,data",
-    "-i",
-    "input.m3u8",
-    "-c",
-    "copy",
-    "-movflags",
-    "+faststart",
-    "output.mp4",
-  ]);
-
-  reportProgress(onProgress, 99, "Saving video");
-  signal?.throwIfAborted();
-  const output = await ffmpeg.readFile("output.mp4");
-  if (typeof output === "string") {
-    throw new Error("ffmpeg.wasm returned text instead of a video file.");
-  }
-  const videoBytes = output instanceof Uint8Array ? output : new Uint8Array(output);
-  const blobBytes = new Uint8Array(videoBytes.byteLength);
-  blobBytes.set(videoBytes);
-  reportProgress(onProgress, 99, "Writing video into vault");
-  const saved = await writeBlobToLibraryVault(outputFileName, new Blob([blobBytes.buffer], { type: "video/mp4" }));
-  reportProgress(onProgress, 100, "Saved into vault");
-  return { fileName: saved.fileName };
 }

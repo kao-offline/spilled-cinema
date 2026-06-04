@@ -7,8 +7,9 @@ type DownloadEngineModalProps = {
   preferredEngine: DownloadEngine;
   localBackendAvailable: boolean;
   vaultConnected: boolean;
+  privateNodeAvailable: boolean;
   onClose: () => void;
-  onSelect: (engine: DownloadEngine) => void;
+  onSelect: (engine: DownloadEngine, target: "local-vault" | "private-node") => void;
 };
 
 const ENGINES: Array<{
@@ -25,8 +26,8 @@ const ENGINES: Array<{
   },
   {
     id: "wasm",
-    label: "FFmpeg.wasm",
-    note: "Downloads and muxes in the browser, then saves the final MP4 through the browser download flow.",
+    label: "FFmpeg.wasm Fast",
+    note: "Experimental browser path with parallel HLS fetching, retry, wake lock, and local muxing.",
     icon: Cpu,
   },
 ];
@@ -36,6 +37,7 @@ export function DownloadEngineModal({
   preferredEngine,
   localBackendAvailable,
   vaultConnected,
+  privateNodeAvailable,
   onClose,
   onSelect,
 }: DownloadEngineModalProps) {
@@ -82,7 +84,7 @@ export function DownloadEngineModal({
                   key={engine.id}
                   type="button"
                   disabled={disabled}
-                  onClick={() => onSelect(engine.id)}
+                  onClick={() => onSelect(engine.id, "local-vault")}
                   className={clsx(
                     "group flex w-full items-center justify-between gap-4 rounded-[20px] border p-4 text-left transition",
                     disabled
@@ -133,6 +135,40 @@ export function DownloadEngineModal({
                 </button>
               );
             })}
+            <button
+              type="button"
+              disabled={!privateNodeAvailable}
+              onClick={() => onSelect("localffmpeg", "private-node")}
+              className={clsx(
+                "group flex w-full items-center justify-between gap-4 rounded-[20px] border p-4 text-left transition",
+                privateNodeAvailable
+                  ? "border-cyan-300/35 bg-cyan-400/10 hover:border-cyan-200/60"
+                  : "cursor-not-allowed border-white/8 bg-white/[0.03] text-white/25",
+              )}
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <span className={clsx("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl", privateNodeAvailable ? "bg-cyan-300/15 text-cyan-100" : "bg-white/5 text-white/25")}>
+                  <ServerCog className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-white">Private node</span>
+                    <span className="rounded-full bg-cyan-400/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100">
+                      Server storage
+                    </span>
+                    {!privateNodeAvailable ? (
+                      <span className="rounded-full bg-red-500/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-red-200">
+                        Sign in first
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-white/35">Downloads on your private server and links the record to the selected watcher profile.</div>
+                </div>
+              </div>
+              <div className={clsx("rounded-full px-4 py-2 text-[10px] font-black uppercase tracking-[0.28em]", privateNodeAvailable ? "bg-white text-black" : "bg-white/6 text-white/30")}>
+                {privateNodeAvailable ? "Use" : "Unavailable"}
+              </div>
+            </button>
           </div>
 
           <div className="mt-6 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-white/25">

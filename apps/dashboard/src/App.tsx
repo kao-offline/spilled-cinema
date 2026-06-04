@@ -9,6 +9,8 @@ import { ShowDetail } from "./components/ShowDetail";
 import { PlayerModal } from "./components/PlayerModal";
 import { ImportView } from "./components/ImportView";
 import { SettingsView } from "./components/SettingsView";
+import { NodeSetupView } from "./components/NodeSetupView";
+import { NodeAdminView } from "./components/NodeAdminView";
 import { SupportView } from "./components/SupportView";
 import { DownloadedView } from "./components/DownloadedView";
 import { ExploreView } from "./components/ExploreView";
@@ -75,8 +77,10 @@ import {
   cancelDownload,
   deleteDownload,
   getFullDownloadStatus,
+  getFullDownloadStatusFromNode,
   startBrowserResolvedDownload,
   startFullDownload,
+  startFullDownloadOnNode,
   type FullDownloadJob,
 } from "./lib/full-download-client";
 import { downloadResolvedVideoInBrowser } from "./lib/browser-ffmpeg";
@@ -111,6 +115,7 @@ import {
   isProviderFeedViewId,
   parseProviderFeedViewId,
 } from "./lib/provider-modules-shared";
+import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/private-node-client";
 
 function sanitizeEpisodeIdForLookup(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80).toLowerCase();
@@ -346,6 +351,17 @@ function mergeProviderFeedItems(left: ExploreItem[], right: ExploreItem[]) {
 }
 
 function App() {
+  const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
+  if (routePath === "/node/setup") {
+    return <NodeSetupView />;
+  }
+  if (routePath === "/node/admin") {
+    return <NodeAdminView />;
+  }
+  return <AppContent />;
+}
+
+function AppContent() {
   const HERO_ROTATION_MS = 7000;
   const cachedProviderModules = readCachedProviderModules();
   const [state, setState] = useState<LibraryState>(() => readLibraryState());
@@ -370,6 +386,7 @@ function App() {
     episode: LibraryEpisode;
     selectedAlias: PlayerAlias;
   } | null>(null);
+  const [privateNodeConnection, setPrivateNodeConnection] = useState(() => readPrivateNodeConnection());
   const [pendingDeleteEpisode, setPendingDeleteEpisode] = useState<LibraryEpisode | null>(null);
   const [pendingRemoveShow, setPendingRemoveShow] = useState<ImportedShow | null>(null);
   const activeDownloadPollsRef = useRef(new Set<string>());
@@ -431,6 +448,16 @@ function App() {
   useEffect(() => {
     downloadQueueRef.current = downloadQueue;
   }, [downloadQueue]);
+
+  useEffect(() => {
+    const refreshPrivateNodeConnection = () => setPrivateNodeConnection(readPrivateNodeConnection());
+    window.addEventListener("storage", refreshPrivateNodeConnection);
+    window.addEventListener("focus", refreshPrivateNodeConnection);
+    return () => {
+      window.removeEventListener("storage", refreshPrivateNodeConnection);
+      window.removeEventListener("focus", refreshPrivateNodeConnection);
+    };
+  }, []);
 
   useEffect(() => {
     let canceled = false;
@@ -2258,6 +2285,96 @@ function App() {
     }
   }
 
+  async function startPrivateNodeDownloadForEpisode(episode: LibraryEpisode, selectedAlias?: PlayerAlias) {
+    const connection = readPrivateNodeConnection();
+    setPrivateNodeConnection(connection);
+    if (!connection.nodeUrl || !connection.token || !connection.profileId) {
+      window.alert("Sign in to a private node watcher profile before downloading to the private server.");
+      return;
+    }
+
+    const episodeForDownload =
+      selectedAlias && selectedAlias !== episode.selectedPlayerAlias
+        ? { ...episode, selectedPlayerAlias: selectedAlias }
+        : episode;
+
+    if (selectedAlias && selectedAlias !== episode.selectedPlayerAlias) {
+      const nextState = updateSelectedPlayer(episode.id, selectedAlias);
+      setState(nextState);
+    }
+
+    const existing = downloadQueue[episode.id];
+    if (existing && (existing.state === "queued" || existing.state === "resolving" || existing.state === "downloading")) {
+      return;
+    }
+
+    try {
+      const job = await startFullDownloadOnNode(connection.nodeUrl, episodeForDownload);
+      const selectedPlayer = episodeForDownload.players.find((player) => player.alias === episodeForDownload.selectedPlayerAlias) ?? episodeForDownload.players[0];
+      const queueItem: PersistentDownloadJob = {
+        episodeId: episode.id,
+        jobId: `private-node:${connection.nodeUrl}:${job.id}`,
+        showTitle: episode.showTitle,
+        episodeTitle: formatEpisodeTitle(episode),
+        seasonNumber: episode.seasonNumber,
+        episodeNumber: episode.episodeNumber,
+        episodeCode: episode.episodeCode,
+        selectedPlayerAlias: episodeForDownload.selectedPlayerAlias,
+        playerLabel: selectedPlayer?.label ?? "Unknown",
+        language: selectedPlayer?.language,
+        state: job.state,
+        percent: job.percent,
+        message: `Private node: ${job.message}`,
+        outputPath: job.outputPath,
+        error: job.error,
+        updatedAt: Date.now(),
+      };
+      setDownloadQueue((prev) => ({ ...prev, [episode.id]: queueItem }));
+      await pollPrivateNodeDownload(episodeForDownload, connection, job.id);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Failed to start private node download.");
+    }
+  }
+
+  async function pollPrivateNodeDownload(episode: LibraryEpisode, connection: ReturnType<typeof readPrivateNodeConnection>, jobId: string) {
+    for (;;) {
+      const job = await getFullDownloadStatusFromNode(connection.nodeUrl, jobId);
+      await persistDownloadJobUpdate(episode.id, {
+        jobId: `private-node:${connection.nodeUrl}:${job.id}`,
+        state: job.state,
+        percent: job.percent,
+        message: `Private node: ${job.message}`,
+        outputPath: job.outputPath,
+        error: job.error,
+      });
+
+      if (job.state === "completed") {
+        if (job.outputPath && connection.token && connection.profileId) {
+          const fileName = job.outputPath.split(/[\\/]/).pop() || `${episode.showTitle}.mp4`;
+          await registerPrivateNodeDownload({
+            nodeUrl: connection.nodeUrl,
+            token: connection.token,
+            profileId: connection.profileId,
+            downloadId: job.id,
+            episodeId: episode.id,
+            contentId: episode.showSlug,
+            fileName,
+            filePath: job.outputPath,
+            sizeBytes: 0,
+          }).catch(() => undefined);
+        }
+        setDownloadQueue((prev) => removeDownloadQueueItem(prev, episode.id));
+        return;
+      }
+
+      if (job.state === "failed") {
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+  }
+
   async function handleStartFullDownload(episode: LibraryEpisode) {
     const options = buildDownloadLanguageOptions(episode);
 
@@ -2285,13 +2402,18 @@ function App() {
     setDownloadEngineChoice({ episode, selectedAlias: alias });
   }
 
-  async function handleSelectDownloadEngine(engine: DownloadEngine) {
+  async function handleSelectDownloadEngine(engine: DownloadEngine, target: "local-vault" | "private-node" = "local-vault") {
     if (!downloadEngineChoice) {
       return;
     }
 
     const { episode, selectedAlias } = downloadEngineChoice;
     setDownloadEngineChoice(null);
+
+    if (target === "private-node") {
+      await startPrivateNodeDownloadForEpisode(episode, selectedAlias);
+      return;
+    }
 
     try {
       await requireWritableLibraryFolder();
@@ -2763,7 +2885,7 @@ function App() {
                 </div>
 
                 <div
-                  className="animate-fade-in grid grid-cols-[repeat(auto-fill,minmax(150px,182px))] justify-start gap-5 opacity-0 sm:grid-cols-[repeat(auto-fill,minmax(168px,190px))] xl:grid-cols-[repeat(auto-fill,minmax(182px,210px))]"
+                  className="animate-fade-in grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-5 opacity-0 sm:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
                   style={{ animationDelay: "0.2s" }}
                 >
                   {filteredShows.map((show: ImportedShow) => (
@@ -2892,6 +3014,7 @@ function App() {
         preferredEngine={state.settings.downloadEngine}
         localBackendAvailable={downloadBackendAvailable !== false}
         vaultConnected={vaultStatus.connected}
+        privateNodeAvailable={Boolean(privateNodeConnection.nodeUrl && privateNodeConnection.token && privateNodeConnection.profileId)}
         onClose={() => setDownloadEngineChoice(null)}
         onSelect={handleSelectDownloadEngine}
       />

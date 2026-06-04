@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile, rm } from "node:fs/promises";
 import { basename, dirname, resolve, sep } from "node:path";
 import { execFile, type ChildProcess } from "node:child_process";
+import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "../../../server/src/player-resolver";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -30,8 +31,11 @@ type CreateDownloadInput = {
   embedUrl: string;
   subtitlesUrl?: string;
   streamCandidates?: Array<{
+    provider?: string;
     embedUrl: string;
     subtitlesUrl?: string;
+    streamUrl?: string;
+    resolvedUrl?: string;
   }>;
 };
 
@@ -45,6 +49,50 @@ type ResolvedStreamTarget = {
   streamUrl: string;
   refererUrl: string;
 };
+
+type BrowserStreamCandidate = NonNullable<CreateDownloadInput["streamCandidates"]>[number];
+
+function getDirectStreamUrl(candidate: BrowserStreamCandidate) {
+  const directUrl = candidate.streamUrl ?? candidate.resolvedUrl;
+  if (typeof directUrl !== "string") {
+    return null;
+  }
+
+  const trimmed = directUrl.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function resolveCandidateEmbedUrl(candidate: {
+  provider?: string;
+  embedUrl: string;
+}) {
+  const embedUrl = candidate.embedUrl.trim();
+  if (!embedUrl) {
+    return null;
+  }
+
+  if (!shouldResolvePlayerUrl(candidate.provider, embedUrl)) {
+    return embedUrl;
+  }
+
+  try {
+    return await resolvePlayerEmbedUrl({
+      embedUrl,
+      provider: candidate.provider,
+    });
+  } catch {
+    return embedUrl;
+  }
+}
+
+function toValidatedHttpUrl(value: string) {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Resolved stream has unsupported protocol.");
+  }
+
+  return parsed.toString();
+}
 
 const jobs = new Map<string, FullDownloadJob>();
 const activeFfmpegProcesses = new Map<string, ChildProcess>();
@@ -363,20 +411,24 @@ function unpackDeanEdwardsPacker(source: string) {
 function findMediaUrlInText(text: string) {
   const directMp4Match = text.match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/i);
   if (directMp4Match?.[0]) {
-    return directMp4Match[0].replace(/\\u0026/g, "&");
+    return normalizeKnownStreamUrl(directMp4Match[0].replace(/\\u0026/g, "&"));
   }
 
   const filePropertyMatch = text.match(/file\s*:\s*['"]([^'"]+\.(?:m3u8|mp4)[^'"]*)['"]/i);
   if (filePropertyMatch?.[1]) {
-    return filePropertyMatch[1].replace(/\\u0026/g, "&");
+    return normalizeKnownStreamUrl(filePropertyMatch[1].replace(/\\u0026/g, "&"));
   }
 
   const directM3u8Match = text.match(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/i);
   if (directM3u8Match?.[0]) {
-    return directM3u8Match[0].replace(/\\u0026/g, "&");
+    return normalizeKnownStreamUrl(directM3u8Match[0].replace(/\\u0026/g, "&"));
   }
 
   return null;
+}
+
+function normalizeKnownStreamUrl(value: string) {
+  return value.replace(/https?:\/\/([a-z0-9-]+)\.\{v\d+\}/gi, "https://$1.cloudnestra.com");
 }
 
 function isKnownPlaceholderStream(url: string) {
@@ -473,6 +525,204 @@ function extractIframeUrl(text: string, baseUrl: string) {
   } catch {
     return null;
   }
+}
+
+function extractJavascriptPlayerUrls(text: string, baseUrl: string) {
+  const urls = new Set<string>();
+  const patterns = [
+    /go\(\s*['"]([^'"]+)['"]\s*\)/gi,
+    /(?:src|file|url)\s*[:=]\s*['"]([^'"]+)['"]/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const value = match[1]?.trim();
+      if (!value || !/^https?:\/\//i.test(value)) {
+        continue;
+      }
+      try {
+        urls.add(new URL(value, baseUrl).toString());
+      } catch {
+        // Ignore malformed player candidates.
+      }
+    }
+  }
+
+  return Array.from(urls);
+}
+
+function extractCloudnestraPlayerUrls(text: string, baseUrl: string) {
+  const urls = new Set<string>();
+  for (const match of text.matchAll(/["'](\/(?:prorcp|rcp)\/[^"']+)["']/gi)) {
+    const value = match[1]?.trim();
+    if (!value) {
+      continue;
+    }
+    try {
+      urls.add(new URL(value, baseUrl).toString());
+    } catch {
+      // Ignore malformed player candidates.
+    }
+  }
+  return Array.from(urls);
+}
+
+function isSvetSerialuUrl(value: string) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "svetserialu.to" || host === "svetserialu.io" || host === "svetserialov.to";
+  } catch {
+    return false;
+  }
+}
+
+function extractSvetSerialuSourceUrls(text: string, baseUrl: string) {
+  const urls: string[] = [];
+
+  for (const match of text.matchAll(/<[^>]*\bclass=["'][^"']*\bsource_link\b[^"']*["'][^>]*>/gi)) {
+    const tag = match[0] ?? "";
+    const encoded = tag.match(/\bdata-iframe=["']([^"']+)["']/i)?.[1];
+    if (!encoded) {
+      continue;
+    }
+
+    try {
+      const decoded = Buffer.from(encoded, "base64").toString("utf8");
+      urls.push(new URL(decoded, baseUrl).toString());
+    } catch {
+      // Ignore malformed source buttons.
+    }
+  }
+
+  return Array.from(new Set(urls));
+}
+
+function extractSvetSerialuEmbedUrl(text: string, baseUrl: string) {
+  const iframeSrc = text.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1];
+  if (iframeSrc) {
+    const embedUrl = new URL(iframeSrc, baseUrl).toString();
+    if (!embedUrl.includes("/sources/")) {
+      return embedUrl;
+    }
+  }
+
+  const redirectUrl = text.match(/window\.location\.href\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (redirectUrl) {
+    const embedUrl = new URL(redirectUrl, baseUrl).toString();
+    if (!embedUrl.includes("/sources/")) {
+      return embedUrl;
+    }
+  }
+
+  return null;
+}
+
+function extractByseLikeVideoCode(embedUrl: string) {
+  try {
+    const parsed = new URL(embedUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (!/(^|\.)f16px\.com$|(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$/i.test(host)) {
+      return null;
+    }
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const code = parts[0] === "e" ? parts[1] : parts.at(-1);
+    if (!code || !/^[a-z0-9_-]{6,80}$/i.test(code)) {
+      return null;
+    }
+
+    return {
+      origin: parsed.origin,
+      code,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveEncryptedPlaybackStream(embedUrl: string): Promise<string | null> {
+  const parsed = extractByseLikeVideoCode(embedUrl);
+  if (!parsed) {
+    return null;
+  }
+
+  const playbackUrl = `${parsed.origin}/api/videos/${encodeURIComponent(parsed.code)}/embed/playback`;
+  const response = await fetch(playbackUrl, {
+    method: "POST",
+    headers: {
+      "user-agent": USER_AGENT,
+      accept: "application/json,text/plain,*/*",
+      "content-type": "application/json",
+      referer: embedUrl,
+      origin: parsed.origin,
+      "x-embed-origin": "www.bombuj.si",
+      "x-embed-referer": "https://www.bombuj.si/",
+    },
+    body: JSON.stringify({
+      fingerprint: {
+        token: "",
+        viewer_id: "",
+        device_id: "",
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 405) {
+      const downloadsUrl = `${parsed.origin}/api/videos/${encodeURIComponent(parsed.code)}/downloads`;
+      const downloadsResponse = await fetch(downloadsUrl, {
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "application/json,text/plain,*/*",
+          referer: embedUrl,
+        },
+      }).catch(() => null);
+      if (downloadsResponse?.ok) {
+        const downloads = (await downloadsResponse.json().catch(() => null)) as {
+          recaptcha_required?: boolean;
+          countdown_seconds?: number;
+          options?: Array<{ quality?: string; label?: string; size_bytes?: number }>;
+        } | null;
+        if (downloads?.recaptcha_required) {
+          throw new Error("Byse exposes this file only through its download gate with reCAPTCHA, so the fetch server cannot resolve a direct stream URL.");
+        }
+      }
+    }
+    return null;
+  }
+
+  const body = (await response.json()) as {
+    playback?: {
+      iv?: string;
+      payload?: string;
+      key_parts?: string[];
+      iv2?: string;
+      payload2?: string;
+      decrypt_keys?: { edge_1?: string; edge_2?: string };
+    };
+  };
+
+  const pb = body.playback;
+  if (!pb) {
+    return null;
+  }
+
+  const sources: string[] = [];
+
+  if (pb.iv && pb.payload && Array.isArray(pb.key_parts) && pb.key_parts.length > 0) {
+    const key = Buffer.concat(pb.key_parts.map((value) => base64UrlToBuffer(value)));
+    const decoded = decryptAesGcmPayload(pb.iv, pb.payload, key);
+    sources.push(...extractSources(decoded));
+  }
+
+  if (pb.iv2 && pb.payload2 && pb.decrypt_keys?.edge_1 && pb.decrypt_keys?.edge_2) {
+    const key2 = Buffer.concat([base64UrlToBuffer(pb.decrypt_keys.edge_1), base64UrlToBuffer(pb.decrypt_keys.edge_2)]);
+    const decoded2 = decryptAesGcmPayload(pb.iv2, pb.payload2, key2);
+    sources.push(...extractSources(decoded2));
+  }
+
+  const unique = Array.from(new Set(sources));
+  return unique.find((entry) => entry.includes(".m3u8")) ?? unique[0] ?? null;
 }
 
 async function resolveStreamtapeUrl(embedUrl: string): Promise<string | null> {
@@ -765,78 +1015,15 @@ async function isValidDownloadFile(episodeId: string, filePath: string) {
   return true;
 }
 
-async function resolveF16PxStream(embedUrl: string): Promise<string | null> {
-  const parsed = new URL(embedUrl);
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  if (parts[0] !== "e" || !parts[1]) {
-    return null;
-  }
-
-  const code = parts[1];
-  const playbackUrl = `${parsed.origin}/api/videos/${encodeURIComponent(code)}/embed/playback`;
-  const response = await fetch(playbackUrl, {
-    headers: {
-      "user-agent": USER_AGENT,
-      accept: "application/json,text/plain,*/*",
-      referer: embedUrl,
-      origin: parsed.origin,
-    },
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const body = (await response.json()) as {
-    playback?: {
-      iv?: string;
-      payload?: string;
-      key_parts?: string[];
-      iv2?: string;
-      payload2?: string;
-      decrypt_keys?: { edge_1?: string; edge_2?: string };
-    };
-  };
-
-  const pb = body.playback;
-  if (!pb) {
-    return null;
-  }
-
-  const sources: string[] = [];
-
-  if (pb.iv && pb.payload && Array.isArray(pb.key_parts) && pb.key_parts.length > 0) {
-    const key = Buffer.concat(pb.key_parts.map((value) => base64UrlToBuffer(value)));
-    const decoded = decryptAesGcmPayload(pb.iv, pb.payload, key);
-    sources.push(...extractSources(decoded));
-  }
-
-  if (pb.iv2 && pb.payload2 && pb.decrypt_keys?.edge_1 && pb.decrypt_keys?.edge_2) {
-    const key2 = Buffer.concat([base64UrlToBuffer(pb.decrypt_keys.edge_1), base64UrlToBuffer(pb.decrypt_keys.edge_2)]);
-    const decoded2 = decryptAesGcmPayload(pb.iv2, pb.payload2, key2);
-    sources.push(...extractSources(decoded2));
-  }
-
-  const unique = Array.from(new Set(sources));
-  return unique.find((entry) => entry.includes(".m3u8")) ?? unique[0] ?? null;
-}
-
 async function resolveStreamTarget(embedUrl: string, depth = 0, visited = new Set<string>()): Promise<ResolvedStreamTarget | null> {
-  // Reject svetserialu internal endpoints - they need server-side resolution
-  if (embedUrl.includes("svetserialu.to/sources/")) {
-    throw new Error(
-      "Episode using svetserialu internal endpoint. The show needs to be re-imported to access streaming providers.",
-    );
-  }
-
   if (visited.has(embedUrl) || depth > 4) {
     return null;
   }
   visited.add(embedUrl);
 
-  if (embedUrl.includes("f16px")) {
-    const streamUrl = await resolveF16PxStream(embedUrl);
-    return streamUrl ? { streamUrl, refererUrl: embedUrl } : null;
+  const encryptedPlaybackStream = await resolveEncryptedPlaybackStream(embedUrl);
+  if (encryptedPlaybackStream) {
+    return { streamUrl: encryptedPlaybackStream, refererUrl: embedUrl };
   }
 
   if (/streamtape\./i.test(embedUrl)) {
@@ -862,21 +1049,22 @@ async function resolveStreamTarget(embedUrl: string, depth = 0, visited = new Se
       return null;
     }
     const html = await response.text();
+    const finalUrl = response.url || embedUrl;
 
     const direct = findMediaUrlInText(html);
     if (direct && !isKnownPlaceholderStream(direct)) {
-      return { streamUrl: await resolvePreferredHlsVariant(direct, response.url), refererUrl: response.url };
+      return { streamUrl: await resolvePreferredHlsVariant(direct, finalUrl), refererUrl: finalUrl };
     }
 
     const unpacked = unpackDeanEdwardsPacker(html);
     if (unpacked) {
       const fromPacked = findMediaUrlInText(unpacked);
       if (fromPacked && !isKnownPlaceholderStream(fromPacked)) {
-        return { streamUrl: await resolvePreferredHlsVariant(fromPacked, response.url), refererUrl: response.url };
+        return { streamUrl: await resolvePreferredHlsVariant(fromPacked, finalUrl), refererUrl: finalUrl };
       }
     }
 
-    const redirectUrl = extractScriptRedirectUrl(html, response.url);
+    const redirectUrl = extractScriptRedirectUrl(html, finalUrl);
     if (redirectUrl && redirectUrl !== embedUrl) {
       const redirected = await resolveStreamTarget(redirectUrl, depth + 1, visited);
       if (redirected) {
@@ -884,9 +1072,65 @@ async function resolveStreamTarget(embedUrl: string, depth = 0, visited = new Se
       }
     }
 
-    const iframeUrl = extractIframeUrl(html, response.url);
+    const iframeUrl = extractIframeUrl(html, finalUrl);
     if (iframeUrl && iframeUrl !== embedUrl) {
       const nested = await resolveStreamTarget(iframeUrl, depth + 1, visited);
+      if (nested) {
+        return nested;
+      }
+    }
+
+    if (isSvetSerialuUrl(finalUrl)) {
+      const sourceUrls = finalUrl.includes("/sources/")
+        ? [finalUrl]
+        : extractSvetSerialuSourceUrls(html, finalUrl);
+
+      for (const sourceUrl of sourceUrls) {
+        if (visited.has(sourceUrl)) {
+          continue;
+        }
+
+        const sourceResponse = await fetch(sourceUrl, {
+          headers: {
+            "user-agent": USER_AGENT,
+            accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            referer: finalUrl,
+          },
+          redirect: "follow",
+        }).catch(() => null);
+
+        if (!sourceResponse?.ok) {
+          continue;
+        }
+
+        const sourceHtml = await sourceResponse.text();
+        const sourceEmbedUrl = extractSvetSerialuEmbedUrl(sourceHtml, sourceResponse.url || sourceUrl);
+        if (!sourceEmbedUrl || visited.has(sourceEmbedUrl)) {
+          continue;
+        }
+
+        const nested = await resolveStreamTarget(sourceEmbedUrl, depth + 1, visited);
+        if (nested) {
+          return nested;
+        }
+      }
+    }
+
+    for (const playerUrl of extractCloudnestraPlayerUrls(html, finalUrl)) {
+      if (visited.has(playerUrl)) {
+        continue;
+      }
+      const nested = await resolveStreamTarget(playerUrl, depth + 1, visited);
+      if (nested) {
+        return nested;
+      }
+    }
+
+    for (const playerUrl of extractJavascriptPlayerUrls(html, finalUrl)) {
+      if (visited.has(playerUrl)) {
+        continue;
+      }
+      const nested = await resolveStreamTarget(playerUrl, depth + 1, visited);
       if (nested) {
         return nested;
       }
@@ -1027,17 +1271,24 @@ export async function resolveBrowserDownload(input: CreateDownloadInput): Promis
   );
 
   let lastError: string | null = null;
-  for (const candidate of dedupedCandidates) {
+  const errors: string[] = [];
+  for (const [index, candidate] of dedupedCandidates.entries()) {
+    const host = (() => {
+      try {
+        return new URL(candidate.embedUrl).hostname;
+      } catch {
+        return "invalid-url";
+      }
+    })();
     try {
-      const resolved = await resolveStreamTarget(candidate.embedUrl);
+      const directUrl = getDirectStreamUrl(candidate);
+      const resolved = directUrl
+        ? { streamUrl: toValidatedHttpUrl(directUrl), refererUrl: candidate.embedUrl }
+        : await resolveStreamTarget((await resolveCandidateEmbedUrl(candidate)) ?? candidate.embedUrl);
+
       if (!resolved) {
         lastError = "Could not resolve a direct stream URL for this provider.";
-        continue;
-      }
-
-      const parsed = new URL(resolved.streamUrl);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        lastError = "Resolved stream has unsupported protocol.";
+        errors.push(`${index + 1}. ${host}: ${lastError}`);
         continue;
       }
 
@@ -1051,10 +1302,15 @@ export async function resolveBrowserDownload(input: CreateDownloadInput): Promis
       };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
+      errors.push(`${index + 1}. ${host}: ${lastError}`);
     }
   }
 
-  throw new Error(lastError ?? "Could not resolve direct stream URL from player links.");
+  throw new Error(
+    errors.length
+      ? `Could not resolve direct stream URL from ${dedupedCandidates.length} player link(s). ${errors.join(" | ")}`
+      : lastError ?? "Could not resolve direct stream URL from player links.",
+  );
 }
 
 export async function createFullDownloadJob(input: CreateDownloadInput): Promise<FullDownloadJob> {
@@ -1101,11 +1357,19 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
       let selectedSubtitlesUrl = input.subtitlesUrl;
       let downloadSucceeded = false;
       let lastError: string | null = null;
+      const candidateErrors: string[] = [];
 
       for (let index = 0; index < dedupedCandidates.length; index += 1) {
         ensureNotCanceled(job.id);
         const candidate = dedupedCandidates[index];
         const stepLabel = dedupedCandidates.length > 1 ? ` (${index + 1}/${dedupedCandidates.length})` : "";
+        const host = (() => {
+          try {
+            return new URL(candidate.embedUrl).hostname;
+          } catch {
+            return "invalid-url";
+          }
+        })();
 
         updateJob(job, {
           state: "resolving",
@@ -1115,9 +1379,16 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
 
         let resolvedTarget: ResolvedStreamTarget | null = null;
         try {
-          resolvedTarget = await resolveStreamTarget(candidate.embedUrl);
+          const directUrl = getDirectStreamUrl(candidate);
+          resolvedTarget = directUrl
+            ? {
+                streamUrl: toValidatedHttpUrl(directUrl),
+                refererUrl: candidate.embedUrl,
+              }
+            : await resolveStreamTarget((await resolveCandidateEmbedUrl(candidate)) ?? candidate.embedUrl);
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
+          candidateErrors.push(`${index + 1}. ${host}: ${lastError}`);
           console.warn("[DOWNLOAD] Stream candidate resolve failed", {
             episodeId: input.episodeId,
             candidate: candidate.embedUrl,
@@ -1128,6 +1399,7 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
 
         if (!resolvedTarget) {
           lastError = "Could not resolve a direct stream URL for this provider.";
+          candidateErrors.push(`${index + 1}. ${host}: ${lastError}`);
           console.warn("[DOWNLOAD] Stream candidate produced no direct URL", {
             episodeId: input.episodeId,
             candidate: candidate.embedUrl,
@@ -1166,6 +1438,7 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
           break;
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
+          candidateErrors.push(`${index + 1}. ${host}: ${lastError}`);
           console.warn("[DOWNLOAD] Stream candidate ffmpeg failed", {
             episodeId: input.episodeId,
             candidate: candidate.embedUrl,
@@ -1178,7 +1451,11 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
       }
 
       if (!downloadSucceeded) {
-        throw new Error(lastError ?? "Could not resolve a direct stream URL for this provider.");
+        throw new Error(
+          candidateErrors.length
+            ? `Could not download from ${dedupedCandidates.length} player link(s). ${candidateErrors.join(" | ")}`
+            : lastError ?? "Could not resolve a direct stream URL for this provider.",
+        );
       }
 
       ensureNotCanceled(job.id);

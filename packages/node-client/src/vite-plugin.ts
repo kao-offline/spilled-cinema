@@ -30,6 +30,17 @@ export function createDashboardApiPlugin(): Plugin {
     server.middlewares.use("/api/download-full/subtitle-file", handlers.subtitleFileHandler);
     server.middlewares.use("/api/subtitle-proxy", handlers.subtitleProxyHandler);
     server.middlewares.use("/api/node/auth/anonymous", handlers.anonymousGrantHandler);
+    server.middlewares.use("/api/node/setup/status", handlers.privateSetupStatusHandler);
+    server.middlewares.use("/api/node/setup/complete", handlers.privateSetupCompleteHandler);
+    server.middlewares.use("/api/node/admin/auth/login", handlers.adminAuthHandler);
+    server.middlewares.use("/api/node/admin/auth/logout", handlers.adminAuthHandler);
+    server.middlewares.use("/api/node/admin/auth/me", handlers.adminAuthHandler);
+    server.middlewares.use("/api/node/admin/status", handlers.adminStatusHandler);
+    server.middlewares.use("/api/node/admin/settings/capabilities", handlers.adminCapabilitiesHandler);
+    server.middlewares.use("/api/node/admin/accounts/watchers", handlers.adminWatchersHandler);
+    server.middlewares.use("/api/node/watcher/auth/login", handlers.watcherAuthHandler);
+    server.middlewares.use("/api/node/watcher/auth/logout", handlers.watcherAuthHandler);
+    server.middlewares.use("/api/node/watcher/auth/me", handlers.watcherAuthHandler);
     server.middlewares.use("/api/node/auth/accounts", handlers.privateAccountsHandler);
     server.middlewares.use("/api/node/auth/me", handlers.privateMeHandler);
     server.middlewares.use("/api/node/auth/logout", handlers.privateMeHandler);

@@ -51,8 +51,8 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
         </span>
       </div>
 
-      <nav className="mt-2 flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto pr-0 custom-scrollbar lg:mt-12 lg:gap-8 lg:pr-1">
-        <ul className="flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+      <nav className="mt-2 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden pr-0 custom-scrollbar lg:mt-12 lg:gap-8 lg:pr-1">
+        <ul className="no-scrollbar flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
           {primaryLinks.map((link) => {
             const isActive = activeView === link.id;
             return (
@@ -76,7 +76,7 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
         </ul>
 
         {feedLinks.length > 0 ? (
-          <ul className="flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+          <ul className="no-scrollbar flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
             <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-white/20 lg:mb-2 lg:px-4 lg:text-xs">Feeds</div>
             {feedLinks.map((link) => {
               const isActive = activeView === link.id;
@@ -100,7 +100,7 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
           </ul>
         ) : null}
 
-        <ul className="flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+        <ul className="no-scrollbar flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
           <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-white/20 lg:mb-2 lg:px-4 lg:text-xs">System</div>
           {secondaryLinks.map((link) => {
              const isActive = activeView === link.id;

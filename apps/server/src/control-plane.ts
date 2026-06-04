@@ -78,10 +78,10 @@ export class ControlPlaneReporter {
 export function readControlPlaneReporterOptionsFromEnv(): ControlPlaneReporterOptions | null {
   const dashboardUrl = String(process.env.SPILLED_DASHBOARD_URL || "").trim();
   const convexSiteUrl = String(process.env.CONVEX_SITE_URL || "").trim();
-  const inferredBaseUrl = dashboardUrl
-    ? `${dashboardUrl.replace(/\/$/, "")}/api/server`
-    : convexSiteUrl
-      ? `${convexSiteUrl.replace(/\/$/, "")}/server`
+  const inferredBaseUrl = convexSiteUrl
+    ? `${convexSiteUrl.replace(/\/$/, "")}/server`
+    : dashboardUrl
+      ? `${dashboardUrl.replace(/\/$/, "")}/api/server`
       : "";
   const baseUrl = String(process.env.SPILLED_CONTROL_PLANE_URL || inferredBaseUrl).trim();
   if (!baseUrl) {

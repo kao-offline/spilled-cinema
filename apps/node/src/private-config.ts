@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 export type SpilledNodeMode = "public-fetch" | "private" | "full";
 
@@ -37,7 +37,16 @@ export type PrivateNodeConfig = {
     allowPublicFetch?: boolean;
     allowedOrigins?: string[];
   };
-  accounts: PrivateNodeAccountConfig[];
+  accounts?: PrivateNodeAccountConfig[];
+  publicCapabilities?: {
+    fetch?: boolean;
+    search?: boolean;
+    import?: boolean;
+    stream?: boolean;
+    download?: boolean;
+    spillshare?: boolean;
+    relay?: boolean;
+  };
   oidcProviders?: PrivateNodeOidcProviderConfig[];
   storage?: {
     root?: string;
@@ -89,13 +98,10 @@ function normalizeConfig(raw: unknown, configPath: string): LoadedPrivateNodeCon
     throw new Error("privateNode config is required.");
   }
   const accountsRaw = raw.accounts;
-  if (!Array.isArray(accountsRaw) || accountsRaw.length === 0) {
-    throw new Error("At least one private node account is required.");
-  }
 
   const seenAccounts = new Set<string>();
   const seenProfiles = new Set<string>();
-  const accounts: PrivateNodeAccountConfig[] = accountsRaw.map((entry, accountIndex) => {
+  const accounts: PrivateNodeAccountConfig[] = Array.isArray(accountsRaw) ? accountsRaw.map((entry, accountIndex) => {
     if (!isRecord(entry)) {
       throw new Error(`accounts[${accountIndex}] must be an object.`);
     }
@@ -138,7 +144,7 @@ function normalizeConfig(raw: unknown, configPath: string): LoadedPrivateNodeCon
         ? entry.allowedEmails.filter((value): value is string => typeof value === "string")
         : [],
     };
-  });
+  }) : [];
 
   const oidcProvidersRaw = raw.oidcProviders;
   const oidcProviders: PrivateNodeOidcProviderConfig[] = Array.isArray(oidcProvidersRaw)
@@ -175,6 +181,15 @@ function normalizeConfig(raw: unknown, configPath: string): LoadedPrivateNodeCon
         : [],
     },
     accounts,
+    publicCapabilities: isRecord(raw.publicCapabilities) ? {
+      fetch: raw.publicCapabilities.fetch !== false,
+      search: raw.publicCapabilities.search !== false,
+      import: raw.publicCapabilities.import !== false,
+      stream: raw.publicCapabilities.stream !== false,
+      download: raw.publicCapabilities.download !== false,
+      spillshare: raw.publicCapabilities.spillshare === true,
+      relay: raw.publicCapabilities.relay === true,
+    } : undefined,
     oidcProviders,
     storage: {
       root: configuredRoot,
@@ -194,9 +209,53 @@ export function readNodeModeFromEnv(): SpilledNodeMode {
   throw new Error(`Unsupported SPILLED_NODE_MODE "${mode}".`);
 }
 
+export function getPrivateNodeConfigPathFromEnv() {
+  return resolve(process.env.SPILLED_PRIVATE_CONFIG?.trim() || resolve(findWorkspaceRoot(), "spilled.private.json"));
+}
+
+function findWorkspaceRoot() {
+  let current = process.cwd();
+  for (let index = 0; index < 8; index += 1) {
+    const packagePath = resolve(current, "package.json");
+    if (existsSync(packagePath)) {
+      try {
+        const packageJson = JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown };
+        if (Array.isArray(packageJson.workspaces)) {
+          return current;
+        }
+      } catch {
+        // Keep walking.
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return process.cwd();
+}
+
+export function isPrivateSetupBootstrapEnabled() {
+  return process.env.SPILLED_PRIVATE_SETUP === "1" || process.argv.includes("--setup-private");
+}
+
+export function writePrivateNodeConfig(configPath: string, config: PrivateNodeConfig) {
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  return normalizeConfig(config, configPath);
+}
+
 export function loadPrivateNodeConfigFromEnv(mode = readNodeModeFromEnv()): LoadedPrivateNodeConfig | null {
   const configPath = process.env.SPILLED_PRIVATE_CONFIG?.trim();
   if (!configPath) {
+    const defaultConfigPath = getPrivateNodeConfigPathFromEnv();
+    if (existsSync(defaultConfigPath)) {
+      const configText = readFileSync(defaultConfigPath, "utf8").replace(/^\uFEFF/, "");
+      return normalizeConfig(JSON.parse(configText), defaultConfigPath);
+    }
+    if (isPrivateSetupBootstrapEnabled()) {
+      return null;
+    }
     if (mode === "private" || mode === "full") {
       throw new Error("SPILLED_PRIVATE_CONFIG is required when SPILLED_NODE_MODE is private or full.");
     }
@@ -204,6 +263,9 @@ export function loadPrivateNodeConfigFromEnv(mode = readNodeModeFromEnv()): Load
   }
   const resolvedPath = resolve(configPath);
   if (!existsSync(resolvedPath)) {
+    if (isPrivateSetupBootstrapEnabled() || process.env.SPILLED_DISABLE_PRIVATE_SETUP !== "1") {
+      return null;
+    }
     throw new Error(`Private node config not found at ${resolvedPath}.`);
   }
   const configText = readFileSync(resolvedPath, "utf8").replace(/^\uFEFF/, "");

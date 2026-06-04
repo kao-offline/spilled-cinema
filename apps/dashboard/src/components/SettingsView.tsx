@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  Copy,
   DatabaseBackup,
   Download,
   FolderOpen,
@@ -29,10 +28,14 @@ import type { VaultDiagnostics, VaultStatus } from "../lib/library-folder";
 import { isFolderConnectionSupported } from "../lib/library-folder";
 import {
   clearPrivateNodeConnection,
+  completePrivateNodeSetup,
   enrollPrivateNodePasskey,
   fetchPrivateNodeAccounts,
+  findPrivateNodeCandidates,
+  fetchPrivateNodeSetupStatus,
   fetchPrivateNodeStatus,
   fetchPrivateNodeStorage,
+  loginWatcherNodePassword,
   loginPrivateNodePasskey,
   readPrivateNodeConnection,
   selectPrivateNodeProfile,
@@ -269,6 +272,7 @@ export function SettingsView({
   const [privateAccountId, setPrivateAccountId] = useState("");
   const [privateSetupSecret, setPrivateSetupSecret] = useState("");
   const [privateStorage, setPrivateStorage] = useState<PrivateNodeStorageSummary | null>(null);
+  const [privateWatcherPassword, setPrivateWatcherPassword] = useState("");
   const [privateNodeBusy, setPrivateNodeBusy] = useState(false);
   const [privateNodeMessage, setPrivateNodeMessage] = useState<string | null>(null);
   const [showPrivateSetup, setShowPrivateSetup] = useState(false);
@@ -277,7 +281,8 @@ export function SettingsView({
   const [setupProfileNames, setSetupProfileNames] = useState("Owner");
   const [setupQuotaGb, setSetupQuotaGb] = useState(500);
   const [setupNodeName, setSetupNodeName] = useState("Home Server");
-  const [setupCommandSecret, setSetupCommandSecret] = useState("");
+  const [setupCode, setSetupCode] = useState("");
+  const [setupAllowPublicFetch, setSetupAllowPublicFetch] = useState(true);
 
   const tabs = [
     { id: "general" as const, label: "General", icon: SlidersHorizontal },
@@ -365,56 +370,6 @@ export function SettingsView({
   }, [providerFeeds]);
   const selectedFeedModule = feedModuleId ? INTEGRATIONS.find((integration) => integration.id === feedModuleId) : null;
   const selectedModuleFeeds = feedModuleId ? (feedsByProvider.get(feedModuleId) ?? []) : [];
-  const privateSetupCommand = useMemo(() => {
-    const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`;
-    const normalizedAccountId = (setupAccountId.trim() || "acct_owner")
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "_")
-      .replace(/_+/g, "_");
-    const profileNames = setupProfileNames
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .slice(0, 8);
-    const profiles = (profileNames.length > 0 ? profileNames : [setupAccountName.trim() || "Owner"])
-      .map((displayName, index) => {
-        const profileId = `prof_${displayName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_") || index + 1}`;
-        return `@{ profileId = ${psQuote(profileId)}; displayName = ${psQuote(displayName)}; avatar = 'default' }`;
-      })
-      .join(", ");
-    const quotaBytes = Math.max(1, Math.round(setupQuotaGb)) * 1024 * 1024 * 1024;
-    const dashboardOrigin = typeof window === "undefined" ? "https://spilled.overload.studio" : window.location.origin;
-    return [
-      `$setupSecret = ${psQuote(setupCommandSecret || "change-this-setup-secret")}`,
-      "$setupHash = node -e \"const c=require('crypto'); process.stdout.write('sha256:'+c.createHash('sha256').update(process.argv[1]).digest('hex'))\" $setupSecret",
-      "$config = @{",
-      "  privateNode = @{",
-      "    enabled = $true",
-      `    nodeName = ${psQuote(setupNodeName.trim() || "Home Server")}`,
-      "    setupSecretHash = $setupHash",
-      "    allowPublicFetch = $true",
-      `    allowedOrigins = @(${psQuote(dashboardOrigin)})`,
-      "  }",
-      "  accounts = @(",
-      "    @{",
-      `      accountId = ${psQuote(normalizedAccountId)}`,
-      `      displayName = ${psQuote(setupAccountName.trim() || "Owner")}`,
-      "      role = 'admin'",
-      `      quotaBytes = ${quotaBytes}`,
-      `      profiles = @(${profiles})`,
-      "      allowedOidcSubjects = @()",
-      "    }",
-      "  )",
-      "  oidcProviders = @()",
-      "  storage = @{ root = './spilled-data'; defaultAccountQuotaBytes = 214748364800 }",
-      "}",
-      "$config | ConvertTo-Json -Depth 10 | Set-Content -Path .\\spilled.private.json -Encoding utf8",
-      "$env:SPILLED_NODE_MODE = 'full'",
-      "$env:SPILLED_PRIVATE_CONFIG = (Resolve-Path .\\spilled.private.json)",
-      "npm run start:server",
-    ].join("\n");
-  }, [setupAccountId, setupAccountName, setupCommandSecret, setupNodeName, setupProfileNames, setupQuotaGb]);
-
   useEffect(() => {
     if (privateAccounts.length > 0 && !privateAccountId) {
       setPrivateAccountId(privateAccounts[0].accountId);
@@ -426,10 +381,11 @@ export function SettingsView({
       return;
     }
     let canceled = false;
-    void Promise.all([
-      fetchPrivateNodeStatus(privateNode.nodeUrl),
-      fetchPrivateNodeAccounts(privateNode.nodeUrl),
-    ])
+    void fetchPrivateNodeStatus(privateNode.nodeUrl)
+      .then(async (status) => {
+        const accounts = status.auth?.setupRequired && !status.auth.privateAuthEnabled ? [] : await fetchPrivateNodeAccounts(privateNode.nodeUrl);
+        return [status, accounts] as const;
+      })
       .then(([status, accounts]) => {
         if (canceled) {
           return;
@@ -437,6 +393,9 @@ export function SettingsView({
         setPrivateNodeStatus(status);
         setPrivateAccounts(accounts);
         setPrivateAccountId((current) => current || privateNode.accountId || accounts[0]?.accountId || "");
+        if (status.auth?.setupRequired) {
+          setShowPrivateSetup(false);
+        }
       })
       .catch(() => {
         if (!canceled) {
@@ -567,10 +526,11 @@ export function SettingsView({
     setPrivateNodeBusy(true);
     setPrivateNodeMessage(null);
     try {
-      const [status, accounts] = await Promise.all([
-        fetchPrivateNodeStatus(nodeUrl),
-        fetchPrivateNodeAccounts(nodeUrl),
-      ]);
+      const status = await fetchPrivateNodeStatus(nodeUrl);
+      let accounts: PrivateNodeAccount[] = [];
+      if (!status.auth?.setupRequired || status.auth.privateAuthEnabled) {
+        accounts = await fetchPrivateNodeAccounts(nodeUrl);
+      }
       setPrivateNodeStatus(status);
       setPrivateAccounts(accounts);
       setPrivateAccountId((current) => current || accounts[0]?.accountId || "");
@@ -579,9 +539,48 @@ export function SettingsView({
         nodeUrl,
       });
       setPrivateNode(next);
-      setPrivateNodeMessage(status.auth?.privateAuthEnabled ? "Private node connected." : "Node found, but private auth is not enabled.");
+      if (status.auth?.setupRequired) {
+        setShowPrivateSetup(false);
+        setPrivateNodeMessage("Node found. Open Setup to enter the terminal verification code.");
+      } else {
+        setPrivateNodeMessage(status.auth?.privateAuthEnabled ? "Private node connected." : "Node found, but private auth is not enabled.");
+      }
     } catch (error) {
       setPrivateNodeMessage(error instanceof Error ? error.message : "Failed to connect private node.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
+  async function handleFindPrivateNode() {
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      const candidates = await findPrivateNodeCandidates(localRuntimeStatus.origin ? [localRuntimeStatus.origin] : []);
+      const candidate = candidates.find((entry) => entry.status.auth?.setupRequired)
+        ?? candidates.find((entry) => entry.status.auth?.privateAuthEnabled)
+        ?? candidates[0];
+      if (!candidate) {
+        setPrivateNodeMessage("No private node found. Start the server with npm run start:server, then try again.");
+        return;
+      }
+      let accounts: PrivateNodeAccount[] = [];
+      if (!candidate.status.auth?.setupRequired || candidate.status.auth.privateAuthEnabled) {
+        accounts = await fetchPrivateNodeAccounts(candidate.nodeUrl);
+      }
+      setPrivateNodeInput(candidate.nodeUrl);
+      setPrivateNodeStatus(candidate.status);
+      setPrivateAccounts(accounts);
+      setPrivateAccountId((current) => current || accounts[0]?.accountId || "");
+      setPrivateNode(writePrivateNodeConnection({ ...privateNode, nodeUrl: candidate.nodeUrl }));
+      if (candidate.status.auth?.setupRequired) {
+        setShowPrivateSetup(false);
+        setPrivateNodeMessage("Found a server waiting for setup. Open Setup to enter the terminal verification code.");
+      } else {
+        setPrivateNodeMessage("Private node found.");
+      }
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Failed to find private node.");
     } finally {
       setPrivateNodeBusy(false);
     }
@@ -655,6 +654,31 @@ export function SettingsView({
     }
   }
 
+  async function handleLoginPrivatePassword() {
+    if (!privateNode.nodeUrl || !privateAccountId || !privateWatcherPassword) {
+      setPrivateNodeMessage("Connect a node, choose a watcher, and enter the password.");
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      persistPrivateLogin({
+        nodeUrl: privateNode.nodeUrl,
+        ...(await loginWatcherNodePassword({
+          nodeUrl: privateNode.nodeUrl,
+          watcherId: privateAccountId,
+          password: privateWatcherPassword,
+          profileId: privateNode.profileId,
+        })),
+      });
+      setPrivateWatcherPassword("");
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Password login failed.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
   async function handleSelectPrivateProfile(profileId: string) {
     if (!privateNode.nodeUrl || !privateNode.token) {
       return;
@@ -688,12 +712,88 @@ export function SettingsView({
     setPrivateNodeMessage("Private node disconnected.");
   }
 
-  async function handleCopyPrivateSetupCommand() {
+  async function handleCompletePrivateSetup() {
+    const nodeUrl = privateNode.nodeUrl || privateNodeInput.trim().replace(/\/+$/, "");
+    if (!nodeUrl || !setupCode.trim()) {
+      setPrivateNodeMessage("Connect the node and enter the setup code from the terminal.");
+      return;
+    }
+    if (privateNodeStatus?.auth?.privateAuthEnabled) {
+      if (!privateAccountId) {
+        setPrivateNodeMessage("Choose the account to enroll.");
+        return;
+      }
+      setPrivateNodeBusy(true);
+      setPrivateNodeMessage(null);
+      try {
+        persistPrivateLogin({
+          nodeUrl,
+          ...(await enrollPrivateNodePasskey({
+            nodeUrl,
+            accountId: privateAccountId,
+            setupSecret: setupCode,
+          })),
+        });
+        const status = await fetchPrivateNodeStatus(nodeUrl);
+        setPrivateNodeStatus(status);
+        setShowPrivateSetup(false);
+      } catch (error) {
+        setPrivateNodeMessage(error instanceof Error ? error.message : "Passkey enrollment failed.");
+      } finally {
+        setPrivateNodeBusy(false);
+      }
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
     try {
-      await navigator.clipboard.writeText(privateSetupCommand);
-      setPrivateNodeMessage("Setup command copied.");
-    } catch {
-      setPrivateNodeMessage("Copy failed. Select the command and copy it manually.");
+      await fetchPrivateNodeSetupStatus(nodeUrl);
+      const profileNames = setupProfileNames
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      const profiles = (profileNames.length > 0 ? profileNames : [setupAccountName.trim() || "Owner"]).map((displayName, index) => ({
+        profileId: `prof_${displayName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_") || index + 1}`,
+        displayName,
+        avatar: "default",
+      }));
+      const setup = await completePrivateNodeSetup({
+        nodeUrl,
+        setupCode,
+        nodeName: setupNodeName,
+        admin: {
+          adminId: "admin",
+          displayName: "Admin",
+          password: setupCode.padEnd(10, "0"),
+        },
+        publicCapabilities: {
+          fetch: setupAllowPublicFetch,
+          search: setupAllowPublicFetch,
+          import: setupAllowPublicFetch,
+          stream: setupAllowPublicFetch,
+          download: setupAllowPublicFetch,
+          spillshare: false,
+          relay: false,
+        },
+        initialWatchers: [{
+          watcherId: setupAccountId.replace(/^acct_/, "watcher_"),
+          displayName: setupAccountName,
+          quotaBytes: Math.max(1, Math.round(setupQuotaGb)) * 1024 * 1024 * 1024,
+          profiles,
+        }],
+      });
+      const status = await fetchPrivateNodeStatus(nodeUrl);
+      setPrivateNodeStatus(status);
+      setPrivateAccounts(setup.accounts);
+      setPrivateAccountId(setup.accounts[0]?.accountId || "");
+      setPrivateSetupSecret("");
+      setPrivateNode(writePrivateNodeConnection({ ...privateNode, nodeUrl }));
+      setPrivateNodeMessage("Private node configured. Enroll your passkey with the setup code now.");
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Private node setup failed.");
+    } finally {
+      setPrivateNodeBusy(false);
     }
   }
 
@@ -938,8 +1038,14 @@ export function SettingsView({
 
         {activeTab === "private" ? (
           <div className="grid gap-4">
-            <Panel title="Private node" hint="Connect to your own server for private profiles, library sync, and node-side downloads.">
-              <PreferenceRow title="Node URL" hint="Use the public HTTPS URL for your private server when using the hosted dashboard.">
+            <Panel title="Private node" hint="Start the server with npm run start:server, then find it here. Setup and management open on dedicated pages.">
+              <PreferenceRow title="Find server" hint="Looks for your running node through local/native runtime and registered fetch nodes.">
+                <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleFindPrivateNode()}>
+                  <Terminal className="h-4 w-4" />
+                  {privateNodeBusy ? "Finding" : "Find server"}
+                </ActionButton>
+              </PreferenceRow>
+              <PreferenceRow title="Node URL" hint="Optional manual fallback if discovery cannot see your server.">
                 <div className="flex min-w-[min(34rem,100%)] flex-col gap-2 sm:flex-row">
                   <input
                     value={privateNodeInput}
@@ -958,10 +1064,16 @@ export function SettingsView({
                   {privateNodeStatus?.node?.mode === "full" ? <StatusPill tone="good">Private + fetch</StatusPill> : null}
                   {privateNodeStatus?.auth?.passkeysEnabled ? <StatusPill tone="good">Passkeys</StatusPill> : null}
                   {privateNodeStatus?.auth?.oidcProviders?.length ? <StatusPill>{privateNodeStatus.auth.oidcProviders.length} SSO</StatusPill> : null}
-                  <ActionButton onClick={() => setShowPrivateSetup((current) => !current)}>
-                    <Terminal className="h-4 w-4" />
-                    Setup
-                  </ActionButton>
+                  {privateNodeStatus?.auth?.setupRequired ? (
+                    <a className="rounded-full bg-white px-4 py-2 text-sm font-bold text-black" href={`/node/setup${privateNode.nodeUrl ? `?node=${encodeURIComponent(privateNode.nodeUrl)}` : ""}`}>
+                      Setup
+                    </a>
+                  ) : null}
+                  {privateNodeStatus?.auth?.privateAuthEnabled ? (
+                    <a className="rounded-full bg-white/10 px-4 py-2 text-sm font-bold text-white" href={`/node/admin${privateNode.nodeUrl ? `?node=${encodeURIComponent(privateNode.nodeUrl)}` : ""}`}>
+                      Manage server
+                    </a>
+                  ) : null}
                 </div>
               </PreferenceRow>
               {privateNodeMessage ? (
@@ -972,16 +1084,39 @@ export function SettingsView({
             </Panel>
 
             {showPrivateSetup ? (
-              <Panel title="Setup private node" hint="Create a private node config and start the server in full mode, which keeps fetch/search working while enabling private profiles and storage.">
+              <Panel title="Setup private node" hint="Enter the verification code printed by the server terminal, then create the admin account and choose public capabilities.">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <SourceRow title="Node name" hint="Shown in status and discovery.">
+                  <SourceRow title="Setup code" hint="Printed by the server terminal after it starts.">
+                    <input
+                      value={setupCode}
+                      onChange={(event) => setSetupCode(event.target.value.toUpperCase())}
+                      placeholder="ABC123"
+                      className="h-10 w-36 rounded-full border border-white/10 bg-black/30 px-4 text-sm font-bold uppercase tracking-[0.18em] text-white outline-none placeholder:text-white/28"
+                    />
+                  </SourceRow>
+                  {privateNodeStatus?.auth?.privateAuthEnabled && privateAccounts.length > 0 ? (
+                    <SourceRow title="Account" hint="Choose where to enroll the first passkey.">
+                      <select
+                        value={privateAccountId}
+                        onChange={(event) => setPrivateAccountId(event.target.value)}
+                        className="h-10 rounded-full border border-white/10 bg-black/40 px-4 text-sm text-white outline-none"
+                      >
+                        {privateAccounts.map((account) => (
+                          <option key={account.accountId} value={account.accountId}>
+                            {account.displayName}
+                          </option>
+                        ))}
+                      </select>
+                    </SourceRow>
+                  ) : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Node name" hint="Shown in status and discovery.">
                     <input
                       value={setupNodeName}
                       onChange={(event) => setSetupNodeName(event.target.value)}
                       className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Admin account" hint="The local account configured on your server.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Admin account" hint="The local account configured on your server.">
                     <input
                       value={setupAccountName}
                       onChange={(event) => {
@@ -992,22 +1127,22 @@ export function SettingsView({
                       }}
                       className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Account id" hint="Stable id stored in the private config.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Account id" hint="Stable id stored in the private config.">
                     <input
                       value={setupAccountId}
                       onChange={(event) => setSetupAccountId(event.target.value)}
                       className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Profiles" hint="Comma-separated profile names.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Profiles" hint="Comma-separated profile names.">
                     <input
                       value={setupProfileNames}
                       onChange={(event) => setSetupProfileNames(event.target.value)}
                       className="h-10 w-56 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Quota" hint="Shared account storage in GB.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Quota" hint="Shared account storage in GB.">
                     <input
                       type="number"
                       min={1}
@@ -1015,35 +1150,26 @@ export function SettingsView({
                       onChange={(event) => setSetupQuotaGb(Math.max(1, Number.parseInt(event.target.value, 10) || 1))}
                       className="h-10 w-32 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Setup secret" hint="Used once to enroll your first passkey.">
-                    <input
-                      type="password"
-                      value={setupCommandSecret}
-                      onChange={(event) => setSetupCommandSecret(event.target.value)}
-                      placeholder="change-this-secret"
-                      className="h-10 w-56 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Public fetch" hint="Let this server help with search, imports, streams, and downloads for browser users.">
+                    <Toggle
+                      label="Toggle public fetch capabilities"
+                      checked={setupAllowPublicFetch}
+                      onToggle={() => setSetupAllowPublicFetch((current) => !current)}
                     />
-                  </SourceRow>
+                  </SourceRow> : null}
                 </div>
-                <div className="mt-4 rounded-2xl border border-white/8 bg-black/30">
-                  <div className="flex items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
-                    <div className="text-sm font-semibold text-white">PowerShell command</div>
-                    <ActionButton onClick={() => void handleCopyPrivateSetupCommand()}>
-                      <Copy className="h-4 w-4" />
-                      Copy
-                    </ActionButton>
-                  </div>
-                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap p-4 text-xs leading-5 text-white/70">
-                    {privateSetupCommand}
-                  </pre>
+                <div className="mt-4 flex justify-end">
+                  <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleCompletePrivateSetup()}>
+                    {privateNodeStatus?.auth?.privateAuthEnabled ? "Enroll passkey" : "Setup node"}
+                  </ActionButton>
                 </div>
               </Panel>
             ) : null}
 
-            {privateAccounts.length > 0 && !privateNode.token ? (
-              <Panel title="Sign in">
-                <PreferenceRow title="Account" hint="Accounts and profiles are configured on the private server, not created here.">
+            {privateAccounts.length > 0 && !privateNode.token && !privateNodeStatus?.auth?.setupRequired ? (
+              <Panel title="Watcher sign in" hint="Watcher accounts are for profiles, library state, and private downloads. Admin management is separate.">
+                <PreferenceRow title="Watcher" hint="Choose the account that owns your profiles.">
                   <select
                     value={privateAccountId}
                     onChange={(event) => setPrivateAccountId(event.target.value)}
@@ -1056,9 +1182,23 @@ export function SettingsView({
                     ))}
                   </select>
                 </PreferenceRow>
+                <PreferenceRow title="Password" hint="Use the watcher password set during setup or in the Admin page.">
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="password"
+                      value={privateWatcherPassword}
+                      onChange={(event) => setPrivateWatcherPassword(event.target.value)}
+                      placeholder="Watcher password"
+                      className="h-10 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                    />
+                    <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePassword()}>
+                      Sign in
+                    </ActionButton>
+                  </div>
+                </PreferenceRow>
                 <PreferenceRow title="Passkey login" hint="Use an enrolled passkey for this account.">
                   <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePasskey()}>
-                    Sign in
+                    Sign in with passkey
                   </ActionButton>
                 </PreferenceRow>
                 <PreferenceRow title="Enroll passkey" hint="Requires the setup secret from the private server config. The app never stores it.">

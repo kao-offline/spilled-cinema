@@ -1,7 +1,9 @@
 import {
   createHash,
+  timingSafeEqual,
   generateKeyPairSync,
   randomBytes,
+  scryptSync,
   sign as cryptoSign,
   verify as cryptoVerify,
 } from "node:crypto";
@@ -24,11 +26,28 @@ export type NodeIdentity = {
 
 export type StoredSession = {
   sessionId: string;
-  kind: "anonymous" | "private";
+  kind: "anonymous" | "private" | "watcher" | "admin";
   token: string;
   expiresAt: number;
   scope: SessionScope;
   pairedDeviceId?: string;
+};
+
+export type PasswordHash = {
+  algorithm: "scrypt";
+  salt: string;
+  key: string;
+  N: number;
+  r: number;
+  p: number;
+  keyLength: number;
+};
+
+const DEFAULT_PASSWORD_PARAMS = {
+  N: 16384,
+  r: 8,
+  p: 1,
+  keyLength: 64,
 };
 
 export type PairedDevice = {
@@ -66,6 +85,34 @@ export function sha256(value: string | Buffer) {
 
 export function randomId(prefix: string) {
   return `${prefix}_${base64UrlEncode(randomBytes(12))}`;
+}
+
+export async function hashPassword(password: string): Promise<PasswordHash> {
+  const salt = base64UrlEncode(randomBytes(16));
+  const key = scryptSync(password, salt, DEFAULT_PASSWORD_PARAMS.keyLength, {
+    N: DEFAULT_PASSWORD_PARAMS.N,
+    r: DEFAULT_PASSWORD_PARAMS.r,
+    p: DEFAULT_PASSWORD_PARAMS.p,
+  });
+  return {
+    algorithm: "scrypt",
+    salt,
+    key: base64UrlEncode(key),
+    ...DEFAULT_PASSWORD_PARAMS,
+  };
+}
+
+export async function verifyPassword(password: string, hash: PasswordHash): Promise<boolean> {
+  if (hash.algorithm !== "scrypt") {
+    return false;
+  }
+  const expected = base64UrlDecode(hash.key);
+  const actual = scryptSync(password, hash.salt, hash.keyLength, {
+    N: hash.N,
+    r: hash.r,
+    p: hash.p,
+  });
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 export function generateNodeIdentity(): NodeIdentity {

@@ -22,6 +22,148 @@ function buildFileName(body) {
   return `${show} - S${season}E${episode} - ${episodeTitle}.mp4`;
 }
 
+function matchOne(html, pattern) {
+  const match = html.match(pattern);
+  return (match && match[1] && match[1].trim()) || null;
+}
+
+function absoluteUrl(value, base) {
+  try {
+    return new URL(value, base).toString();
+  } catch {
+    return value;
+  }
+}
+
+function shouldResolvePlayerUrl(provider, embedUrl) {
+  const signature = `${provider || ""} ${embedUrl || ""}`.toLowerCase();
+  return /(?:^|[^a-z])(2embed|multiembed|moviesclub|primewire)(?:[^a-z]|$)/i.test(signature);
+}
+
+function extractIframeCandidate(html, currentUrl) {
+  const iframeSrc = matchOne(html, /<iframe[^>]+src=["']([^"'#?][^"']*)["']/i);
+  if (!iframeSrc) {
+    return null;
+  }
+
+  return absoluteUrl(iframeSrc, currentUrl);
+}
+
+function extractRedirectCandidate(html, currentUrl) {
+  const candidates = [
+    matchOne(html, /window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i),
+    matchOne(html, /window\.location\s*=\s*["']([^"']+)["']/i),
+    matchOne(html, /top\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i),
+    matchOne(html, /parent\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i),
+    matchOne(html, /location\.replace\(\s*["']([^"']+)["']\s*\)/i),
+    matchOne(html, /location\.assign\(\s*["']([^"']+)["']\s*\)/i),
+    matchOne(html, /<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"']+)["']/i),
+  ].filter(Boolean);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return absoluteUrl(candidates[0], currentUrl);
+}
+
+function chooseResolvedPlayerCandidate(html, currentUrl, provider) {
+  const iframeCandidate = extractIframeCandidate(html, currentUrl);
+  const redirectCandidate = extractRedirectCandidate(html, currentUrl);
+  const signature = `${provider || ""} ${currentUrl}`.toLowerCase();
+
+  if (/moviesclub/.test(signature)) {
+    return iframeCandidate || null;
+  }
+
+  if (/primewire/.test(signature)) {
+    return redirectCandidate || iframeCandidate || null;
+  }
+
+  if (/2embed|multiembed/.test(signature)) {
+    return iframeCandidate || redirectCandidate || null;
+  }
+
+  return iframeCandidate || redirectCandidate || null;
+}
+
+async function fetchPlayerHtml(targetUrl, refererUrl) {
+  const response = await fetch(targetUrl, {
+    redirect: "follow",
+    headers: {
+      "user-agent": USER_AGENT,
+      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "en-US,en;q=0.9",
+      referer: refererUrl || targetUrl,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Player page request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const finalUrl = response.url || targetUrl;
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+    return { finalUrl, html: null };
+  }
+
+  return {
+    finalUrl,
+    html: await response.text(),
+  };
+}
+
+async function resolvePlayerEmbedUrl(input) {
+  let currentUrl = input.embedUrl;
+  let refererUrl;
+  const visited = new Set();
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (visited.has(currentUrl)) {
+      break;
+    }
+    visited.add(currentUrl);
+
+    const { finalUrl, html } = await fetchPlayerHtml(currentUrl, refererUrl);
+    currentUrl = finalUrl;
+
+    if (!html) {
+      return currentUrl;
+    }
+
+    const candidate = chooseResolvedPlayerCandidate(html, currentUrl, input.provider);
+    if (!candidate || candidate === currentUrl || visited.has(candidate)) {
+      return currentUrl;
+    }
+
+    refererUrl = currentUrl;
+    currentUrl = candidate;
+  }
+
+  return currentUrl;
+}
+
+function getDirectStreamUrl(candidate) {
+  const directUrl = candidate.streamUrl || candidate.resolvedUrl;
+  if (typeof directUrl !== "string") {
+    return null;
+  }
+
+  const trimmed = directUrl.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function validateHttpUrl(value) {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Resolved stream has unsupported protocol.");
+  }
+
+  return parsed.toString();
+}
+
 function splitByPlus(expression) {
   const chunks = [];
   let current = "";
@@ -248,15 +390,151 @@ async function resolveF16PxStream(embedUrl) {
   return unique.find((entry) => /\.mp4(?:$|[?#])/i.test(entry)) ?? unique.find((entry) => entry.includes(".m3u8")) ?? unique[0] ?? null;
 }
 
+function extractByseLikeVideoCode(embedUrl) {
+  try {
+    const parsed = new URL(embedUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (!/(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$/i.test(host)) {
+      return null;
+    }
+
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const code = parts[0] === "e" ? parts[1] : parts.at(-1);
+    if (!code || !/^[a-z0-9_-]{6,80}$/i.test(code)) {
+      return null;
+    }
+
+    return {
+      origin: parsed.origin,
+      code,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveByseLikeStream(embedUrl) {
+  const parsed = extractByseLikeVideoCode(embedUrl);
+  if (!parsed) {
+    return null;
+  }
+
+  const playbackUrl = `${parsed.origin}/api/videos/${encodeURIComponent(parsed.code)}/embed/playback`;
+  const response = await fetch(playbackUrl, {
+    method: "POST",
+    headers: {
+      "user-agent": USER_AGENT,
+      accept: "application/json,text/plain,*/*",
+      "content-type": "application/json",
+      referer: embedUrl,
+      origin: parsed.origin,
+      "x-embed-origin": "www.bombuj.si",
+      "x-embed-referer": "https://www.bombuj.si/",
+    },
+    body: JSON.stringify({
+      fingerprint: {
+        token: "",
+        viewer_id: "",
+        device_id: "",
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 405) {
+      const downloadsResponse = await fetch(`${parsed.origin}/api/videos/${encodeURIComponent(parsed.code)}/downloads`, {
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "application/json,text/plain,*/*",
+          referer: embedUrl,
+        },
+      }).catch(() => null);
+      const downloads = downloadsResponse && downloadsResponse.ok ? await downloadsResponse.json().catch(() => null) : null;
+      if (downloads && downloads.recaptcha_required) {
+        throw new Error("Byse exposes this file only through its download gate with reCAPTCHA, so the fetch server cannot resolve a direct stream URL.");
+      }
+    }
+    return null;
+  }
+
+  const body = await response.json();
+  const pb = body && body.playback;
+  if (!pb) {
+    return null;
+  }
+
+  const sources = [];
+
+  if (pb.iv && pb.payload && Array.isArray(pb.key_parts) && pb.key_parts.length > 0) {
+    const key = Buffer.concat(pb.key_parts.map((value) => base64UrlToBuffer(value)));
+    const decoded = decryptAesGcmPayload(pb.iv, pb.payload, key);
+    sources.push(...extractSources(decoded));
+  }
+
+  if (pb.iv2 && pb.payload2 && pb.decrypt_keys && pb.decrypt_keys.edge_1 && pb.decrypt_keys.edge_2) {
+    const key2 = Buffer.concat([base64UrlToBuffer(pb.decrypt_keys.edge_1), base64UrlToBuffer(pb.decrypt_keys.edge_2)]);
+    const decoded2 = decryptAesGcmPayload(pb.iv2, pb.payload2, key2);
+    sources.push(...extractSources(decoded2));
+  }
+
+  const unique = Array.from(new Set(sources));
+  return unique.find((entry) => entry.includes(".m3u8")) ?? unique.find((entry) => /\.mp4(?:$|[?#])/i.test(entry)) ?? unique[0] ?? null;
+}
+
+function isSvetSerialuUrl(value) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "svetserialu.to" || host === "svetserialu.io" || host === "svetserialov.to";
+  } catch {
+    return false;
+  }
+}
+
+function extractSvetSerialuSourceUrls(text, baseUrl) {
+  const urls = [];
+
+  for (const match of text.matchAll(/<[^>]*\bclass=["'][^"']*\bsource_link\b[^"']*["'][^>]*>/gi)) {
+    const tag = match[0] || "";
+    const encoded = tag.match(/\bdata-iframe=["']([^"']+)["']/i)?.[1];
+    if (!encoded) continue;
+
+    try {
+      const decoded = Buffer.from(encoded, "base64").toString("utf8");
+      urls.push(new URL(decoded, baseUrl).toString());
+    } catch {
+      // Ignore malformed source buttons.
+    }
+  }
+
+  return Array.from(new Set(urls));
+}
+
+function extractSvetSerialuEmbedUrl(text, baseUrl) {
+  const iframeSrc = text.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1];
+  if (iframeSrc) {
+    const embedUrl = new URL(iframeSrc, baseUrl).toString();
+    if (!embedUrl.includes("/sources/")) return embedUrl;
+  }
+
+  const redirectUrl = text.match(/window\.location\.href\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (redirectUrl) {
+    const embedUrl = new URL(redirectUrl, baseUrl).toString();
+    if (!embedUrl.includes("/sources/")) return embedUrl;
+  }
+
+  return null;
+}
+
 async function resolveStreamUrl(embedUrl) {
   if (!embedUrl || typeof embedUrl !== "string") return null;
 
-  if (embedUrl.includes("svetserialu.to/sources/")) {
-    throw new Error("Episode using svetserialu internal endpoint. Re-import the show to refresh providers.");
-  }
-
   if (embedUrl.includes("f16px")) {
     return resolveF16PxStream(embedUrl);
+  }
+
+  const byseStream = await resolveByseLikeStream(embedUrl);
+  if (byseStream) {
+    return byseStream;
   }
 
   if (/streamtape\./i.test(embedUrl)) {
@@ -286,6 +564,27 @@ async function resolveStreamUrl(embedUrl) {
     const m3u8Match = html.match(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/i);
     if (m3u8Match && m3u8Match[0]) {
       return m3u8Match[0].replace(/\\u0026/g, "&");
+    }
+
+    const finalUrl = response.url || embedUrl;
+    if (isSvetSerialuUrl(finalUrl)) {
+      const sourceUrls = finalUrl.includes("/sources/") ? [finalUrl] : extractSvetSerialuSourceUrls(html, finalUrl);
+      for (const sourceUrl of sourceUrls) {
+        const sourceResponse = await fetch(sourceUrl, {
+          headers: {
+            "user-agent": USER_AGENT,
+            accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            referer: finalUrl,
+          },
+          redirect: "follow",
+        }).catch(() => null);
+        if (!sourceResponse || !sourceResponse.ok) continue;
+        const sourceHtml = await sourceResponse.text();
+        const sourceEmbedUrl = extractSvetSerialuEmbedUrl(sourceHtml, sourceResponse.url || sourceUrl);
+        if (!sourceEmbedUrl) continue;
+        const resolved = await resolveStreamUrl(sourceEmbedUrl);
+        if (resolved) return resolved;
+      }
     }
   } catch {
     return null;
@@ -323,7 +622,13 @@ module.exports = async function handler(req, res) {
     const body = await readBody(req);
 
     const mergedCandidates = [
-      { embedUrl: body.embedUrl, subtitlesUrl: body.subtitlesUrl },
+      {
+        provider: body.provider,
+        embedUrl: body.embedUrl,
+        subtitlesUrl: body.subtitlesUrl,
+        streamUrl: body.streamUrl,
+        resolvedUrl: body.resolvedUrl,
+      },
       ...(Array.isArray(body.streamCandidates) ? body.streamCandidates : []),
     ];
 
@@ -348,7 +653,14 @@ module.exports = async function handler(req, res) {
 
     for (const candidate of dedupedCandidates) {
       try {
-        const resolved = await resolveStreamUrl(candidate.embedUrl);
+        const directUrl = getDirectStreamUrl(candidate);
+        const resolved = directUrl
+          ? validateHttpUrl(directUrl)
+          : await resolveStreamUrl(
+              (shouldResolvePlayerUrl(candidate.provider, candidate.embedUrl)
+                ? await resolvePlayerEmbedUrl({ embedUrl: candidate.embedUrl, provider: candidate.provider })
+                : candidate.embedUrl) || candidate.embedUrl,
+            );
         if (resolved) {
           selectedCandidate = candidate;
           resolvedUrl = resolved;
@@ -366,14 +678,6 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    const parsed = new URL(resolvedUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      res.statusCode = 422;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Resolved stream has unsupported protocol." }));
-      return;
-    }
-
     const fileName = buildFileName(body);
     const referer = selectedCandidate.embedUrl || body.embedUrl || "";
     const downloadUrl = `/api/download-full/browser-file?url=${encodeURIComponent(resolvedUrl)}&name=${encodeURIComponent(fileName)}&referer=${encodeURIComponent(referer)}`;
@@ -384,6 +688,7 @@ module.exports = async function handler(req, res) {
       JSON.stringify({
         downloadUrl,
         resolvedUrl,
+        refererUrl: referer,
       }),
     );
   } catch (error) {
