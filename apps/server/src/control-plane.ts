@@ -6,8 +6,16 @@ export type ControlPlaneReporterOptions = {
   fetchTimeoutMs?: number;
 };
 
+type ControlPlaneAck = {
+  ok?: boolean;
+  kind?: string;
+  nodeId?: string;
+  expiresAt?: number;
+};
+
 export class ControlPlaneReporter {
   private timer: NodeJS.Timeout | null = null;
+  private loggedHeartbeatAck = false;
 
   constructor(
     private readonly runtime: SpilledCinemaNodeRuntime,
@@ -52,16 +60,34 @@ export class ControlPlaneReporter {
     return await this.postJson("node/heartbeat", await this.createPayload());
   }
 
+  private logAck(action: "register" | "heartbeat", response: unknown) {
+    const ack = response && typeof response === "object" ? response as ControlPlaneAck : {};
+    if (!ack.ok || !ack.nodeId) {
+      console.log(`[control-plane] ${action} acknowledged by ${this.options.baseUrl}`);
+      return;
+    }
+
+    const expires = typeof ack.expiresAt === "number" ? `, expires ${new Date(ack.expiresAt).toISOString()}` : "";
+    console.log(`[control-plane] ${action} acknowledged by ${this.options.baseUrl}: ${ack.nodeId}${expires}`);
+  }
+
   start() {
     if (this.timer) {
       return;
     }
 
-    void this.register().catch((error) => {
+    void this.register().then((response) => {
+      this.logAck("register", response);
+    }).catch((error) => {
       console.warn("[control-plane] register failed", error instanceof Error ? error.message : String(error));
     });
     this.timer = setInterval(() => {
-      void this.heartbeat().catch((error) => {
+      void this.heartbeat().then((response) => {
+        if (!this.loggedHeartbeatAck) {
+          this.loggedHeartbeatAck = true;
+          this.logAck("heartbeat", response);
+        }
+      }).catch((error) => {
         console.warn("[control-plane] heartbeat failed", error instanceof Error ? error.message : String(error));
       });
     }, this.options.intervalMs ?? 30_000);

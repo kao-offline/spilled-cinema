@@ -151,7 +151,7 @@ async function probeFetchServer() {
     for (const endpoint of endpoints) {
       const origin = endpoint.url!.replace(/\/$/, "");
       try {
-        const statusResponse = await fetch(`${origin}/api/status`, {
+        const statusResponse = await fetch(buildFetchServerStatusUrl(origin), {
           headers: { "bypass-tunnel-reminder": "true" },
         });
         if (!statusResponse.ok) {
@@ -173,6 +173,26 @@ async function probeFetchServer() {
   } catch {
     return null;
   }
+}
+
+function shouldProxyFetchServerOrigin(origin: string) {
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    return hostname === "loca.lt" || hostname.endsWith(".loca.lt");
+  } catch {
+    return false;
+  }
+}
+
+export function buildFetchServerStatusUrl(origin: string) {
+  if (!shouldProxyFetchServerOrigin(origin)) {
+    return `${origin}/api/status`;
+  }
+
+  const url = new URL("/api/node-proxy", window.location.origin);
+  url.searchParams.set("node", origin);
+  url.searchParams.set("path", "/api/status");
+  return url.toString();
 }
 
 export async function probeLocalRuntime(): Promise<LocalRuntimeStatus> {

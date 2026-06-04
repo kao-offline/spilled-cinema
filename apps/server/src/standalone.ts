@@ -70,6 +70,7 @@ let restartingPublicTunnel: Promise<void> | null = null;
 let publicTunnelFailureCount = 0;
 
 const PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT || "3", 10);
+const PUBLIC_TUNNEL_START_TIMEOUT_MS = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_START_TIMEOUT_MS || "15000", 10);
 
 function sanitizeTunnelSubdomain(value: string) {
   return value
@@ -229,15 +230,42 @@ async function startPublicTunnel() {
     return null;
   }
 
+  function withTunnelStartTimeout<T>(promise: Promise<T>, label: string) {
+    let timeout: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(`${label} did not return a tunnel URL within ${PUBLIC_TUNNEL_START_TIMEOUT_MS}ms`));
+      }, PUBLIC_TUNNEL_START_TIMEOUT_MS);
+    });
+
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    });
+  }
+
   try {
-    const subdomain = await getPreferredTunnelSubdomain();
     const localtunnelModule = await import("localtunnel");
     const createTunnel = localtunnelModule.default ?? localtunnelModule;
-    const tunnel = await createTunnel({
-      port,
-      local_host: "127.0.0.1",
-      ...(subdomain ? { subdomain } : {}),
-    });
+
+    async function openTunnel(subdomain?: string) {
+      const label = subdomain ? `localtunnel subdomain ${subdomain}` : "localtunnel random subdomain";
+      return await withTunnelStartTimeout(createTunnel({
+        port,
+        local_host: "127.0.0.1",
+        ...(subdomain ? { subdomain } : {}),
+      }), label);
+    }
+
+    const subdomain = await getPreferredTunnelSubdomain();
+    let tunnel: Awaited<ReturnType<typeof openTunnel>>;
+    try {
+      tunnel = await openTunnel(subdomain);
+    } catch (error) {
+      console.warn("[spilledcinema-server] preferred public fetch tunnel failed", error instanceof Error ? error.message : String(error));
+      tunnel = await openTunnel();
+    }
     const tunnelUrl = String(tunnel.url).replace(/\/$/, "");
 
     tunnel.on?.("close", () => {
@@ -334,6 +362,7 @@ async function restartPublicTunnel() {
 
     publicTunnel = nextTunnel;
     publicTunnelFailureCount = 0;
+    handlers.runtime.setEndpointUrl(nextTunnel.url);
     setNodeEndpointUrl(nextTunnel.url);
     console.log(`[spilledcinema-server] public fetch server ${nextTunnel.url}`);
     void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
@@ -355,6 +384,7 @@ async function startServerServices() {
   console.log(`[spilledcinema-server] listening on http://${host}:${port}`);
   publicTunnel = await startPublicTunnel();
   if (publicTunnel) {
+    handlers.runtime.setEndpointUrl(publicTunnel.url);
     setNodeEndpointUrl(publicTunnel.url);
     console.log(`[spilledcinema-server] public fetch server ${publicTunnel.url}`);
     void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
@@ -363,6 +393,7 @@ async function startServerServices() {
       }
     });
   } else if (process.env.SPILLED_NODE_ENDPOINT_URL) {
+    handlers.runtime.setEndpointUrl(process.env.SPILLED_NODE_ENDPOINT_URL);
     console.log(`[spilledcinema-server] public fetch server ${process.env.SPILLED_NODE_ENDPOINT_URL}`);
   } else {
     console.warn("[spilledcinema-server] no public fetch tunnel available; this node is local-only");
