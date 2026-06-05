@@ -273,7 +273,7 @@ async function fetchFetchServerCandidates(path: string) {
   const origins: string[] = [];
 
   for (const candidateCapability of capabilities) {
-    const response = await fetchWithTimeout(`/api/server/discovery/nodes?capability=${encodeURIComponent(candidateCapability)}&limit=12`, {
+    const response = await fetchWithTimeout(`/api/server?path=discovery%2Fnodes&capability=${encodeURIComponent(candidateCapability)}&limit=12`, {
       method: "GET",
       headers: { Accept: "application/json" },
     });

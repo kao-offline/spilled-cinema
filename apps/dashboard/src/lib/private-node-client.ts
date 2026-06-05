@@ -145,7 +145,7 @@ export async function fetchPrivateNodeStatus(nodeUrl: string) {
 
 async function findDiscoveryNodeOrigins() {
   try {
-    const response = await fetch("/api/server/discovery/nodes?capability=fetch&limit=20", {
+    const response = await fetch("/api/server?path=discovery%2Fnodes&capability=fetch&limit=20", {
       headers: { Accept: "application/json" },
     });
     if (!response.ok) {

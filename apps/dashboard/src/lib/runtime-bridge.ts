@@ -132,7 +132,7 @@ async function probeSameOriginLocalNode() {
 
 async function probeFetchServer() {
   try {
-    const response = await fetch("/api/server/discovery/nodes?capability=fetch&limit=8");
+    const response = await fetch("/api/server?path=discovery%2Fnodes&capability=fetch&limit=8");
     if (!response.ok) {
       return null;
     }
