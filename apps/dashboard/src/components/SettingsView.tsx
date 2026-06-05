@@ -66,7 +66,9 @@ type SettingsViewProps = {
   onResetVaultLink: () => Promise<void>;
   onRefreshVaultStatus: () => void | Promise<void>;
   providerFeeds: ProviderFeedCatalogEntry[];
+  providerRepositoryUrls: string[];
   onToggleProviderFeed: (moduleId: string, feedId: string) => void;
+  onProviderRepositoriesChange: (urls: string[]) => void;
 };
 
 type SettingsTab = "general" | "storage" | "sources" | "private" | "advanced";
@@ -259,12 +261,15 @@ export function SettingsView({
   onResetVaultLink,
   onRefreshVaultStatus,
   providerFeeds,
+  providerRepositoryUrls,
   onToggleProviderFeed,
+  onProviderRepositoriesChange,
 }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [folderBusy, setFolderBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [feedModuleId, setFeedModuleId] = useState<IntegrationId | null>(null);
+  const [repositoryInput, setRepositoryInput] = useState("");
   const [privateNode, setPrivateNode] = useState<PrivateNodeConnection>(() => readPrivateNodeConnection());
   const [privateNodeInput, setPrivateNodeInput] = useState(() => readPrivateNodeConnection().nodeUrl);
   const [privateNodeStatus, setPrivateNodeStatus] = useState<Awaited<ReturnType<typeof fetchPrivateNodeStatus>> | null>(null);
@@ -459,6 +464,15 @@ export function SettingsView({
 
   function handleSetPreferredSource(key: "preferredSeriesSource" | "preferredMovieSource", value: IntegrationId) {
     onSettingsChange({ [key]: value } as Partial<LibrarySettings>);
+  }
+
+  function addProviderRepository() {
+    const value = repositoryInput.trim().replace(/\/+$/, "");
+    if (!value || providerRepositoryUrls.includes(value)) {
+      return;
+    }
+    onProviderRepositoriesChange([...providerRepositoryUrls, value]);
+    setRepositoryInput("");
   }
 
   function renderFolderActions() {
@@ -1032,6 +1046,49 @@ export function SettingsView({
                   );
                 })}
               </div>
+            </Panel>
+
+            <Panel title="Connector repositories" hint="Paste a repository URL that contains spilled-connectors.json. GitHub repository links are resolved automatically.">
+              <PreferenceRow title="Repository URL" hint="Use this for extra connector manifests without changing the app bundle.">
+                <div className="flex min-w-[min(34rem,100%)] flex-col gap-2 sm:flex-row">
+                  <input
+                    value={repositoryInput}
+                    onChange={(event) => setRepositoryInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        addProviderRepository();
+                      }
+                    }}
+                    placeholder="https://github.com/owner/spilled-connectors"
+                    className="h-10 min-w-0 flex-1 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  />
+                  <ActionButton variant="primary" onClick={addProviderRepository}>
+                    <Plus className="h-4 w-4" />
+                    Add
+                  </ActionButton>
+                </div>
+              </PreferenceRow>
+              <PreferenceRow title="Installed repositories" hint={providerRepositoryUrls.length > 0 ? `${providerRepositoryUrls.length} custom source(s).` : "Only bundled defaults are active."}>
+                <ActionButton onClick={() => onProviderRepositoriesChange(providerRepositoryUrls)}>
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </ActionButton>
+              </PreferenceRow>
+              {providerRepositoryUrls.length > 0 ? (
+                <div className="grid gap-3">
+                  {providerRepositoryUrls.map((url) => (
+                    <SourceRow key={url} title={url} hint="Custom connector repository">
+                      <button
+                        type="button"
+                        onClick={() => onProviderRepositoriesChange(providerRepositoryUrls.filter((entry) => entry !== url))}
+                        className="rounded-full bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/18"
+                      >
+                        Remove
+                      </button>
+                    </SourceRow>
+                  ))}
+                </div>
+              ) : null}
             </Panel>
           </div>
         ) : null}

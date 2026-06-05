@@ -1,6 +1,16 @@
 import { Download, LoaderCircle, Search } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
+import type { IntegrationId } from "../lib/integrations";
+
+type ImportSearchResult = {
+  title: string;
+  slug: string;
+  platform: IntegrationId;
+  posterUrl?: string | null;
+  mediaType?: "movie" | "serial";
+  year?: string | null;
+};
 
 type ImportViewProps = {
   importSlug: string;
@@ -9,22 +19,8 @@ type ImportViewProps = {
   importing: boolean;
   importMessage: string | null;
   isSearching: boolean;
-  searchResults: {
-    title: string;
-    slug: string;
-    platform: "svetserialu" | "bombuj";
-    posterUrl?: string | null;
-    mediaType?: "movie" | "serial";
-    year?: string | null;
-  }[];
-  onPickResult: (result: {
-    title: string;
-    slug: string;
-    platform: "svetserialu" | "bombuj";
-    posterUrl?: string | null;
-    mediaType?: "movie" | "serial";
-    year?: string | null;
-  }) => void;
+  searchResults: ImportSearchResult[];
+  onPickResult: (result: ImportSearchResult) => void;
 };
 
 export function ImportView({
@@ -122,7 +118,7 @@ export function ImportView({
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-semibold text-white">{result.title}</div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-white/35">
-                        <span>{result.platform === "svetserialu" ? "SvetSerialu" : "Bombuj"}</span>
+                        <span>{result.platform === "svetserialu" ? "SvetSerialu" : result.platform === "bombuj" ? "Bombuj" : "Synova"}</span>
                         {result.mediaType ? <span>{result.mediaType}</span> : null}
                         {result.year ? <span>{result.year}</span> : null}
                       </div>

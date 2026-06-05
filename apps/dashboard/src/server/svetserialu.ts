@@ -1,7 +1,14 @@
 import { Buffer } from "node:buffer";
 import type { ImportedShow, LibraryEpisode, PlayerAlias } from "../lib/types";
 import { enrichArtwork } from "./artwork";
-import { scoreSearchCandidate } from "../lib/search-ranking";
+import { searchExternalTitles, type ExternalTitleCandidate } from "./external-title-search";
+import {
+  compareSearchScores,
+  hasRequiredSearchTokenCoverage,
+  hasSignificantSearchTokenMatch,
+  keepHighConfidenceSearchResults,
+  scoreSearchCandidate,
+} from "../lib/search-ranking";
 
 const BASE_URLS: string[] = ["https://svetserialu.to", "https://svetserialu.io"];
 const BASE_URL = BASE_URLS[0];
@@ -536,26 +543,28 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
   };
 }
 
-export async function searchSvetSerialu(
+export type SvetSerialuSearchResult = {
+  title: string;
+  slug: string;
+  platform: "svetserialu";
+  posterUrl?: string | null;
+  mediaType?: "serial";
+  year?: string | null;
+  matchScore?: number;
+};
+
+async function searchSvetSerialuProvider(
   query: string,
-): Promise<
-  {
-    title: string;
-    slug: string;
-    platform: "svetserialu";
-    posterUrl?: string | null;
-    mediaType?: "serial";
-    year?: string | null;
-    matchScore?: number;
-  }[]
-> {
+  options: { limit?: number; scoreBoost?: number; strict?: boolean } = {},
+): Promise<SvetSerialuSearchResult[]> {
    try {
       const sanitized = encodeURIComponent(query);
+      const limit = options.limit ?? 8;
       // Search results are returned by the homepage endpoint with searchfor param.
       const html = await fetchText(`${BASE_URL}/?searchfor=${sanitized}`);
       const matches = [...html.matchAll(/href="\/serial\/([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
 
-      const results = [];
+      const results: SvetSerialuSearchResult[] = [];
       for (const [index, m] of matches.entries()) {
          if (!m[1].includes("/")) { // ignore deeper links
             const titleMatch = m[2].match(/class="name-search nunito">([\s\S]*?)<\/span>/i);
@@ -566,22 +575,82 @@ export async function searchSvetSerialu(
             const yearMatch = m[2].match(/class="year-search[^"]*">([\s\S]*?)<\/span>/i);
             const title = stripTags(rawTitle).trim() || m[1].replace(/-/g, " ");
             const altTitle = stripTags(rawAltTitle).trim();
-            results.push({
-               title,
-               slug: m[1],
-               platform: "svetserialu" as const,
-               posterUrl: posterMatch ? absoluteUrl(posterMatch[1], BASE_URL) : null,
-               mediaType: "serial" as const,
-               year: yearMatch ? stripTags(yearMatch[1]).trim() : null,
-               matchScore: scoreSearchCandidate(query, [title, altTitle, m[1].replace(/-/g, " ")], index),
-            });
+            const year = yearMatch ? stripTags(yearMatch[1]).trim() : null;
+            const baseScore = scoreSearchCandidate(query, [title, altTitle, m[1].replace(/-/g, " "), year], index);
+            if (baseScore > 0 && providerCandidateMatches(query, [title, altTitle, m[1].replace(/-/g, " "), year], Boolean(options.strict))) {
+              results.push({
+                 title,
+                 slug: m[1],
+                 platform: "svetserialu" as const,
+                 posterUrl: posterMatch ? absoluteUrl(posterMatch[1], BASE_URL) : null,
+                 mediaType: "serial" as const,
+                 year,
+                 matchScore: baseScore + (options.scoreBoost ?? 0),
+              });
+            }
          }
       }
 
       return Array.from(new Map(results.map(r => [r.slug, r])).values())
         .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0))
-        .slice(0, 8);
+        .slice(0, limit);
    } catch {
       return [];
    }
+}
+
+function providerCandidateMatches(query: string, fields: Array<string | null | undefined>, strict: boolean) {
+  return strict
+    ? hasRequiredSearchTokenCoverage(query, fields)
+    : hasSignificantSearchTokenMatch(query, fields);
+}
+
+function scoreSvetProviderMatchForCatalog(query: string, result: SvetSerialuSearchResult, catalog: ExternalTitleCandidate, index: number) {
+  const titleScore = scoreSearchCandidate(catalog.title, [
+    result.title,
+    result.slug.replace(/-/g, " "),
+    result.year,
+  ], index);
+  const originalScore = catalog.originalTitle
+    ? scoreSearchCandidate(catalog.originalTitle, [result.title, result.slug.replace(/-/g, " "), result.year], index)
+    : 0;
+  const queryScore = scoreSearchCandidate(query, [catalog.title, catalog.originalTitle, catalog.year], index);
+  const yearBonus = catalog.year && result.year === catalog.year ? 220 : 0;
+  const yearPenalty = catalog.year && result.year && result.year !== catalog.year ? -160 : 0;
+
+  return Math.max(titleScore, originalScore) + queryScore + yearBonus + yearPenalty + Math.round(catalog.matchScore / 2);
+}
+
+export async function searchSvetSerialu(query: string): Promise<SvetSerialuSearchResult[]> {
+  const catalog = (await searchExternalTitles(query, 8)).filter((candidate) => candidate.mediaType === "serial");
+  const targeted = await mapWithConcurrency(catalog, 4, async (candidate) => {
+    const terms = [
+      candidate.title,
+      candidate.originalTitle && candidate.originalTitle !== candidate.title ? candidate.originalTitle : null,
+    ].filter(Boolean) as string[];
+    const termResults = await mapWithConcurrency(terms, 2, async (term) => (
+      searchSvetSerialuProvider(term, {
+        limit: 4,
+        scoreBoost: Math.round(candidate.matchScore / 3),
+        strict: true,
+      })
+    ));
+
+    return termResults.flat().map((result, index) => ({
+      ...result,
+      posterUrl: result.posterUrl ?? candidate.posterUrl ?? null,
+      year: result.year ?? candidate.year ?? null,
+      matchScore: scoreSvetProviderMatchForCatalog(query, result, candidate, index),
+    }));
+  });
+  const direct = await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8 });
+  const unique = new Map<string, SvetSerialuSearchResult>();
+
+  for (const result of [...targeted.flat(), ...direct].sort(compareSearchScores)) {
+    if (!unique.has(result.slug)) {
+      unique.set(result.slug, result);
+    }
+  }
+
+  return keepHighConfidenceSearchResults([...unique.values()]).slice(0, 8);
 }

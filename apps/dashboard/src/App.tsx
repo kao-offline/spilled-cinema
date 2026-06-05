@@ -104,10 +104,12 @@ import type {
 import {
   readCachedProviderModules,
   readEnabledProviderFeeds,
+  readProviderRepositoryUrls,
   sanitizeEnabledProviderFeeds,
   toggleEnabledProviderFeed,
   writeCachedProviderModules,
   writeEnabledProviderFeeds,
+  writeProviderRepositoryUrls,
 } from "./lib/provider-feed-storage";
 import { fetchProviderFeed, fetchProviderModules, searchProviderModuleItems } from "./lib/provider-modules-client";
 import {
@@ -210,14 +212,14 @@ function getPlatformPriority(
 type RemoteSearchResult = {
   title: string;
   slug: string;
-  platform: "svetserialu" | "bombuj";
+  platform: IntegrationId;
   posterUrl?: string | null;
   mediaType?: "movie" | "serial";
   year?: string | null;
 };
 
 function prioritizeImportSearchResults(results: RemoteSearchResult[]) {
-  return results.slice(0, 4);
+  return results.filter((result) => result.platform !== "synova").slice(0, 4);
 }
 
 function isExactImportSearchMatch(query: string, result: RemoteSearchResult) {
@@ -403,7 +405,7 @@ function AppContent() {
   const [remoteResults, setRemoteResults] = useState<{
     title: string;
     slug: string;
-    platform: "svetserialu" | "bombuj";
+    platform: IntegrationId;
     posterUrl?: string | null;
     mediaType?: "movie" | "serial";
     year?: string | null;
@@ -422,6 +424,7 @@ function AppContent() {
   const [exploreLoading, setExploreLoading] = useState(false);
   const [exploreError, setExploreError] = useState<string | null>(null);
   const [providerModules, setProviderModules] = useState<ProviderModuleManifest[]>(() => cachedProviderModules.modules);
+  const [providerRepositoryUrls, setProviderRepositoryUrls] = useState<string[]>(() => readProviderRepositoryUrls());
   const [enabledProviderFeeds, setEnabledProviderFeeds] = useState<EnabledProviderFeed[]>(() =>
     sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), cachedProviderModules.modules),
   );
@@ -464,7 +467,7 @@ function AppContent() {
 
     const loadProviderModuleCatalog = async () => {
       try {
-        const modules = await fetchProviderModules();
+        const modules = await fetchProviderModules(providerRepositoryUrls);
         if (canceled) {
           return;
         }
@@ -486,7 +489,7 @@ function AppContent() {
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [providerRepositoryUrls]);
 
   async function refreshVaultState() {
     const status = await getVaultStatus();
@@ -976,11 +979,12 @@ function AppContent() {
       {
         svetserialu: [] as typeof remoteResults,
         bombuj: [] as typeof remoteResults,
+        synova: [] as typeof remoteResults,
       },
     );
   }, [remoteResults]);
   const remotePlatformOrder = useMemo(() => {
-    const baseOrder: IntegrationId[] = ["svetserialu", "bombuj"];
+    const baseOrder: IntegrationId[] = ["svetserialu", "bombuj", "synova"];
     return [...baseOrder].sort((left, right) => {
       const rightScore = getPlatformPriority(
         right,
@@ -1773,9 +1777,13 @@ function AppContent() {
     setImportMessage(null);
 
     try {
-      const show = platform === "bombuj" 
+      if (platform === "synova") {
+        throw new Error("Synova currently supports catalog discovery only. Open the source page from the feed instead.");
+      }
+
+      const show = platform === "bombuj"
         ? await importBombujMovie(slug, mediaType)
-         : await importSvetSerialuShow(slug);
+        : await importSvetSerialuShow(slug);
 
       const nextState = upsertImportedShow(show);
       setState(nextState);
@@ -1975,6 +1983,23 @@ function AppContent() {
       }
       return next;
     });
+  }
+
+  async function handleChangeProviderRepositories(urls: string[]) {
+    writeProviderRepositoryUrls(urls);
+    setProviderRepositoryUrls(urls);
+    try {
+      const modules = await fetchProviderModules(urls);
+      setProviderModules(modules);
+      writeCachedProviderModules(modules);
+      setEnabledProviderFeeds((current) => {
+        const next = sanitizeEnabledProviderFeeds(current, modules);
+        writeEnabledProviderFeeds(next);
+        return next;
+      });
+    } catch {
+      // Keep the current catalog if a repository is temporarily unavailable.
+    }
   }
 
   function handleOpenDiscoveryItem(item: ExploreItem) {
@@ -2798,7 +2823,11 @@ function AppContent() {
                 void refreshVaultState();
               }}
               providerFeeds={providerFeedCatalog}
+              providerRepositoryUrls={providerRepositoryUrls}
               onToggleProviderFeed={handleToggleProviderFeed}
+              onProviderRepositoriesChange={(urls) => {
+                void handleChangeProviderRepositories(urls);
+              }}
                onSettingsChange={(change) => {
                   const nextState = updateSettings(change);
                   setState(nextState);
@@ -2921,7 +2950,8 @@ function AppContent() {
                         {remotePlatformOrder.map((platformKey) => {
                           const list = remoteByPlatform[platformKey];
                           if (list.length === 0) return null;
-                          const sectionLabel = platformKey === "svetserialu" ? "Svetserialu" : "Bombuj";
+                          const sectionLabel =
+                            platformKey === "svetserialu" ? "Svetserialu" : platformKey === "bombuj" ? "Bombuj" : "Synova";
                           return (
                             <div key={platformKey} className="rounded-2xl border border-white/5 bg-white/5 p-4">
                               <div className="mb-3 flex items-center justify-between">
@@ -2932,7 +2962,9 @@ function AppContent() {
                               </div>
                               <div className="flex gap-3 overflow-x-auto pb-2">
                                 {list.map((r) => {
-                                  const platformLabel = r.platform === "svetserialu" ? "Svetserialu." : "Bombuj";
+                                  const platformLabel =
+                                    r.platform === "svetserialu" ? "Svetserialu." : r.platform === "bombuj" ? "Bombuj" : "Synova";
+                                  const canImport = r.platform !== "synova";
                                   const typeLabel =
                                     r.mediaType === "movie" ? "Movie" : r.mediaType === "serial" ? "Serial" : "Title";
                                   return (
@@ -2961,6 +2993,10 @@ function AppContent() {
                                             </span>
                                             <button
                                               onClick={() => {
+                                                if (!canImport) {
+                                                  window.open(r.slug.startsWith("http") ? r.slug : undefined, "_blank", "noreferrer");
+                                                  return;
+                                                }
                                                 setImportSlug(r.slug);
                                                 handleImport(r.platform, r.slug, r.mediaType);
                                               }}
@@ -2968,7 +3004,7 @@ function AppContent() {
                                               className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-black/90 shadow-sm transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 whitespace-nowrap"
                                               title="Import to Vault"
                                             >
-                                              Add
+                                              {canImport ? "Add" : "View"}
                                             </button>
                                           </div>
                                         </div>

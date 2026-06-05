@@ -1,6 +1,14 @@
 import type { ImportedShow, LibraryEpisode, PlayerAlias } from "../lib/types";
 import { enrichArtwork } from "./artwork";
-import { compareSearchScores, normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking";
+import { searchExternalTitles, type ExternalTitleCandidate } from "./external-title-search";
+import {
+  compareSearchScores,
+  hasRequiredSearchTokenCoverage,
+  hasSignificantSearchTokenMatch,
+  keepHighConfidenceSearchResults,
+  normalizeSearchText,
+  scoreSearchCandidate,
+} from "../lib/search-ranking";
 
 const BASE_URL = "https://bombuj.si";
 const USER_AGENT =
@@ -524,42 +532,55 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
   };
 }
 
-export async function searchBombuj(
+export type BombujSearchResult = {
+  title: string;
+  slug: string;
+  platform: "bombuj";
+  posterUrl?: string | null;
+  mediaType?: "movie" | "serial";
+  year?: string | null;
+  matchScore?: number;
+};
+
+async function searchBombujProvider(
   query: string,
-): Promise<
-  {
-    title: string;
-    slug: string;
-    platform: "bombuj";
-    posterUrl?: string | null;
-    mediaType?: "movie" | "serial";
-    year?: string | null;
-    matchScore?: number;
-  }[]
-> {
+  options: { limit?: number; scoreBoost?: number; mediaTypeHint?: "movie" | "serial"; strict?: boolean } = {},
+): Promise<BombujSearchResult[]> {
   try {
      const normalizedQuery = normalizeSearch(query);
      if (!normalizedQuery) return [];
+     const limit = options.limit ?? 8;
 
      const directResults = (
        await Promise.allSettled([
-         fetchBombujSuggestionResults(query, "https://www.bombuj.si"),
-         fetchBombujSuggestionResults(query, "https://serialy.bombuj.si"),
+         options.mediaTypeHint === "serial" ? Promise.resolve([]) : fetchBombujSuggestionResults(query, "https://www.bombuj.si"),
+         options.mediaTypeHint === "movie" ? Promise.resolve([]) : fetchBombujSuggestionResults(query, "https://serialy.bombuj.si"),
        ])
      )
        .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
        .filter((item) => item.slug);
 
-     const directUnique = Array.from(new Map(directResults.map((item) => [`${item.mediaType}:${item.slug}`, item])).values()).map((item, index) => ({
-       ...item,
-       matchScore: scoreSearchCandidate(query, [
-         item.title,
-         item.slug.replace(/-/g, " "),
-         item.year,
-       ], index) + 200,
-     }));
+     const directUnique = Array.from(new Map(directResults.map((item) => [`${item.mediaType}:${item.slug}`, item])).values())
+       .map((item, index) => {
+         const baseScore = scoreSearchCandidate(query, [
+           item.title,
+           item.slug.replace(/-/g, " "),
+           item.year,
+         ], index);
+         return {
+           ...item,
+           matchScore: baseScore > 0 && providerCandidateMatches(query, [
+             item.title,
+             item.slug.replace(/-/g, " "),
+             item.year,
+           ], Boolean(options.strict))
+             ? baseScore + 200 + (options.scoreBoost ?? 0)
+             : 0,
+         };
+       })
+       .filter((item) => (item.matchScore ?? 0) > 0);
      if (directUnique.length > 0) {
-       return directUnique.sort(compareSearchScores).slice(0, 6);
+       return directUnique.sort(compareSearchScores).slice(0, limit);
      }
 
      const sitemapXml = await fetchText("https://www.bombuj.si/sitemap.xml", {
@@ -571,6 +592,8 @@ export async function searchBombuj(
      for (const match of urlMatches) {
         const url = match[1].trim();
         if (!/online-(film|serial)-/i.test(url)) continue;
+        if (options.mediaTypeHint === "movie" && !/online-film-/i.test(url)) continue;
+        if (options.mediaTypeHint === "serial" && !/online-serial-/i.test(url)) continue;
         const slug = url.split("/").pop() ?? "";
         if (!slug) continue;
         const normalizedSlug = normalizeSearch(slug.replace(/^online-(film|serial)-/i, ""));
@@ -582,7 +605,10 @@ export async function searchBombuj(
           extractYearFromSlug(slug),
         ]);
 
-        if (score > 0) {
+        if (score > 0 && providerCandidateMatches(query, [
+          slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
+          extractYearFromSlug(slug),
+        ], Boolean(options.strict))) {
           candidates.push({ url, slug, score });
         }
       }
@@ -617,7 +643,7 @@ export async function searchBombuj(
               title,
               item.slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
               extractYearFromSlug(item.slug),
-            ]),
+            ]) + (options.scoreBoost ?? 0),
           };
         } catch {
           return null;
@@ -641,13 +667,13 @@ export async function searchBombuj(
      );
 
      combined.sort(compareSearchScores);
-     if (combined.length >= 6) {
-        return combined.slice(0, 6);
+     if (combined.length >= limit) {
+        return combined.slice(0, limit);
      }
 
      const fallback = unique
         .filter((item) => !combined.some((r) => item.slug.endsWith(r.slug)))
-        .slice(0, 6 - combined.length)
+        .slice(0, limit - combined.length)
         .map((item) => ({
           title: item.slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
           slug: item.slug.replace(/^online-(film|serial)-/i, ""),
@@ -658,13 +684,77 @@ export async function searchBombuj(
           matchScore: scoreSearchCandidate(query, [
             item.slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
             extractYearFromSlug(item.slug),
-          ]),
+          ]) + (options.scoreBoost ?? 0),
         }));
 
-     return [...combined, ...fallback].sort(compareSearchScores).slice(0, 6);
+     return [...combined, ...fallback].sort(compareSearchScores).slice(0, limit);
   } catch {
       return []; // Return empty array if CF blocks the search so the unified search doesn't crash
   }
+}
+
+function providerCandidateMatches(query: string, fields: Array<string | null | undefined>, strict: boolean) {
+  return strict
+    ? hasRequiredSearchTokenCoverage(query, fields)
+    : hasSignificantSearchTokenMatch(query, fields);
+}
+
+function scoreProviderMatchForCatalog(query: string, result: BombujSearchResult, catalog: ExternalTitleCandidate, index: number) {
+  const titleScore = scoreSearchCandidate(catalog.title, [
+    result.title,
+    result.slug.replace(/-/g, " "),
+    result.year,
+  ], index);
+  const originalScore = catalog.originalTitle
+    ? scoreSearchCandidate(catalog.originalTitle, [result.title, result.slug.replace(/-/g, " "), result.year], index)
+    : 0;
+  const queryScore = scoreSearchCandidate(query, [catalog.title, catalog.originalTitle, catalog.year], index);
+  const yearBonus = catalog.year && result.year === catalog.year ? 260 : 0;
+  const yearPenalty = catalog.year && result.year && result.year !== catalog.year ? -180 : 0;
+
+  return Math.max(titleScore, originalScore) + queryScore + yearBonus + yearPenalty + Math.round(catalog.matchScore / 2);
+}
+
+export async function searchBombuj(query: string): Promise<BombujSearchResult[]> {
+  const normalizedQuery = normalizeSearch(query);
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const catalog = await searchExternalTitles(query, 10);
+  const targeted = await mapWithConcurrency(catalog, 4, async (candidate) => {
+    const terms = [
+      candidate.title,
+      candidate.originalTitle && candidate.originalTitle !== candidate.title ? candidate.originalTitle : null,
+    ].filter(Boolean) as string[];
+    const termResults = await mapWithConcurrency(terms, 2, async (term) => (
+      searchBombujProvider(term, {
+        limit: 4,
+        mediaTypeHint: candidate.mediaType,
+        scoreBoost: Math.round(candidate.matchScore / 3),
+        strict: true,
+      })
+    ));
+
+    return termResults.flat().map((result, index) => ({
+      ...result,
+      posterUrl: result.posterUrl ?? candidate.posterUrl ?? null,
+      year: result.year ?? candidate.year ?? null,
+      matchScore: scoreProviderMatchForCatalog(query, result, candidate, index),
+    }));
+  });
+  const direct = await searchBombujProvider(query, { limit: catalog.length > 0 ? 4 : 8 });
+  const merged = [...targeted.flat(), ...direct];
+  const unique = new Map<string, BombujSearchResult>();
+
+  for (const result of merged.sort(compareSearchScores)) {
+    const key = `${result.mediaType ?? "unknown"}:${result.slug}`;
+    if (!unique.has(key)) {
+      unique.set(key, result);
+    }
+  }
+
+  return keepHighConfidenceSearchResults([...unique.values()]).slice(0, 8);
 }
 
 function normalizeSearch(value: string) {

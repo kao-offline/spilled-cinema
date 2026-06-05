@@ -4,6 +4,11 @@ import {
   hydrateProviderModules,
   type ProviderModuleRecord,
 } from "./provider-modules-shared";
+import {
+  fetchProviderRepositoryModulesSettled,
+  mergeProviderModules,
+} from "./provider-repositories";
+import { readProviderRepositoryUrls } from "./provider-feed-storage";
 import type { ExploreItem, ProviderFeedResponse, ProviderModuleManifest } from "./types";
 
 async function fetchControlPlaneProviderModules() {
@@ -23,9 +28,10 @@ async function fetchControlPlaneProviderModules() {
   return hydrateProviderModules(payload.modules) as ProviderModuleManifest[];
 }
 
-export async function fetchProviderModules() {
+export async function fetchProviderModules(repositoryUrls = readProviderRepositoryUrls()) {
+  let baseModules: ProviderModuleManifest[];
   try {
-    return await fetchControlPlaneProviderModules();
+    baseModules = await fetchControlPlaneProviderModules();
   } catch {
     const response = await requestRuntimeJson<{ modules?: ProviderModuleRecord[]; error?: string }>("/api/provider-modules", {
       method: "GET",
@@ -36,11 +42,16 @@ export async function fetchProviderModules() {
     }
 
     if (!Array.isArray(response.data?.modules) || response.data.modules.length === 0) {
-      return DEFAULT_PROVIDER_MODULES;
+      baseModules = DEFAULT_PROVIDER_MODULES;
+    } else {
+      baseModules = hydrateProviderModules(response.data.modules) as ProviderModuleManifest[];
     }
-
-    return hydrateProviderModules(response.data.modules) as ProviderModuleManifest[];
   }
+
+  const repositoryModules = repositoryUrls.length > 0
+    ? await fetchProviderRepositoryModulesSettled(repositoryUrls)
+    : [];
+  return mergeProviderModules([baseModules, repositoryModules]);
 }
 
 export async function fetchProviderFeed(input: {
@@ -51,7 +62,10 @@ export async function fetchProviderFeed(input: {
 }) {
   const response = await requestRuntimeJson<ProviderFeedResponse & { error?: string }>("/api/provider-feed", {
     method: "POST",
-    body: input,
+    body: {
+      ...input,
+      repositoryUrls: readProviderRepositoryUrls(),
+    },
   });
 
   if (!response.ok || !response.data?.items) {
@@ -64,7 +78,10 @@ export async function fetchProviderFeed(input: {
 export async function searchProviderModuleItems(input: { moduleId: string; query: string }) {
   const response = await requestRuntimeJson<{ results?: ExploreItem[]; error?: string }>("/api/provider-search", {
     method: "POST",
-    body: input,
+    body: {
+      ...input,
+      repositoryUrls: readProviderRepositoryUrls(),
+    },
   });
 
   if (!response.ok || !Array.isArray(response.data?.results)) {

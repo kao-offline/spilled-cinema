@@ -16,7 +16,11 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { enrichArtwork, searchArtworkAssets } from "../../../apps/dashboard/src/server/artwork";
-import { compareSearchScores, scoreSearchCandidate } from "../../../apps/dashboard/src/lib/search-ranking";
+import {
+  compareSearchScores,
+  keepHighConfidenceSearchResults,
+  scoreSearchCandidate,
+} from "../../../apps/dashboard/src/lib/search-ranking";
 import { fetchBombujMovie, searchBombuj } from "../../../apps/dashboard/src/server/bombuj";
 import { getExploreFeed } from "../../../apps/dashboard/src/server/explore-feed";
 import { loadProviderFeed } from "../../../apps/dashboard/src/server/provider-feed";
@@ -76,7 +80,7 @@ export async function searchNode(query: string) {
     ),
   }));
 
-  return merged.sort(compareSearchScores);
+  return keepHighConfidenceSearchResults(merged.sort(compareSearchScores));
 }
 
 export async function importShow(source: "svetserialu" | "bombuj", slug: string, _mediaType?: "movie" | "serial") {

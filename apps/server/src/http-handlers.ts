@@ -340,6 +340,7 @@ export function createHttpHandlers() {
         feedId?: string;
         cursor?: string | null;
         limit?: number;
+        repositoryUrls?: string[];
       }>(req);
       const moduleId = body.moduleId?.trim();
       const feedId = body.feedId?.trim();
@@ -360,7 +361,7 @@ export function createHttpHandlers() {
   const providerSearchHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
-      const body = await readJsonBody<{ moduleId?: string; query?: string }>(req);
+      const body = await readJsonBody<{ moduleId?: string; query?: string; repositoryUrls?: string[] }>(req);
       const moduleId = body.moduleId?.trim();
       const query = body.query?.trim() ?? "";
       if (!moduleId) {

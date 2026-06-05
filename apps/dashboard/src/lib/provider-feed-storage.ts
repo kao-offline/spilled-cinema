@@ -6,6 +6,7 @@ import type { EnabledProviderFeed, ProviderModuleManifest } from "./types";
 
 const ENABLED_PROVIDER_FEEDS_KEY = "spilled.provider-feeds.enabled.v1";
 const CACHED_PROVIDER_MODULES_KEY = "spilled.provider-feeds.modules.v1";
+const PROVIDER_REPOSITORY_URLS_KEY = "spilled.provider-feeds.repositories.v1";
 
 export type ProviderModulesCache = {
   updatedAt: number;
@@ -99,4 +100,27 @@ export function writeCachedProviderModules(modules: ProviderModuleManifest[]) {
     updatedAt: Date.now(),
     modules,
   } satisfies ProviderModulesCache);
+}
+
+function normalizeRepositoryUrl(value: string) {
+  return value.trim().replace(/\/+$/, "");
+}
+
+export function readProviderRepositoryUrls() {
+  const parsed = readJson<unknown[]>(PROVIDER_REPOSITORY_URLS_KEY, []);
+  return Array.from(
+    new Set(
+      parsed
+        .filter((value): value is string => typeof value === "string")
+        .map(normalizeRepositoryUrl)
+        .filter(Boolean),
+    ),
+  );
+}
+
+export function writeProviderRepositoryUrls(urls: string[]) {
+  writeJson(
+    PROVIDER_REPOSITORY_URLS_KEY,
+    Array.from(new Set(urls.map(normalizeRepositoryUrl).filter(Boolean))),
+  );
 }

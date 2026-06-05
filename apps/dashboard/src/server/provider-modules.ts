@@ -3,6 +3,7 @@ import { getBombujMovieSections, getBombujSeriesSections, hydrateBombujItem } fr
 import { searchBombuj } from "./bombuj";
 import { hydrateSvetItem, parseSvetEpisodeCards } from "./svetserialu-discovery";
 import { searchSvetSerialu } from "./svetserialu";
+import { loadSynovaFeed, searchSynova } from "./synova";
 import type { IntegrationId } from "../lib/integrations";
 import {
   DEFAULT_PROVIDER_MODULES,
@@ -242,6 +243,16 @@ const providerAdapters: Record<string, ProviderModuleAdapter> = {
     async search(query) {
       const results = await searchBombuj(query);
       return results.map(createBombujSearchItem);
+    },
+  },
+  synova: {
+    moduleId: "synova",
+    providerId: "synova",
+    async getFeed(feedId, args) {
+      return await loadSynovaFeed(feedId, args);
+    },
+    async search(query) {
+      return await searchSynova(query);
     },
   },
 };

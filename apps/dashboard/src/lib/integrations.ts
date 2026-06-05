@@ -1,4 +1,4 @@
-export type IntegrationId = "svetserialu" | "bombuj";
+export type IntegrationId = "svetserialu" | "bombuj" | "synova";
 
 export type IntegrationKind = "series" | "movies" | "mixed";
 
@@ -76,6 +76,26 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       notes: "Use when you want movie imports to prefer Bombuj before mixed sources.",
     },
   },
+  {
+    id: "synova",
+    name: "Synova",
+    domain: "cinenova.store",
+    status: "beta",
+    kind: "mixed",
+    description: "Catalog connector for Cinenova/Synova movie and TV discovery feeds.",
+    capabilities: {
+      import: false,
+      remoteSearch: true,
+      streaming: false,
+      downloads: false,
+      subtitles: false,
+    },
+    copy: {
+      shortLabel: "Movies + TV",
+      supportBadge: "Repo module",
+      notes: "Catalog and source-page discovery from cinenova.store.",
+    },
+  },
 ];
 
 export const INTEGRATION_CAPABILITY_LABELS: Record<IntegrationCapabilityKey, string> = {
@@ -112,5 +132,14 @@ export const DISCOVERY_PROVIDER_CAPABILITIES = {
     supportsActorSearch: true,
     supportsDirectorSearch: true,
     supportsSections: ["newest", "popular", "latestEpisodes", "topOverall", "topToday", "novinky", "genreBrowse"] as const,
+  },
+  synova: {
+    supportsGenres: true,
+    supportsNetworks: false,
+    supportsAudioBuckets: ["all"] as const,
+    supportsPeopleSearch: false,
+    supportsActorSearch: false,
+    supportsDirectorSearch: false,
+    supportsSections: ["popular", "newest", "topOverall"] as const,
   },
 };

@@ -18,6 +18,82 @@ function tokenize(value: string) {
   return normalizeSearchText(value).split(" ").filter(Boolean);
 }
 
+const WEAK_SEARCH_TOKENS = new Set([
+  "a",
+  "an",
+  "and",
+  "cz",
+  "film",
+  "for",
+  "in",
+  "of",
+  "online",
+  "or",
+  "serial",
+  "the",
+  "to",
+]);
+
+function significantTokens(value: string) {
+  return tokenize(value).filter((token) => {
+    if (WEAK_SEARCH_TOKENS.has(token)) {
+      return false;
+    }
+    if (/^\d+$/.test(token) && token.length < 4) {
+      return false;
+    }
+    return token.length >= 3;
+  });
+}
+
+function requiredCoverageTokens(value: string) {
+  return tokenize(value).filter((token) => !WEAK_SEARCH_TOKENS.has(token) && token.length >= 2);
+}
+
+export function hasSignificantSearchTokenMatch(query: string, rawFields: Array<string | null | undefined>) {
+  const normalizedQuery = normalizeSearchText(query);
+  const fields = rawFields.map((value) => String(value || "")).filter(Boolean);
+  if (!normalizedQuery || fields.length === 0) {
+    return false;
+  }
+
+  if (fields.some((field) => normalizeSearchText(field) === normalizedQuery)) {
+    return true;
+  }
+
+  const queryTokens = significantTokens(query);
+  if (queryTokens.length === 0) {
+    return false;
+  }
+
+  const fieldTokens = fields.flatMap(significantTokens);
+  return queryTokens.some((queryToken) =>
+    fieldTokens.some((fieldToken) => tokenFuzzyScore(queryToken, fieldToken) >= 46),
+  );
+}
+
+export function hasRequiredSearchTokenCoverage(query: string, rawFields: Array<string | null | undefined>) {
+  const normalizedQuery = normalizeSearchText(query);
+  const fields = rawFields.map((value) => String(value || "")).filter(Boolean);
+  if (!normalizedQuery || fields.length === 0) {
+    return false;
+  }
+
+  if (fields.some((field) => normalizeSearchText(field) === normalizedQuery)) {
+    return true;
+  }
+
+  const queryTokens = requiredCoverageTokens(query);
+  if (queryTokens.length === 0) {
+    return false;
+  }
+
+  const fieldTokens = fields.flatMap(requiredCoverageTokens);
+  return queryTokens.every((queryToken) =>
+    fieldTokens.some((fieldToken) => tokenFuzzyScore(queryToken, fieldToken) >= 46),
+  );
+}
+
 function levenshteinDistance(a: string, b: string) {
   if (a === b) return 0;
   if (!a.length) return b.length;
@@ -51,6 +127,12 @@ function levenshteinDistance(a: string, b: string) {
 
 function tokenFuzzyScore(queryToken: string, candidateToken: string) {
   if (!queryToken || !candidateToken) return 0;
+  const queryIsNumeric = /^\d+$/.test(queryToken);
+  const candidateIsNumeric = /^\d+$/.test(candidateToken);
+  if ((queryIsNumeric || candidateIsNumeric) && queryToken !== candidateToken) {
+    return 0;
+  }
+
   const minTokenLength = Math.min(queryToken.length, candidateToken.length);
   if (queryToken === candidateToken) return 120;
   if (candidateToken.startsWith(queryToken)) return 92;
@@ -73,6 +155,7 @@ export function scoreSearchCandidate(query: string, rawFields: Array<string | nu
   }
 
   const compactQuery = compactSearchText(query);
+  const compactQueryIsShortNumeric = /^\d+$/.test(compactQuery) && compactQuery.length < 4;
   const queryTokens = tokenize(query);
   const fields = rawFields
     .map((value) => String(value || "").trim())
@@ -96,10 +179,10 @@ export function scoreSearchCandidate(query: string, rawFields: Array<string | nu
 
     if (normalizedField === normalizedQuery) score += 1200;
     if (compactField === compactQuery && compactQuery.length >= 4) score += 1080;
-    if (normalizedField.startsWith(normalizedQuery)) score += 760;
-    if (compactField.startsWith(compactQuery) && compactQuery.length >= 4) score += 680;
-    if (normalizedField.includes(normalizedQuery)) score += 520;
-    if (compactField.includes(compactQuery) && compactQuery.length >= 4) score += 420;
+    if (!compactQueryIsShortNumeric && normalizedField.startsWith(normalizedQuery)) score += 760;
+    if (!compactQueryIsShortNumeric && compactField.startsWith(compactQuery) && compactQuery.length >= 4) score += 680;
+    if (!compactQueryIsShortNumeric && normalizedField.includes(normalizedQuery)) score += 520;
+    if (!compactQueryIsShortNumeric && compactField.includes(compactQuery) && compactQuery.length >= 4) score += 420;
 
     let matchedTokens = 0;
     for (const queryToken of queryTokens) {
@@ -146,4 +229,15 @@ export function compareSearchScores<T extends { matchScore?: number }>(left: T, 
   const leftTitle = normalizeSearchText(String((left as { title?: string }).title || ""));
   const rightTitle = normalizeSearchText(String((right as { title?: string }).title || ""));
   return leftTitle.localeCompare(rightTitle);
+}
+
+export function keepHighConfidenceSearchResults<T extends { matchScore?: number }>(results: T[]) {
+  const sorted = [...results].sort(compareSearchScores);
+  const topScore = sorted[0]?.matchScore ?? 0;
+  if (topScore < 5000) {
+    return sorted;
+  }
+
+  const threshold = Math.max(1800, Math.round(topScore * 0.45));
+  return sorted.filter((result) => (result.matchScore ?? 0) >= threshold);
 }

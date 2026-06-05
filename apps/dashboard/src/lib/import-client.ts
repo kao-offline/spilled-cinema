@@ -52,7 +52,7 @@ export async function searchRemotes(query: string) {
       results?: {
         title: string;
         slug: string;
-        platform: "svetserialu" | "bombuj";
+        platform: "svetserialu" | "bombuj" | "synova";
         posterUrl?: string | null;
         mediaType?: "movie" | "serial";
         year?: string | null;
