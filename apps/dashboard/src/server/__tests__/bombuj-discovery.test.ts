@@ -33,5 +33,25 @@ describe("bombuj discovery parsers", () => {
     });
     expect(items[0].audioBuckets).toContain("dubbing");
     expect(items[0].episode?.episodeCode).toBe("s1e02");
+    expect(items[0].importSlug).toBe("the-last-of-us-s1e02");
+  });
+
+  it("parses current serial part links as importable episode slugs", () => {
+    const html = `
+      <a href="//serialy.bombuj.si/serial/naruto-1x26#komentare">
+        <div class="hover_serial">
+          <div style="float:left;overflow:hidden;height:35px;">Naruto</div>
+        </div>
+      </a>
+    `;
+    const items = parseBombujSeriesLatestEpisodes(html, "all");
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      slug: "naruto",
+      importSlug: "naruto-1x26",
+      mediaType: "serial",
+    });
+    expect(items[0].episode?.episodeCode).toBe("1x26");
   });
 });

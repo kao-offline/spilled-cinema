@@ -7,7 +7,7 @@ import {
   Download,
   FolderOpen,
   HardDrive,
-  Image as ImageIcon,
+  Image as ImageIcon, Key,
   LockKeyhole,
   Package,
   PlugZap,
@@ -20,10 +20,17 @@ import {
   X,
 } from "lucide-react";
 import { clsx } from "clsx";
-import type { DownloadEngine, LibrarySettings, ProviderFeedCatalogEntry } from "../lib/types";
+import type { DownloadEngine, IntegrationManifestV2, LibrarySettings, ProviderFeedCatalogEntry } from "../lib/types";
 import { INTEGRATIONS, type IntegrationId } from "../lib/integrations";
+import { DEFAULT_PROVIDER_REPOSITORY_URL } from "../lib/provider-feed-storage";
 import type { LocalRuntimeStatus } from "../lib/runtime-bridge";
 import { getConnectionModeLabel } from "../lib/runtime-bridge";
+import {
+  readIntegrationUserCredentials,
+  readIntegrationUserKeys,
+  writeIntegrationUserCredentials,
+  writeIntegrationUserKeys,
+} from "../lib/integration-user-config";
 import type { VaultDiagnostics, VaultStatus } from "../lib/library-folder";
 import { isFolderConnectionSupported } from "../lib/library-folder";
 import {
@@ -44,6 +51,7 @@ import {
   type PrivateNodeConnection,
   type PrivateNodeStorageSummary,
 } from "../lib/private-node-client";
+import { verifySvetSerialuLogin } from "../lib/svetserialu-auth-client";
 
 type SettingsViewProps = {
   settings: LibrarySettings;
@@ -66,6 +74,7 @@ type SettingsViewProps = {
   onResetVaultLink: () => Promise<void>;
   onRefreshVaultStatus: () => void | Promise<void>;
   providerFeeds: ProviderFeedCatalogEntry[];
+  integrationCatalog: IntegrationManifestV2[];
   providerRepositoryUrls: string[];
   onToggleProviderFeed: (moduleId: string, feedId: string) => void;
   onProviderRepositoriesChange: (urls: string[]) => void;
@@ -85,9 +94,9 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={clsx("rounded-2xl border border-white/8 bg-white/[0.035] p-5", className)}>
-      <div className="mb-5 flex flex-col gap-1">
-        <h3 className="text-lg font-semibold tracking-tight text-white">{title}</h3>
+    <section className={clsx("rounded-2xl border border-white/8 bg-white/[0.035] p-4", className)}>
+      <div className="mb-3 flex flex-col gap-1">
+        <h3 className="text-base font-semibold tracking-tight text-white">{title}</h3>
         {hint ? <p className="max-w-2xl text-sm leading-6 text-white/48">{hint}</p> : null}
       </div>
       {children}
@@ -105,12 +114,12 @@ function PreferenceRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 border-t border-white/8 py-4 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 border-t border-white/8 py-3 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="text-sm font-semibold text-white">{title}</div>
         {hint ? <div className="mt-1 max-w-xl text-sm leading-6 text-white/45">{hint}</div> : null}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="min-w-0 max-w-full shrink-0">{children}</div>
     </div>
   );
 }
@@ -125,7 +134,7 @@ function StatusPill({
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.2em]",
+        "inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em]",
         tone === "good" && "bg-emerald-500/14 text-emerald-200",
         tone === "warn" && "bg-amber-500/14 text-amber-200",
         tone === "neutral" && "bg-white/8 text-white/58",
@@ -230,12 +239,12 @@ function SourceRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-[4.5rem] items-center justify-between gap-4 rounded-2xl border border-white/8 bg-black/18 px-4 py-3">
-      <div className="min-w-0">
+    <div className="flex min-h-[3.5rem] min-w-0 flex-col gap-2 rounded-2xl border border-white/8 bg-black/18 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-white">{title}</div>
         {hint ? <div className="mt-1 line-clamp-2 text-sm leading-5 text-white/42">{hint}</div> : null}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="min-w-0 max-w-full shrink">{children}</div>
     </div>
   );
 }
@@ -261,6 +270,7 @@ export function SettingsView({
   onResetVaultLink,
   onRefreshVaultStatus,
   providerFeeds,
+  integrationCatalog,
   providerRepositoryUrls,
   onToggleProviderFeed,
   onProviderRepositoriesChange,
@@ -268,7 +278,11 @@ export function SettingsView({
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [folderBusy, setFolderBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
-  const [feedModuleId, setFeedModuleId] = useState<IntegrationId | null>(null);
+  const [feedModuleId, setFeedModuleId] = useState<string | null>(null);
+  const [keyModuleId, setKeyModuleId] = useState<string | null>(null);
+  const [repositoryModalOpen, setRepositoryModalOpen] = useState(false);
+  const [artworkKeysModalOpen, setArtworkKeysModalOpen] = useState(false);
+  const [privateSetupModalOpen, setPrivateSetupModalOpen] = useState(false);
   const [repositoryInput, setRepositoryInput] = useState("");
   const [privateNode, setPrivateNode] = useState<PrivateNodeConnection>(() => readPrivateNodeConnection());
   const [privateNodeInput, setPrivateNodeInput] = useState(() => readPrivateNodeConnection().nodeUrl);
@@ -288,6 +302,11 @@ export function SettingsView({
   const [setupNodeName, setSetupNodeName] = useState("Home Server");
   const [setupCode, setSetupCode] = useState("");
   const [setupAllowPublicFetch, setSetupAllowPublicFetch] = useState(true);
+  const [integrationUserKeys, setIntegrationUserKeys] = useState(() => readIntegrationUserKeys());
+  const [integrationUserCredentials, setIntegrationUserCredentials] = useState(() => readIntegrationUserCredentials());
+  const [svetLoginModalOpen, setSvetLoginModalOpen] = useState(false);
+  const [svetLoginBusy, setSvetLoginBusy] = useState(false);
+  const [svetLoginMessage, setSvetLoginMessage] = useState<{ tone: "good" | "warn"; text: string } | null>(null);
 
   const tabs = [
     { id: "general" as const, label: "General", icon: SlidersHorizontal },
@@ -364,16 +383,19 @@ export function SettingsView({
     [],
   );
   const feedsByProvider = useMemo(() => {
-    const grouped = new Map<IntegrationId, ProviderFeedCatalogEntry[]>();
-    for (const integration of INTEGRATIONS) {
-      grouped.set(integration.id, []);
-    }
+    const grouped = new Map<string, ProviderFeedCatalogEntry[]>();
     for (const feed of providerFeeds) {
-      grouped.get(feed.providerId)?.push(feed);
+      grouped.set(feed.moduleId, [...(grouped.get(feed.moduleId) ?? []), feed]);
     }
     return grouped;
   }, [providerFeeds]);
-  const selectedFeedModule = feedModuleId ? INTEGRATIONS.find((integration) => integration.id === feedModuleId) : null;
+
+  const installedIntegrations = useMemo(
+    () => integrationCatalog.filter((integration) => integration.status !== "disabled"),
+    [integrationCatalog],
+  );
+  const selectedFeedModule = feedModuleId ? installedIntegrations.find((module) => module.id === feedModuleId) : null;
+  const selectedKeyModule = keyModuleId ? installedIntegrations.find((module) => module.id === keyModuleId) : null;
   const selectedModuleFeeds = feedModuleId ? (feedsByProvider.get(feedModuleId) ?? []) : [];
   useEffect(() => {
     if (privateAccounts.length > 0 && !privateAccountId) {
@@ -473,6 +495,65 @@ export function SettingsView({
     }
     onProviderRepositoriesChange([...providerRepositoryUrls, value]);
     setRepositoryInput("");
+  }
+
+  function updateIntegrationUserKey(integrationId: string, value: string) {
+    setIntegrationUserKeys((current) => {
+      const next = {
+        ...current,
+        [integrationId]: value,
+      };
+      if (!value.trim()) {
+        delete next[integrationId];
+      }
+      writeIntegrationUserKeys(next);
+      return next;
+    });
+  }
+
+  function updateIntegrationUserCredential(integrationId: string, field: "username" | "password", value: string) {
+    setIntegrationUserCredentials((current) => {
+      const existing = current[integrationId] ?? {};
+      const nextCredentials = {
+        ...existing,
+        [field]: value,
+      };
+      const next = {
+        ...current,
+        [integrationId]: nextCredentials,
+      };
+      if (!nextCredentials.username?.trim() && !nextCredentials.password) {
+        delete next[integrationId];
+      }
+      writeIntegrationUserCredentials(next);
+      return next;
+    });
+  }
+
+  function clearIntegrationUserCredentials(integrationId: string) {
+    setIntegrationUserCredentials((current) => {
+      const next = { ...current };
+      delete next[integrationId];
+      writeIntegrationUserCredentials(next);
+      return next;
+    });
+  }
+
+  async function verifyStoredSvetLogin() {
+    const credentials = integrationUserCredentials.svetserialu ?? {};
+    setSvetLoginBusy(true);
+    setSvetLoginMessage(null);
+    try {
+      await verifySvetSerialuLogin(credentials);
+      setSvetLoginMessage({ tone: "good", text: "Login verified." });
+    } catch (error) {
+      setSvetLoginMessage({
+        tone: "warn",
+        text: error instanceof Error ? error.message : "SvetSerialu login failed.",
+      });
+    } finally {
+      setSvetLoginBusy(false);
+    }
   }
 
   function renderFolderActions() {
@@ -812,7 +893,7 @@ export function SettingsView({
   }
 
   return (
-    <div className="relative z-10 animate-fade-in px-4 py-6 pb-20 lg:px-6">
+    <div className="relative z-10 animate-fade-in px-4 py-6 pb-20 lg:px-6" style={{ zoom: 0.85 }}>
       <div className="mx-auto max-w-6xl">
         <header className="mb-6 flex flex-col gap-4 border-b border-white/8 pb-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -977,118 +1058,132 @@ export function SettingsView({
         ) : null}
 
         {activeTab === "sources" ? (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-            <Panel title="Artwork" hint="Turn artwork providers on or off, then refresh existing titles when needed.">
-              {[
-                { key: "tmdb" as const, label: "TMDB", hint: "Posters and backdrops." },
-                { key: "fanart" as const, label: "Fanart.tv", hint: "Logos and alternate art." },
-                { key: "tvdb" as const, label: "TVDB", hint: "Series artwork fallback." },
-              ].map((source) => {
-                const enabled = settings.artworkSources[source.key];
-                return (
-                  <SourceRow key={source.key} title={source.label} hint={source.hint}>
-                    <Toggle
-                      label={`Toggle ${source.label}`}
-                      checked={enabled}
-                      onToggle={() =>
-                        onSettingsChange({
-                          artworkSources: {
-                            ...settings.artworkSources,
-                            [source.key]: !enabled,
-                          },
-                        })
-                      }
-                    />
-                  </SourceRow>
-                );
-              })}
-              <div className="mt-4 rounded-2xl border border-white/8 bg-black/18 px-4 py-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-white">Refresh existing artwork</div>
-                    <div className="mt-1 text-sm leading-5 text-white/42">
-                      {artworkRefreshSummary ?? "Update covers, backdrops, and logos for imported titles."}
-                    </div>
-                  </div>
-                <ActionButton
-                  variant="primary"
-                  disabled={artworkRefreshBusy}
-                  onClick={() => void onRefreshArtwork()}
-                >
-                  <ImageIcon className="h-4 w-4" />
-                  {artworkRefreshBusy ? "Refreshing" : "Refresh"}
-                </ActionButton>
+          <div className="grid gap-3">
+            <Panel title="Integrations" hint="Repository-loaded integrations. Artwork controls use shared keys unless a local key is configured.">
+              {installedIntegrations.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-black/16 px-4 py-5 text-sm leading-6 text-white/45">
+                  No integrations are installed yet. Refresh the default connector repository or add another repository below.
                 </div>
-              </div>
-            </Panel>
-
-            <Panel title="Import modules" hint="Installed modules the app can use for search, import, playback, and downloads.">
-              <div className="grid gap-3">
-                {INTEGRATIONS.map((integration) => {
+              ) : (
+                <div className="grid gap-3">
+                  {installedIntegrations.map((integration) => {
                   const feeds = feedsByProvider.get(integration.id) ?? [];
                   const enabledCount = feeds.filter((feed) => feed.enabled).length;
+                  const visibleCapabilities = integration.capabilities.filter((capability) =>
+                    ["search", "discovery", "metadata", "artwork", "import", "players", "subtitles", "downloads"].includes(capability),
+                  );
+                  const isArtworkIntegration = integration.id === "tmdb" || integration.id === "fanart" || integration.id === "tvdb";
+                  const artworkKey = isArtworkIntegration ? integration.id as "tmdb" | "fanart" | "tvdb" : null;
+                  const hasUserKey = integration.credentialRequirements?.some((requirement) => requirement.kind === "userApiKey") ?? false;
+                  const hasSiteLogin = integration.credentialRequirements?.some((requirement) => requirement.kind === "siteLogin") ?? false;
+                  const siteLogin = integrationUserCredentials[integration.id];
                   return (
-                    <SourceRow key={integration.id} title={integration.name} hint={integration.copy.notes}>
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <StatusPill tone="good">{integration.copy.shortLabel}</StatusPill>
-                        {feeds.length > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => setFeedModuleId(integration.id)}
-                            className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-white/18"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            Feeds {enabledCount > 0 ? `${enabledCount}/${feeds.length}` : feeds.length}
-                          </button>
-                        ) : null}
+                    <SourceRow
+                      key={integration.id}
+                      title={integration.displayName}
+                      hint={`${integration.id} · v${integration.version}`}
+                    >
+                      <div className="flex max-w-full flex-wrap justify-start gap-1.5 sm:justify-end">
+                          <StatusPill tone={integration.status === "stable" ? "good" : undefined}>{integration.status}</StatusPill>
+                          {visibleCapabilities.slice(0, 4).map((capability) => (
+                            <StatusPill key={capability}>{capability}</StatusPill>
+                          ))}
+                          {visibleCapabilities.length > 4 ? <StatusPill>+{visibleCapabilities.length - 4}</StatusPill> : null}
+                          {integration.credentialRequirements?.some((requirement) => requirement.kind === "sharedAppKey") ? (
+                            <StatusPill tone="good">Shared</StatusPill>
+                          ) : null}
+                          {hasUserKey || hasSiteLogin ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (hasSiteLogin) {
+                                  setSvetLoginMessage(null);
+                                  setSvetLoginModalOpen(true);
+                                } else {
+                                  setKeyModuleId(integration.id);
+                                }
+                              }}
+                              className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                            >
+                              {hasSiteLogin
+                                ? (siteLogin?.username?.trim() && siteLogin.password ? "Login set" : "Login")
+                                : (integrationUserKeys[integration.id]?.trim() ? "Key set" : "Key")}
+                            </button>
+                          ) : null}
+                          {feeds.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setFeedModuleId(integration.id)}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-white transition-colors hover:bg-white/18"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Feeds {enabledCount > 0 ? `${enabledCount}/${feeds.length}` : feeds.length}
+                            </button>
+                          ) : null}
+                          {artworkKey ? (
+                            <Toggle
+                              label={`Toggle ${integration.displayName}`}
+                              checked={settings.artworkSources[artworkKey]}
+                              onToggle={() =>
+                                onSettingsChange({
+                                  artworkSources: {
+                                    ...settings.artworkSources,
+                                    [artworkKey]: !settings.artworkSources[artworkKey],
+                                  },
+                                })
+                              }
+                            />
+                          ) : null}
                       </div>
                     </SourceRow>
                   );
-                })}
-              </div>
+                  })}
+                  <SourceRow
+                    title="SvetSerialu login"
+                    hint="Required by svetserialu.to before Spilled can search or import from it."
+                  >
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {integrationUserCredentials.svetserialu?.username?.trim() && integrationUserCredentials.svetserialu?.password ? (
+                        <StatusPill tone="good">Saved</StatusPill>
+                      ) : (
+                        <StatusPill tone="warn">Required</StatusPill>
+                      )}
+                      <ActionButton
+                        onClick={() => {
+                          setSvetLoginMessage(null);
+                          setSvetLoginModalOpen(true);
+                        }}
+                      >
+                        <LockKeyhole className="h-4 w-4" />
+                        Login
+                      </ActionButton>
+                    </div>
+                  </SourceRow>
+                  <SourceRow title="Artwork API keys" hint="Configure TMDB, Fanart, and TVDB API keys for artwork fetching.">
+                    <ActionButton onClick={() => setArtworkKeysModalOpen(true)}>
+                      <Key className="h-4 w-4" />
+                      Keys
+                    </ActionButton>
+                  </SourceRow>
+                  <SourceRow title="Refresh existing artwork" hint={artworkRefreshSummary ?? "Update covers, backdrops, and logos for imported titles."}>
+                    <ActionButton
+                      variant="primary"
+                      disabled={artworkRefreshBusy}
+                      onClick={() => void onRefreshArtwork()}
+                    >
+                      <ImageIcon className="h-4 w-4" />
+                      {artworkRefreshBusy ? "Refreshing" : "Refresh"}
+                    </ActionButton>
+                  </SourceRow>
+                </div>
+              )}
             </Panel>
 
-            <Panel title="Connector repositories" hint="Paste a repository URL that contains spilled-connectors.json. GitHub repository links are resolved automatically.">
-              <PreferenceRow title="Repository URL" hint="Use this for extra connector manifests without changing the app bundle.">
-                <div className="flex min-w-[min(34rem,100%)] flex-col gap-2 sm:flex-row">
-                  <input
-                    value={repositoryInput}
-                    onChange={(event) => setRepositoryInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        addProviderRepository();
-                      }
-                    }}
-                    placeholder="https://github.com/owner/spilled-connectors"
-                    className="h-10 min-w-0 flex-1 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
-                  />
-                  <ActionButton variant="primary" onClick={addProviderRepository}>
-                    <Plus className="h-4 w-4" />
-                    Add
-                  </ActionButton>
-                </div>
-              </PreferenceRow>
-              <PreferenceRow title="Installed repositories" hint={providerRepositoryUrls.length > 0 ? `${providerRepositoryUrls.length} custom source(s).` : "Only bundled defaults are active."}>
-                <ActionButton onClick={() => onProviderRepositoriesChange(providerRepositoryUrls)}>
-                  <RefreshCw className="h-4 w-4" />
-                  Refresh
-                </ActionButton>
-              </PreferenceRow>
-              {providerRepositoryUrls.length > 0 ? (
-                <div className="grid gap-3">
-                  {providerRepositoryUrls.map((url) => (
-                    <SourceRow key={url} title={url} hint="Custom connector repository">
-                      <button
-                        type="button"
-                        onClick={() => onProviderRepositoriesChange(providerRepositoryUrls.filter((entry) => entry !== url))}
-                        className="rounded-full bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/18"
-                      >
-                        Remove
-                      </button>
-                    </SourceRow>
-                  ))}
-                </div>
-              ) : null}
+            <Panel title="Connector repositories" hint={`${providerRepositoryUrls.length} source(s), including the default repository.`}>
+              <div className="flex flex-wrap gap-2">
+                <ActionButton variant="primary" onClick={() => setRepositoryModalOpen(true)}><Plus className="h-4 w-4" />Manage</ActionButton>
+                <ActionButton onClick={() => onProviderRepositoriesChange(providerRepositoryUrls)}><RefreshCw className="h-4 w-4" />Refresh</ActionButton>
+              </div>
             </Panel>
           </div>
         ) : null}
@@ -1141,6 +1236,25 @@ export function SettingsView({
             </Panel>
 
             {showPrivateSetup ? (
+              <Panel title="Setup private node" hint="A new node is waiting for initial setup.">
+                <div className="flex justify-end">
+                  <ActionButton variant="primary" onClick={() => setPrivateSetupModalOpen(true)}>Begin setup</ActionButton>
+                </div>
+              </Panel>
+            ) : null}
+
+            {privateSetupModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Private Node</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">Setup</h3>
+                </div>
+                <button type="button" onClick={() => setPrivateSetupModalOpen(false)} className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
               <Panel title="Setup private node" hint="Enter the verification code printed by the server terminal, then create the admin account and choose public capabilities.">
                 <div className="grid gap-3 md:grid-cols-2">
                   <SourceRow title="Setup code" hint="Printed by the server terminal after it starts.">
@@ -1222,6 +1336,8 @@ export function SettingsView({
                   </ActionButton>
                 </div>
               </Panel>
+              </div>
+            </div>
             ) : null}
 
             {privateAccounts.length > 0 && !privateNode.token && !privateNodeStatus?.auth?.setupRequired ? (
@@ -1324,7 +1440,7 @@ export function SettingsView({
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Module feeds</div>
-                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedFeedModule.name}</h3>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedFeedModule.displayName}</h3>
                 </div>
                 <button
                   type="button"
@@ -1358,6 +1474,266 @@ export function SettingsView({
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        ) : null}
+
+        {artworkKeysModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Artwork</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">API Keys</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/45">
+                    Configure your API keys for artwork providers. Leave empty to use shared keys if available.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setArtworkKeysModalOpen(false)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="grid gap-3">
+                <input
+                  value={integrationUserKeys["tmdb"] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey("tmdb", event.target.value)}
+                  placeholder="TMDB API Key"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <input
+                  value={integrationUserKeys["fanart"] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey("fanart", event.target.value)}
+                  placeholder="Fanart API Key"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <input
+                  value={integrationUserKeys["tvdb"] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey("tvdb", event.target.value)}
+                  placeholder="TVDB API Key"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <ActionButton variant="primary" onClick={() => setArtworkKeysModalOpen(false)}>Done</ActionButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {svetLoginModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Site login</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">SvetSerialu</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/45">
+                    Stored locally in this browser and sent only to the fetch runtime for SvetSerialu requests.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSvetLoginModalOpen(false)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close SvetSerialu login"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="grid gap-3">
+                <input
+                  value={integrationUserCredentials.svetserialu?.username ?? ""}
+                  onChange={(event) => {
+                    updateIntegrationUserCredential("svetserialu", "username", event.target.value);
+                    setSvetLoginMessage(null);
+                  }}
+                  placeholder="Username or email"
+                  type="text"
+                  autoComplete="username"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <input
+                  value={integrationUserCredentials.svetserialu?.password ?? ""}
+                  onChange={(event) => {
+                    updateIntegrationUserCredential("svetserialu", "password", event.target.value);
+                    setSvetLoginMessage(null);
+                  }}
+                  placeholder="Password"
+                  type="password"
+                  autoComplete="current-password"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+              </div>
+
+              {svetLoginMessage ? (
+                <div
+                  className={clsx(
+                    "mt-4 rounded-2xl border px-4 py-3 text-sm",
+                    svetLoginMessage.tone === "good"
+                      ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
+                      : "border-orange-300/20 bg-orange-300/10 text-orange-100",
+                  )}
+                >
+                  {svetLoginMessage.text}
+                </div>
+              ) : null}
+
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <ActionButton
+                  onClick={() => {
+                    clearIntegrationUserCredentials("svetserialu");
+                    setSvetLoginMessage(null);
+                  }}
+                >
+                  Clear
+                </ActionButton>
+                <ActionButton
+                  disabled={svetLoginBusy}
+                  onClick={() => void verifyStoredSvetLogin()}
+                >
+                  {svetLoginBusy ? "Verifying" : "Verify"}
+                </ActionButton>
+                <ActionButton variant="primary" onClick={() => setSvetLoginModalOpen(false)}>Done</ActionButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {selectedKeyModule ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">
+                    {selectedKeyModule.id === "svetserialu" ? "Site login" : "User API key"}
+                  </div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedKeyModule.displayName}</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/45">
+                    {selectedKeyModule.id === "svetserialu"
+                      ? "Stored locally in this browser and sent only to the local fetch runtime."
+                      : "Stored locally in this browser. Leave empty to use shared app keys when available."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setKeyModuleId(null)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close API key settings"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {selectedKeyModule.id === "svetserialu" ? (
+                <div className="grid gap-3">
+                  <input
+                    value={integrationUserCredentials.svetserialu?.username ?? ""}
+                    onChange={(event) => updateIntegrationUserCredential("svetserialu", "username", event.target.value)}
+                    placeholder="Username or email"
+                    type="text"
+                    autoComplete="username"
+                    className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  />
+                  <input
+                    value={integrationUserCredentials.svetserialu?.password ?? ""}
+                    onChange={(event) => updateIntegrationUserCredential("svetserialu", "password", event.target.value)}
+                    placeholder="Password"
+                    type="password"
+                    autoComplete="current-password"
+                    className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  />
+                </div>
+              ) : (
+                <input
+                  value={integrationUserKeys[selectedKeyModule.id] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey(selectedKeyModule.id, event.target.value)}
+                  placeholder={`${selectedKeyModule.displayName} API key`}
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+              )}
+              <div className="mt-4 flex justify-end gap-2">
+                <ActionButton
+                  onClick={() => {
+                    if (selectedKeyModule.id === "svetserialu") {
+                      clearIntegrationUserCredentials("svetserialu");
+                    } else {
+                      updateIntegrationUserKey(selectedKeyModule.id, "");
+                    }
+                  }}
+                >
+                  Clear
+                </ActionButton>
+                <ActionButton variant="primary" onClick={() => setKeyModuleId(null)}>Done</ActionButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {repositoryModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Connector repositories</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">Manage repositories</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRepositoryModalOpen(false)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close repositories"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  value={repositoryInput}
+                  onChange={(event) => setRepositoryInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      addProviderRepository();
+                    }
+                  }}
+                  placeholder="https://github.com/owner/spilled-connectors"
+                  className="h-10 min-w-0 flex-1 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <ActionButton variant="primary" onClick={addProviderRepository}><Plus className="h-4 w-4" />Add</ActionButton>
+                <ActionButton onClick={() => onProviderRepositoriesChange(providerRepositoryUrls)}><RefreshCw className="h-4 w-4" />Refresh</ActionButton>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {providerRepositoryUrls.map((url) => (
+                  <SourceRow
+                    key={url}
+                    title={url}
+                    hint={url === DEFAULT_PROVIDER_REPOSITORY_URL ? "Default connector repository" : "Custom connector repository"}
+                  >
+                    {url === DEFAULT_PROVIDER_REPOSITORY_URL ? (
+                      <StatusPill tone="good">Default</StatusPill>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onProviderRepositoriesChange(providerRepositoryUrls.filter((entry) => entry !== url))}
+                        className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/18"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </SourceRow>
+                ))}
+              </div>
             </div>
           </div>
         ) : null}

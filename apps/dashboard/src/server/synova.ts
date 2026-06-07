@@ -1,4 +1,4 @@
-import type { ExploreItem } from "../lib/types";
+import type { EpisodePlayer, ExploreItem, ImportedShow, LibraryEpisode } from "../lib/types";
 import {
   absoluteUrl,
   cachedFetchText,
@@ -32,8 +32,9 @@ function normalizeImageUrl(value: string | null | undefined) {
 }
 
 function parseTitleParts(value: string) {
-  const title = stripTags(value).replace(/\s*\((19|20)\d{2}\)\s*$/i, "").trim();
-  const year = value.match(/\((19|20)\d{2}\)\s*$/)?.[0]?.replace(/[()]/g, "") ?? null;
+  const text = stripTags(value);
+  const year = text.match(/(?:\((19|20)\d{2}\)|(19|20)\d{2})\s*$/)?.[0]?.replace(/[()]/g, "").trim() ?? null;
+  const title = text.replace(/\s*(?:\((19|20)\d{2}\)|(19|20)\d{2})\s*$/i, "").trim();
   return { title, year };
 }
 
@@ -90,6 +91,71 @@ function createSynovaItem(input: {
     discoveryScore: input.index !== undefined ? Math.max(0, 1000 - input.index) : undefined,
     recommendationReasons: [],
   } satisfies ExploreItem;
+}
+
+function normalizeSynovaImportSlug(value: string) {
+  const trimmed = value.trim().replace(/^\/+|\/+$/g, "");
+  if (/^https?:\/\//i.test(trimmed)) {
+    const parsed = new URL(trimmed);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const languageIndex = parts.findIndex((part) => part === "en");
+    return parts.slice(languageIndex >= 0 ? languageIndex + 1 : 0).join("/");
+  }
+  return trimmed.replace(/^en\//i, "");
+}
+
+function synovaShowSlug(importSlug: string) {
+  return `synova-${importSlug.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
+}
+
+function titleFromImportSlug(importSlug: string) {
+  return importSlug
+    .split("/")
+    .pop()
+    ?.replace(/-/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim() || "CineNova title";
+}
+
+function matchMeta(html: string, property: string) {
+  return html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']*)["']`, "i"))?.[1]?.trim() ?? null;
+}
+
+function matchBackdrop(html: string) {
+  const raw =
+    html.match(/class=["']backdrop["'][^>]*style=["'][^"']*background-image:\s*url\(([^)]+)\)/i)?.[1] ??
+    html.match(/mopie-modal-content[^>]*style=["'][^"']*background-image:\s*url\(([^)]+)\)/i)?.[1] ??
+    null;
+  return normalizeImageUrl(raw?.replace(/^["']|["']$/g, ""));
+}
+
+function parseVideoSources(html: string, detailUrl: string): EpisodePlayer[] {
+  const sourceMatches = [...html.matchAll(/<source\b[^>]+src=["']([^"']+)["'][^>]*(?:label=["']([^"']+)["'])?/gi)];
+  const players = sourceMatches.flatMap((match, index) => {
+    const sourceUrl = normalizeImageUrl(match[1]);
+    if (!sourceUrl) {
+      return [];
+    }
+    return [{
+      alias: `synova-source-${index}`,
+      provider: "synova",
+      label: match[2]?.trim() || `CineNova ${index + 1}`,
+      sourcePageUrl: detailUrl,
+      embedUrl: sourceUrl,
+    } satisfies EpisodePlayer];
+  });
+
+  if (players.length > 0) {
+    return players;
+  }
+
+  return [{
+    alias: "synova-page",
+    provider: "synova",
+    label: "CineNova Page",
+    sourcePageUrl: detailUrl,
+    embedUrl: detailUrl,
+  }];
 }
 
 export function parseSynovaCards(html: string, sectionKey: "popular" | "newest" | "topOverall" = "popular") {
@@ -181,4 +247,64 @@ export async function searchSynova(query: string) {
       .filter((item) => (item.matchScore ?? 0) > 0)
       .sort(compareSearchScores),
   ).slice(0, 12);
+}
+
+export async function fetchSynovaTitle(slug: string): Promise<ImportedShow> {
+  const importSlug = normalizeSynovaImportSlug(slug);
+  if (!/^(movie|tv)\/\d+(?:\/[a-z0-9-]+)?$/i.test(importSlug)) {
+    throw new Error("Provide a valid CineNova movie or TV slug.");
+  }
+
+  const detailUrl = `${EN_BASE_URL}/${importSlug}`;
+  const { html, stale } = await cachedFetchText(detailUrl, SEARCH_TTL_MS).catch(() => ({
+    html: "",
+    stale: true,
+  }));
+  const rawTitle =
+    stripTags(html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "") ||
+    matchMeta(html, "og:title") ||
+    titleFromImportSlug(importSlug);
+  const { title, year } = parseTitleParts(rawTitle);
+  const description = matchMeta(html, "og:description") ?? null;
+  const posterUrl = normalizeImageUrl(matchMeta(html, "og:image"));
+  const backdropUrl = matchBackdrop(html);
+  const mediaType = importSlug.startsWith("tv/") ? "serial" : "movie";
+  const showSlug = synovaShowSlug(importSlug);
+  const importedAt = Date.now();
+  const players = stale ? [{
+    alias: "synova-page" as const,
+    provider: "synova",
+    label: "CineNova Page",
+    sourcePageUrl: detailUrl,
+    embedUrl: detailUrl,
+  } satisfies EpisodePlayer] : parseVideoSources(html, detailUrl);
+
+  const episode: LibraryEpisode = {
+    id: `${showSlug}:s1e1`,
+    showSlug,
+    showTitle: title || showSlug,
+    posterUrl: posterUrl ?? undefined,
+    seasonNumber: 1,
+    episodeNumber: 1,
+    episodeCode: mediaType === "movie" ? "movie" : "s1e1",
+    episodeTitle: title || null,
+    episodeUrl: detailUrl,
+    players,
+    selectedPlayerAlias: players[0]?.alias ?? "synova-page",
+    importedAt,
+  };
+
+  return {
+    slug: showSlug,
+    title: title || showSlug,
+    altTitle: null,
+    description,
+    years: year,
+    posterUrl,
+    backdropUrl,
+    clearLogoUrl: null,
+    availableSeasons: [1],
+    importedAt,
+    episodes: [episode],
+  };
 }

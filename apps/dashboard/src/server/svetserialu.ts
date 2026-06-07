@@ -10,8 +10,9 @@ import {
   scoreSearchCandidate,
 } from "../lib/search-ranking";
 
-const BASE_URLS: string[] = ["https://svetserialu.to", "https://svetserialu.io"];
+const BASE_URLS: string[] = ["https://svetserialu.to", "https://svetserialu.io", "https://svetserialov.to"];
 const BASE_URL = BASE_URLS[0];
+const FETCH_PROXY_TEMPLATE = process.env.IMPORT_FETCH_PROXY_TEMPLATE || "";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
@@ -38,6 +39,18 @@ type ParsedPlayer = {
   language?: string;
 };
 
+export type SvetSerialuCredentials = {
+  username?: string;
+  password?: string;
+};
+
+type SvetSerialuSession = {
+  cookies: Map<string, string>;
+  expiresAt: number;
+};
+
+const svetSerialuSessions = new Map<string, SvetSerialuSession>();
+
 function decodeHtml(value: string) {
   return value
     .replace(/&amp;/g, "&")
@@ -60,19 +73,199 @@ function absoluteUrl(value: string, base = BASE_URL) {
   }
 }
 
+function withSvetSerialuBaseUrl(value: string, baseUrl: string) {
+  for (const knownBaseUrl of BASE_URLS) {
+    if (value.startsWith(knownBaseUrl)) {
+      return value.replace(knownBaseUrl, baseUrl);
+    }
+  }
+  return value;
+}
+
+function buildProxyUrl(targetUrl: string) {
+  const template = FETCH_PROXY_TEMPLATE.trim();
+  if (!template) {
+    return null;
+  }
+
+  if (template.includes("{url}")) {
+    return template.replaceAll("{url}", encodeURIComponent(targetUrl));
+  }
+
+  const separator = template.includes("?") ? "&" : "?";
+  return `${template}${separator}url=${encodeURIComponent(targetUrl)}`;
+}
+
 function matchOne(html: string, pattern: RegExp) {
   const match = html.match(pattern);
   return match?.[1]?.trim() ?? null;
 }
 
-async function fetchText(url: string, referer?: string) {
+function normalizeSvetSerialuCredentials(credentials?: SvetSerialuCredentials | null) {
+  const username = credentials?.username?.trim() ?? "";
+  const password = credentials?.password ?? "";
+  return username && password ? { username, password } : null;
+}
+
+function getSessionKey(credentials: { username: string; password: string }) {
+  return Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
+}
+
+function getSetCookieHeaders(headers: Headers) {
+  const withGetSetCookie = headers as Headers & { getSetCookie?: () => string[] };
+  const values = typeof withGetSetCookie.getSetCookie === "function" ? withGetSetCookie.getSetCookie() : [];
+  const fallback = headers.get("set-cookie");
+  return values.length > 0 ? values : fallback ? [fallback] : [];
+}
+
+function mergeSetCookies(cookies: Map<string, string>, setCookieHeaders: string[]) {
+  for (const header of setCookieHeaders) {
+    const [pair] = header.split(";");
+    const separator = pair.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const name = pair.slice(0, separator).trim();
+    const value = pair.slice(separator + 1).trim();
+    if (name && value) {
+      cookies.set(name, value);
+    }
+  }
+}
+
+function buildCookieHeader(cookies: Map<string, string>) {
+  return Array.from(cookies.entries()).map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+function isSvetSerialuLoginPage(html: string) {
+  return /\/user\/login/i.test(html) || /class="login-user"/i.test(html) || /name="user_pass"/i.test(html);
+}
+
+async function loginSvetSerialu(credentials: { username: string; password: string }, baseUrl: string) {
+  const cookies = new Map<string, string>();
+  const loginPage = await fetch(`${baseUrl}/user/login`, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
+      Referer: `${baseUrl}/login`,
+    },
+  }).catch(() => null);
+
+  if (loginPage) {
+    mergeSetCookies(cookies, getSetCookieHeaders(loginPage.headers));
+  }
+
+  const body = new URLSearchParams({
+    user_name: credentials.username,
+    user_pass: credentials.password,
+    register_login: "1",
+  });
+
+  const response = await fetch(`${baseUrl}/user/login`, {
+    method: "POST",
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json,text/javascript,*/*;q=0.01",
+      "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      Origin: baseUrl,
+      Referer: `${baseUrl}/login`,
+      ...(cookies.size > 0 ? { Cookie: buildCookieHeader(cookies) } : {}),
+    },
+    body,
+    redirect: "follow",
+  });
+
+  mergeSetCookies(cookies, getSetCookieHeaders(response.headers));
+  const text = await response.text();
+  let status: unknown = null;
+  try {
+    status = JSON.parse(text)?.status;
+  } catch {
+    status = text;
+  }
+
+  const statusValues = Array.isArray(status) ? status : [status];
+  if (!response.ok || !statusValues.includes("SUCCESS")) {
+    throw new Error("SvetSerialu login failed. Check the username and password in Settings.");
+  }
+
+  const session: SvetSerialuSession = {
+    cookies,
+    expiresAt: Date.now() + 1000 * 60 * 60 * 6,
+  };
+  svetSerialuSessions.set(getSessionKey(credentials), session);
+  return session;
+}
+
+async function getSvetSerialuSession(credentials: { username: string; password: string }, baseUrl: string, force = false) {
+  const key = getSessionKey(credentials);
+  const existing = svetSerialuSessions.get(key);
+  if (!force && existing && existing.expiresAt > Date.now()) {
+    return existing;
+  }
+  return loginSvetSerialu(credentials, baseUrl);
+}
+
+async function fetchTextViaProxy(
+  targetUrl: string,
+  referer: string | undefined,
+  baseUrl: string,
+  session?: SvetSerialuSession | null,
+) {
+  const proxyUrl = buildProxyUrl(targetUrl);
+  if (!proxyUrl) {
+    return null;
+  }
+
+  const response = await fetch(proxyUrl, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,application/json;q=0.6",
+      "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
+      Referer: referer ?? baseUrl,
+      "X-Target-URL": targetUrl,
+      ...(session?.cookies.size ? { "X-Target-Cookie": buildCookieHeader(session.cookies) } : {}),
+    },
+    redirect: "follow",
+  });
+
+  mergeSetCookies(session?.cookies ?? new Map(), getSetCookieHeaders(response.headers));
+
+  if (!response.ok) {
+    throw new Error(`Proxy request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const payload = await response.json().catch(() => null) as {
+      html?: unknown;
+      content?: unknown;
+      body?: unknown;
+      data?: { html?: unknown };
+    } | null;
+    const html = payload?.html ?? payload?.content ?? payload?.body ?? payload?.data?.html;
+    if (typeof html === "string" && html.trim().length > 0) {
+      return html;
+    }
+    throw new Error("Proxy response did not include HTML payload.");
+  }
+
+  return response.text();
+}
+
+async function fetchText(url: string, referer?: string, credentials?: SvetSerialuCredentials | null) {
   const attempts: string[] = [];
+  const normalizedCredentials = normalizeSvetSerialuCredentials(credentials);
 
   for (const baseUrl of BASE_URLS) {
-    const targetUrl = url.startsWith(BASE_URL) ? url.replace(BASE_URL, baseUrl) : url;
+    const targetUrl = withSvetSerialuBaseUrl(url, baseUrl);
     const targetReferer = referer
-      ? (referer.startsWith(BASE_URL) ? referer.replace(BASE_URL, baseUrl) : referer)
+      ? withSvetSerialuBaseUrl(referer, baseUrl)
       : baseUrl;
+    const session = normalizedCredentials ? await getSvetSerialuSession(normalizedCredentials, baseUrl) : null;
 
     console.log(`[svetserialu:fetch] GET ${targetUrl}`);
     const response = await fetch(targetUrl, {
@@ -92,22 +285,72 @@ async function fetchText(url: string, referer?: string) {
         "Sec-CH-UA-Mobile": "?0",
         "Sec-CH-UA-Platform": "\"Windows\"",
         Referer: targetReferer,
+        ...(session?.cookies.size ? { Cookie: buildCookieHeader(session.cookies) } : {}),
       },
       redirect: "follow",
     });
 
     console.log(`[svetserialu:fetch] ${response.status} ${response.statusText} ${targetUrl}`);
     if (response.ok) {
-      return response.text();
+      mergeSetCookies(session?.cookies ?? new Map(), getSetCookieHeaders(response.headers));
+      const html = await response.text();
+      if (isSvetSerialuLoginPage(html)) {
+        if (!normalizedCredentials) {
+          throw new Error("SvetSerialu now requires login. Add your SvetSerialu username and password in Settings > Sources.");
+        }
+
+        const refreshedSession = await getSvetSerialuSession(normalizedCredentials, baseUrl, true);
+        const retry = await fetch(targetUrl, {
+          headers: {
+            "User-Agent": USER_AGENT,
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
+            Referer: targetReferer,
+            Cookie: buildCookieHeader(refreshedSession.cookies),
+          },
+          redirect: "follow",
+        });
+        if (retry.ok) {
+          mergeSetCookies(refreshedSession.cookies, getSetCookieHeaders(retry.headers));
+          const retryHtml = await retry.text();
+          if (!isSvetSerialuLoginPage(retryHtml)) {
+            return retryHtml;
+          }
+        }
+
+        throw new Error("SvetSerialu login did not unlock this page. Check the credentials in Settings.");
+      }
+      return html;
     }
 
     attempts.push(`${baseUrl}: ${response.status} ${response.statusText}`);
-    if (response.status !== 403) {
-      throw new Error(`Request failed: ${response.status} ${response.statusText} for ${targetUrl}`);
+    if ((response.status === 403 || response.status === 503) && FETCH_PROXY_TEMPLATE) {
+      try {
+        const proxiedHtml = await fetchTextViaProxy(targetUrl, targetReferer, baseUrl, session);
+        if (proxiedHtml && !isSvetSerialuLoginPage(proxiedHtml)) {
+          return proxiedHtml;
+        }
+        if (proxiedHtml && isSvetSerialuLoginPage(proxiedHtml) && !normalizedCredentials) {
+          throw new Error("SvetSerialu now requires login. Add your SvetSerialu username and password in Settings > Sources.");
+        }
+      } catch (error) {
+        attempts.push(`${baseUrl} proxy: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 
+  if (!normalizedCredentials && attempts.length > 0 && attempts.every((attempt) => attempt.includes("503"))) {
+    const proxyHint = FETCH_PROXY_TEMPLATE
+      ? "The configured import proxy did not bypass the block."
+      : "Set IMPORT_FETCH_PROXY_TEMPLATE to restore the old proxy fallback used by the previous hard-coded importer.";
+    throw new Error(`SvetSerialu is blocking this page before login or proxy fallback. ${proxyHint}`);
+  }
+
   throw new Error(`Request failed on all hosts: ${attempts.join(" | ")} for ${url}`);
+}
+
+export async function fetchSvetSerialuText(url: string, referer?: string, credentials?: SvetSerialuCredentials | null) {
+  return await fetchText(url, referer, credentials);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -409,10 +652,10 @@ function parseYearHint(value: string | null | undefined) {
   return match?.[0] ?? undefined;
 }
 
-export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> {
+export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSerialuCredentials | null): Promise<ImportedShow> {
   console.log(`[svetserialu] import start slug=${slug}`);
   const showUrl = `${BASE_URL}/serial/${slug}`;
-  const showHtml = await fetchText(showUrl);
+  const showHtml = await fetchText(showUrl, undefined, credentials);
   console.log(`[svetserialu] show html length=${showHtml.length}`);
 
   const title = stripTags(matchOne(showHtml, /<h1 class="nunito">([\s\S]*?)<\/h1>/i) ?? slug);
@@ -434,7 +677,7 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
   }
 
   const firstEpisodeUrl = absoluteUrl(firstEpisodePath, BASE_URL);
-  const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl);
+  const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl, credentials);
   const tvShowId = matchOne(firstEpisodeHtml, /\/episodes-list\?tvShowId=(\d+)/i);
 
   const firstSeason = Number.parseInt(firstEpisodeUrl.match(/\/s(\d+)e\d+$/i)?.[1] ?? "1", 10);
@@ -445,6 +688,7 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
     const firstSeasonListHtml = await fetchText(
       `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${firstSeason}&episode=1`,
       firstEpisodeUrl,
+      credentials,
     );
     console.log(`[svetserialu] first season list length=${firstSeasonListHtml.length} tvShowId=${tvShowId}`);
 
@@ -456,6 +700,7 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
           : await fetchText(
               `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${seasonNumber}&episode=1`,
               showUrl,
+              credentials,
             );
 
       console.log(`[svetserialu] season=${seasonNumber} list length=${html.length}`);
@@ -469,7 +714,7 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
 
     availableSeasons = accordionSeasons.map((season) => season.seasonNumber);
     seasonLists = await mapWithConcurrency(accordionSeasons, 4, async (season) => {
-      const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl);
+      const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl, credentials);
       console.log(`[svetserialu] season=${season.seasonNumber} accordion=${season.accordionId} list length=${html.length}`);
       return getEpisodesFromList(html, season.seasonNumber);
     });
@@ -543,6 +788,17 @@ export async function fetchSvetSerialuShow(slug: string): Promise<ImportedShow> 
   };
 }
 
+export async function verifySvetSerialuLogin(credentials?: SvetSerialuCredentials | null) {
+  const normalizedCredentials = normalizeSvetSerialuCredentials(credentials);
+  if (!normalizedCredentials) {
+    throw new Error("Enter your SvetSerialu username and password first.");
+  }
+
+  await getSvetSerialuSession(normalizedCredentials, BASE_URL, true);
+  await fetchText(BASE_URL, undefined, normalizedCredentials);
+  return { ok: true };
+}
+
 export type SvetSerialuSearchResult = {
   title: string;
   slug: string;
@@ -555,13 +811,13 @@ export type SvetSerialuSearchResult = {
 
 async function searchSvetSerialuProvider(
   query: string,
-  options: { limit?: number; scoreBoost?: number; strict?: boolean } = {},
+  options: { limit?: number; scoreBoost?: number; strict?: boolean; credentials?: SvetSerialuCredentials | null } = {},
 ): Promise<SvetSerialuSearchResult[]> {
    try {
       const sanitized = encodeURIComponent(query);
       const limit = options.limit ?? 8;
       // Search results are returned by the homepage endpoint with searchfor param.
-      const html = await fetchText(`${BASE_URL}/?searchfor=${sanitized}`);
+      const html = await fetchText(`${BASE_URL}/?searchfor=${sanitized}`, undefined, options.credentials);
       const matches = [...html.matchAll(/href="\/serial\/([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
 
       const results: SvetSerialuSearchResult[] = [];
@@ -594,7 +850,10 @@ async function searchSvetSerialuProvider(
       return Array.from(new Map(results.map(r => [r.slug, r])).values())
         .sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0))
         .slice(0, limit);
-   } catch {
+   } catch (error) {
+      if (options.credentials) {
+        throw error;
+      }
       return [];
    }
 }
@@ -621,7 +880,7 @@ function scoreSvetProviderMatchForCatalog(query: string, result: SvetSerialuSear
   return Math.max(titleScore, originalScore) + queryScore + yearBonus + yearPenalty + Math.round(catalog.matchScore / 2);
 }
 
-export async function searchSvetSerialu(query: string): Promise<SvetSerialuSearchResult[]> {
+export async function searchSvetSerialu(query: string, credentials?: SvetSerialuCredentials | null): Promise<SvetSerialuSearchResult[]> {
   const catalog = (await searchExternalTitles(query, 8)).filter((candidate) => candidate.mediaType === "serial");
   const targeted = await mapWithConcurrency(catalog, 4, async (candidate) => {
     const terms = [
@@ -633,6 +892,7 @@ export async function searchSvetSerialu(query: string): Promise<SvetSerialuSearc
         limit: 4,
         scoreBoost: Math.round(candidate.matchScore / 3),
         strict: true,
+        credentials,
       })
     ));
 
@@ -643,7 +903,7 @@ export async function searchSvetSerialu(query: string): Promise<SvetSerialuSearc
       matchScore: scoreSvetProviderMatchForCatalog(query, result, candidate, index),
     }));
   });
-  const direct = await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8 });
+  const direct = await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials });
   const unique = new Map<string, SvetSerialuSearchResult>();
 
   for (const result of [...targeted.flat(), ...direct].sort(compareSearchScores)) {

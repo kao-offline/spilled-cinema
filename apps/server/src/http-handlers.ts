@@ -19,16 +19,25 @@ import {
   getNodeRuntime,
   getNodeStatus,
   importShow,
+  importProviderItem,
+  importTitleItem,
   listDownloads,
+  loadIntegrationCatalog,
   refreshArtwork,
+  resolveTitleItem,
   resolveBrowserDownloadViaNode,
   searchArtwork,
   searchNode,
   searchProviderModuleItems,
+  searchTitleItems,
   startDownload,
+  verifySvetSerialuCredentials,
 } from "../../../packages/node-client/src/index";
+import type { ResolvedTitle } from "../../dashboard/src/lib/types";
+import type { SvetSerialuCredentials } from "../../dashboard/src/server/svetserialu";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "./player-resolver";
 import { searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
+import { resolveArtworkApiKeys } from "../../dashboard/src/server/shared-artwork-api-keys";
 import {
   ensureSeekableDownloadFile,
   findEpisodeDownloadByFileNameFast,
@@ -39,6 +48,7 @@ import {
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const RATE_LIMITS = new Map<string, { count: number; resetAt: number }>();
+const DEFAULT_PROVIDER_REPOSITORY_URL = "https://github.com/kao-offline/spilled-connectors";
 
 export type JsonResponse = {
   statusCode: number;
@@ -65,6 +75,27 @@ function sendJson(res: JsonResponse, statusCode: number, payload: unknown) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(payload));
+}
+
+async function readLocalEnvValue(name: string) {
+  if (process.env[name]?.trim()) {
+    return process.env[name]!.trim();
+  }
+
+  for (const file of [".env.local", "apps/dashboard/.env.local"]) {
+    try {
+      const content = await readFile(file, "utf8");
+      const line = content.split(/\r?\n/).find((entry) => entry.trimStart().startsWith(`${name}=`));
+      const value = line?.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "");
+      if (value) {
+        return value;
+      }
+    } catch {
+      // Try the next env file.
+    }
+  }
+
+  return "";
 }
 
 function getBearerToken(req: RequestLike) {
@@ -108,6 +139,10 @@ function checkRateLimit(req: RequestLike, action: string, limit = 8, windowMs = 
 function getQueryParams(url = "") {
   const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   return new URLSearchParams(query);
+}
+
+function getRepositoryUrlsOrDefault(urls: unknown) {
+  return Array.isArray(urls) && urls.length > 0 ? urls.filter((url): url is string => typeof url === "string") : [DEFAULT_PROVIDER_REPOSITORY_URL];
 }
 
 function getSafeFileName(input: string | null) {
@@ -288,15 +323,63 @@ export function createHttpHandlers() {
     sendJson(res, 200, await getNodeStatus());
   };
 
+  const controlPlaneProxyHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET" && req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    const siteUrl = await readLocalEnvValue("CONVEX_SITE_URL");
+    if (!siteUrl) return sendJson(res, 500, { error: "CONVEX_SITE_URL is not configured." });
+
+    try {
+      const incoming = new URL(req.url || "/api/server", "http://127.0.0.1");
+      const path = incoming.searchParams.get("path")?.replace(/^\/+/, "");
+      if (!path) return sendJson(res, 400, { error: "Missing control-plane path." });
+
+      incoming.searchParams.delete("path");
+      const target = new URL(`/server/${path}`, siteUrl.replace(/\/$/, ""));
+      for (const [key, value] of incoming.searchParams.entries()) {
+        target.searchParams.append(key, value);
+      }
+
+      const response = await fetch(target.toString(), {
+        method: req.method,
+        headers: {
+          Accept: "application/json",
+          ...(req.headers?.["x-spilled-control-plane-secret"]
+            ? { "x-spilled-control-plane-secret": String(req.headers["x-spilled-control-plane-secret"]) }
+            : {}),
+        },
+      });
+      const text = await response.text();
+      try {
+        sendJson(res, response.status, JSON.parse(text));
+      } catch {
+        res.statusCode = response.status;
+        res.end(text);
+      }
+    } catch (error) {
+      sendJson(res, 502, { error: error instanceof Error ? error.message : "Failed to reach control plane." });
+    }
+  };
+
   const importSvetSerialuHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
-      const body = await readJsonBody<{ slug?: string }>(req);
+      const body = await readJsonBody<{ slug?: string; svetserialuCredentials?: SvetSerialuCredentials | null }>(req);
       const slug = body.slug?.trim().toLowerCase();
       if (!slug || !/^[a-z0-9-]+$/.test(slug)) return sendJson(res, 400, { error: "Provide a valid show slug." });
-      sendJson(res, 200, { show: await importShow("svetserialu", slug) });
+      sendJson(res, 200, { show: await importShow("svetserialu", slug, undefined, { svetserialuCredentials: body.svetserialuCredentials }) });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to import show." });
+    }
+  };
+
+  const svetSerialuAuthVerifyHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{ svetserialuCredentials?: SvetSerialuCredentials | null }>(req);
+      await verifySvetSerialuCredentials(body.svetserialuCredentials);
+      sendJson(res, 200, { ok: true });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : "SvetSerialu login failed." });
     }
   };
 
@@ -315,9 +398,9 @@ export function createHttpHandlers() {
   const searchHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
-      const body = await readJsonBody<{ query?: string }>(req);
+      const body = await readJsonBody<{ query?: string; svetserialuCredentials?: SvetSerialuCredentials | null }>(req);
       const query = body.query?.trim() ?? "";
-      sendJson(res, 200, { results: query ? await searchNode(query) : [] });
+      sendJson(res, 200, { results: query ? await searchNode(query, { svetserialuCredentials: body.svetserialuCredentials }) : [] });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to search." });
     }
@@ -341,6 +424,7 @@ export function createHttpHandlers() {
         cursor?: string | null;
         limit?: number;
         repositoryUrls?: string[];
+        svetserialuCredentials?: SvetSerialuCredentials | null;
       }>(req);
       const moduleId = body.moduleId?.trim();
       const feedId = body.feedId?.trim();
@@ -352,6 +436,8 @@ export function createHttpHandlers() {
         feedId,
         cursor: body.cursor ?? null,
         limit: body.limit,
+        repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
+        svetserialuCredentials: body.svetserialuCredentials,
       }));
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to load provider feed." });
@@ -361,16 +447,152 @@ export function createHttpHandlers() {
   const providerSearchHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
-      const body = await readJsonBody<{ moduleId?: string; query?: string; repositoryUrls?: string[] }>(req);
+      const body = await readJsonBody<{
+        moduleId?: string;
+        query?: string;
+        repositoryUrls?: string[];
+        svetserialuCredentials?: SvetSerialuCredentials | null;
+      }>(req);
       const moduleId = body.moduleId?.trim();
       const query = body.query?.trim() ?? "";
       if (!moduleId) {
         return sendJson(res, 400, { error: "moduleId is required." });
       }
-      sendJson(res, 200, { results: query ? await searchProviderModuleItems({ moduleId, query }) : [] });
+      sendJson(res, 200, {
+        results: query
+          ? await searchProviderModuleItems({
+              moduleId,
+              query,
+              repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
+              svetserialuCredentials: body.svetserialuCredentials,
+            })
+          : [],
+      });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to search provider feed." });
     }
+  };
+
+  const providerImportHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        moduleId?: string;
+        slug?: string;
+        mediaType?: "movie" | "serial";
+        repositoryUrls?: string[];
+        svetserialuCredentials?: SvetSerialuCredentials | null;
+      }>(req);
+      const moduleId = body.moduleId?.trim();
+      const slug = body.slug?.trim();
+      if (!moduleId || !slug) {
+        return sendJson(res, 400, { error: "moduleId and slug are required." });
+      }
+      sendJson(res, 200, {
+        show: await importProviderItem({
+          moduleId,
+          slug,
+          mediaType: body.mediaType,
+          repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
+          svetserialuCredentials: body.svetserialuCredentials,
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to import provider item." });
+    }
+  };
+
+  const integrationsCatalogHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET" && req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = req.method === "POST"
+        ? await readJsonBody<{ repositoryUrls?: string[] }>(req)
+        : { repositoryUrls: [] as string[] };
+      sendJson(res, 200, {
+        integrations: await loadIntegrationCatalog({
+          repositoryUrls: getRepositoryUrlsOrDefault(body.repositoryUrls),
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to load integrations catalog." });
+    }
+  };
+
+  const integrationsRefreshHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{ repositoryUrls?: string[] }>(req);
+      sendJson(res, 200, {
+        integrations: await loadIntegrationCatalog({
+          repositoryUrls: getRepositoryUrlsOrDefault(body.repositoryUrls),
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to refresh integrations." });
+    }
+  };
+
+  const titleSearchHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        query?: string;
+        repositoryUrls?: string[];
+        mediaType?: "movie" | "series";
+      }>(req);
+      sendJson(res, 200, await searchTitleItems({
+        query: body.query?.trim() ?? "",
+        mediaType: body.mediaType,
+        repositoryUrls: getRepositoryUrlsOrDefault(body.repositoryUrls),
+      }));
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to search titles." });
+    }
+  };
+
+  const titleResolveHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title?: ResolvedTitle;
+        repositoryUrls?: string[];
+      }>(req);
+      if (!body.title) {
+        return sendJson(res, 400, { error: "title is required." });
+      }
+      sendJson(res, 200, {
+        title: await resolveTitleItem({
+          title: body.title,
+          repositoryUrls: getRepositoryUrlsOrDefault(body.repositoryUrls),
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to resolve title." });
+    }
+  };
+
+  const titleImportHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title?: ResolvedTitle;
+        repositoryUrls?: string[];
+      }>(req);
+      if (!body.title) {
+        return sendJson(res, 400, { error: "title is required." });
+      }
+      sendJson(res, 200, await importTitleItem({
+        title: body.title,
+        repositoryUrls: getRepositoryUrlsOrDefault(body.repositoryUrls),
+      }));
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to import title." });
+    }
+  };
+
+  const integrationsConfigHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    sendJson(res, 200, { ok: true });
   };
 
   const refreshArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
@@ -386,8 +608,11 @@ export function createHttpHandlers() {
         posterUrl?: string | null;
         backdropUrl?: string | null;
         clearLogoUrl?: string | null;
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
         artworkSources?: { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
       }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
       sendJson(res, 200, {
         artwork: await refreshArtwork({
           mediaType: body.mediaType,
@@ -398,7 +623,9 @@ export function createHttpHandlers() {
           currentPosterUrl: body.posterUrl ?? null,
           currentBackdropUrl: body.backdropUrl ?? null,
           currentClearLogoUrl: body.clearLogoUrl ?? null,
+          externalIds: body.externalIds ?? undefined,
           sources: body.artworkSources,
+          apiKeys,
         }),
       });
     } catch (error) {
@@ -419,8 +646,11 @@ export function createHttpHandlers() {
         posterUrl?: string | null;
         backdropUrl?: string | null;
         clearLogoUrl?: string | null;
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
         artworkSources?: { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
       }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
       sendJson(res, 200, {
         assets: await searchArtwork({
           mediaType: body.mediaType,
@@ -431,7 +661,9 @@ export function createHttpHandlers() {
           currentPosterUrl: body.posterUrl ?? null,
           currentBackdropUrl: body.backdropUrl ?? null,
           currentClearLogoUrl: body.clearLogoUrl ?? null,
+          externalIds: body.externalIds ?? undefined,
           sources: body.artworkSources,
+          apiKeys,
         }),
       });
     } catch (error) {
@@ -1276,12 +1508,21 @@ export function createHttpHandlers() {
   return {
     runtime,
     statusHandler,
+    controlPlaneProxyHandler,
     importSvetSerialuHandler,
+    svetSerialuAuthVerifyHandler,
     importBombujHandler,
     searchHandler,
     providerModulesHandler,
     providerFeedHandler,
     providerSearchHandler,
+    providerImportHandler,
+    integrationsCatalogHandler,
+    integrationsRefreshHandler,
+    titleSearchHandler,
+    titleResolveHandler,
+    titleImportHandler,
+    integrationsConfigHandler,
     refreshArtworkHandler,
     searchArtworkHandler,
     exploreFeedHandler,

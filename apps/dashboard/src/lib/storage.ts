@@ -205,6 +205,8 @@ function mergeImportedShow(existingShow: ImportedShow, nextShow: ImportedShow): 
   return {
     ...nextShow,
     isFavorite: nextShow.isFavorite ?? existingShow.isFavorite,
+    mediaType: nextShow.mediaType ?? existingShow.mediaType,
+    externalIds: nextShow.externalIds ?? existingShow.externalIds,
     posterUrl: nextShow.posterUrl ?? existingShow.posterUrl,
     backdropUrl: nextShow.backdropUrl ?? existingShow.backdropUrl,
     clearLogoUrl: nextShow.clearLogoUrl ?? existingShow.clearLogoUrl,

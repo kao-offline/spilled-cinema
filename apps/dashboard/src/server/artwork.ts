@@ -34,6 +34,18 @@ type ArtworkSourceSettings = {
   tvdb?: boolean;
 };
 
+export type ArtworkApiKeys = {
+  tmdbApiKey?: string;
+  fanartApiKey?: string;
+  tvdbApiKey?: string;
+};
+
+export type ArtworkExternalIds = {
+  imdb?: string | number | null;
+  tmdb?: string | number | null;
+  tvdb?: string | number | null;
+};
+
 type TmdbImageConfig = {
   secure_base_url: string;
   poster_sizes: string[];
@@ -51,6 +63,8 @@ type TmdbSearchResult = {
   backdrop_path?: string | null;
   release_date?: string;
   first_air_date?: string;
+  popularity?: number;
+  vote_count?: number;
   known_for_department?: string;
   known_for?: Array<{
     title?: string;
@@ -130,6 +144,16 @@ type TvdbExtendedRecord = {
   artworks?: TvdbArtworkEntry[] | null;
 };
 
+type TmdbFindPayload = {
+  movie_results?: TmdbSearchResult[];
+  tv_results?: TmdbSearchResult[];
+};
+
+type TmdbExternalIdsPayload = {
+  imdb_id?: string | null;
+  tvdb_id?: number | null;
+};
+
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
 const TVDB_API_BASE = "https://api4.thetvdb.com/v4";
 const DEFAULT_IMAGE_CONFIG: TmdbImageConfig = {
@@ -142,19 +166,23 @@ let tmdbImageConfigPromise: Promise<TmdbImageConfig> | null = null;
 let tvdbTokenPromise: Promise<string | null> | null = null;
 
 function getTmdbReadToken() {
-  return process.env.TMDB_API_READ_TOKEN?.trim() || "";
+  return process.env.TMDB_API_READ_TOKEN?.trim().split(/\s+/)[0] || "";
 }
 
-function getFanartApiKey() {
-  return process.env.FANART_API_KEY?.trim() || "";
+function getTmdbApiKey(apiKeys?: ArtworkApiKeys) {
+  return apiKeys?.tmdbApiKey?.trim() || process.env.TMDB_API_KEY?.trim() || "";
+}
+
+function getFanartApiKey(apiKeys?: ArtworkApiKeys) {
+  return apiKeys?.fanartApiKey?.trim() || process.env.FANART_API_KEY?.trim() || "";
 }
 
 function getFanartClientKey() {
   return process.env.FANART_CLIENT_KEY?.trim() || "";
 }
 
-function getTvdbApiKey() {
-  return process.env.TVDB_API_KEY?.trim() || "";
+function getTvdbApiKey(apiKeys?: ArtworkApiKeys) {
+  return apiKeys?.tvdbApiKey?.trim() || process.env.TVDB_API_KEY?.trim() || "";
 }
 
 function toAsciiSearchText(value: string | null | undefined) {
@@ -299,13 +327,21 @@ function buildTmdbImageUrl(
   return `${imageConfig.secure_base_url}${preferredSize}${filePath}`;
 }
 
+function buildTmdbOriginalImageUrl(filePath: string | null | undefined, imageConfig: TmdbImageConfig) {
+  if (!filePath) {
+    return null;
+  }
+  return `${imageConfig.secure_base_url}original${filePath}`;
+}
+
 function isSourceEnabled(sources: ArtworkSourceSettings | undefined, source: keyof ArtworkSourceSettings) {
   return sources?.[source] !== false;
 }
 
-async function fetchTmdbJson<T>(path: string, query?: Record<string, string | undefined>): Promise<T | null> {
+async function fetchTmdbJson<T>(path: string, query?: Record<string, string | undefined>, apiKeys?: ArtworkApiKeys): Promise<T | null> {
   const token = getTmdbReadToken();
-  if (!token) {
+  const apiKey = getTmdbApiKey(apiKeys);
+  if (!token && !apiKey) {
     return null;
   }
 
@@ -315,13 +351,23 @@ async function fetchTmdbJson<T>(path: string, query?: Record<string, string | un
       url.searchParams.set(key, value);
     }
   }
+  if (!token && apiKey) {
+    url.searchParams.set("api_key", apiKey);
+  }
 
-  const response = await fetch(url.toString(), {
+  let response = await fetch(url.toString(), {
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       Accept: "application/json",
     },
   }).catch(() => null);
+
+  if ((!response || !response.ok) && token && apiKey) {
+    url.searchParams.set("api_key", apiKey);
+    response = await fetch(url.toString(), {
+      headers: { Accept: "application/json" },
+    }).catch(() => null);
+  }
 
   if (!response?.ok) {
     return null;
@@ -330,7 +376,12 @@ async function fetchTmdbJson<T>(path: string, query?: Record<string, string | un
   return (await response.json()) as T;
 }
 
-async function getTmdbImageConfig() {
+async function getTmdbImageConfig(apiKeys?: ArtworkApiKeys) {
+  if (apiKeys?.tmdbApiKey?.trim()) {
+    const payload = await fetchTmdbJson<{ images?: TmdbImageConfig }>("/configuration", undefined, apiKeys);
+    return payload?.images ?? DEFAULT_IMAGE_CONFIG;
+  }
+
   tmdbImageConfigPromise ??= (async () => {
     const payload = await fetchTmdbJson<{ images?: TmdbImageConfig }>("/configuration");
     return payload?.images ?? DEFAULT_IMAGE_CONFIG;
@@ -364,13 +415,137 @@ function getSearchTitleVariants(...values: Array<string | null | undefined>) {
   for (const value of values) {
     const raw = (value ?? "").trim();
     if (!raw) continue;
-    variants.add(raw);
-    const ascii = toAsciiSearchText(raw);
-    if (ascii) {
-      variants.add(ascii);
+    for (const variant of getArtworkTitleVariants(raw)) {
+      variants.add(variant);
+      const ascii = toAsciiSearchText(variant);
+      if (ascii) {
+        variants.add(ascii);
+      }
     }
   }
   return Array.from(variants);
+}
+
+function stripArtworkNoise(value: string) {
+  return value
+    .replace(/\(\s*\)/g, " ")
+    .replace(/\b(?:online|film|serial|sleduj|cz|sk|dabing|titulky)\b/gi, " ")
+    .replace(/\b(19|20)\d{2}\s*(?:[-–]\s*(19|20)\d{2})?\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getArtworkTitleVariants(value: string) {
+  const cleaned = stripArtworkNoise(value);
+  const variants = new Set<string>();
+  if (cleaned) {
+    variants.add(cleaned);
+  }
+
+  for (const separator of [":", " - ", " | "]) {
+    if (!cleaned.includes(separator)) continue;
+    const [left, ...rightParts] = cleaned.split(separator);
+    const right = rightParts.join(separator).trim();
+    if (left?.trim()) variants.add(left.trim());
+    if (right) variants.add(right);
+  }
+
+  const tokens = normalizeSearchText(cleaned).split(" ").filter(Boolean);
+  if (tokens.length >= 2 && tokens[0] === tokens[1]) {
+    variants.add(tokens[0]);
+  }
+
+  return Array.from(variants).filter((variant) => normalizeSearchText(variant).length >= 2);
+}
+
+function isAmbiguousArtworkTitle(title: string, altTitle?: string | null) {
+  const normalized = normalizeSearchText(title || altTitle || "");
+  const compactLength = normalized.replace(/\s+/g, "").length;
+  return compactLength <= 5 || /^\d+$/.test(normalized.replace(/\s+/g, ""));
+}
+
+function getEffectiveYearHint(title: string, altTitle?: string | null, yearHint?: string) {
+  return yearHint ?? parseYear(title) ?? parseYear(altTitle);
+}
+
+type ArtworkLookupOptions = {
+  mediaType: "movie" | "tv";
+  title: string;
+  altTitle?: string | null;
+  yearHint?: string;
+  description?: string | null;
+  currentPosterUrl?: string | null;
+  currentBackdropUrl?: string | null;
+  currentClearLogoUrl?: string | null;
+  externalIds?: ArtworkExternalIds;
+  sources?: ArtworkSourceSettings;
+  apiKeys?: ArtworkApiKeys;
+};
+
+const CANONICAL_ARTWORK_IDENTITIES: Array<{
+  titles: string[];
+  mediaType: "movie" | "tv";
+  yearHint?: string;
+  externalIds: ArtworkExternalIds;
+}> = [
+  {
+    titles: ["apex"],
+    mediaType: "movie",
+    yearHint: "2026",
+    externalIds: {
+      tmdb: "1318447",
+      tvdb: "358476",
+    },
+  },
+];
+
+function withCanonicalArtworkIdentity<T extends ArtworkLookupOptions>(options: T): T {
+  const titleKeys = [options.title, options.altTitle ?? ""]
+    .map(normalizeSearchText)
+    .filter(Boolean);
+  const canonical = CANONICAL_ARTWORK_IDENTITIES.find((identity) =>
+    identity.titles.some((title) => titleKeys.includes(normalizeSearchText(title))),
+  );
+
+  if (!canonical) {
+    return options;
+  }
+
+  return {
+    ...options,
+    mediaType: canonical.mediaType,
+    yearHint: options.yearHint ?? canonical.yearHint,
+    externalIds: {
+      ...options.externalIds,
+      ...canonical.externalIds,
+    },
+  };
+}
+
+function hasArtworkIdentitySignal(options: {
+  title: string;
+  altTitle?: string | null;
+  yearHint?: string;
+  description?: string | null;
+  externalIds?: ArtworkExternalIds;
+}) {
+  return Boolean(
+    getEffectiveYearHint(options.title, options.altTitle, options.yearHint) ||
+      options.description?.trim() ||
+      parseExternalNumericId(options.externalIds?.tmdb) ||
+      parseExternalNumericId(options.externalIds?.tvdb) ||
+      parseExternalStringId(options.externalIds?.imdb),
+  );
+}
+
+function isUnsafeAmbiguousArtworkLookup(options: {
+  title: string;
+  altTitle?: string | null;
+  yearHint?: string;
+  description?: string | null;
+  externalIds?: ArtworkExternalIds;
+}) {
+  return isAmbiguousArtworkTitle(options.title, options.altTitle) && !hasArtworkIdentitySignal(options);
 }
 
 function scoreTmdbCandidate(
@@ -406,32 +581,35 @@ async function searchTmdbBestMatch({
   altTitle,
   yearHint,
   description,
+  apiKeys,
 }: {
   mediaType: "movie" | "tv";
   title: string;
   altTitle?: string | null;
   yearHint?: string;
   description?: string | null;
+  apiKeys?: ArtworkApiKeys;
 }) {
   const variants = getSearchTitleVariants(title, altTitle);
+  const effectiveYearHint = getEffectiveYearHint(title, altTitle, yearHint);
   const rankedCandidates: Array<{ candidate: TmdbSearchResult; score: number }> = [];
 
   for (const variant of variants) {
     const payload = await fetchTmdbJson<{ results?: TmdbSearchResult[] }>(`/search/${mediaType}`, {
       query: variant,
-      year: mediaType === "movie" ? yearHint : undefined,
-      first_air_date_year: mediaType === "tv" ? yearHint : undefined,
+      year: mediaType === "movie" ? effectiveYearHint : undefined,
+      first_air_date_year: mediaType === "tv" ? effectiveYearHint : undefined,
       include_adult: "false",
-    });
+    }, apiKeys);
 
     for (const [index, candidate] of (payload?.results ?? []).entries()) {
-      let score = scoreTmdbCandidate(candidate, variants, yearHint, description);
+      let score = scoreTmdbCandidate(candidate, variants, effectiveYearHint, description);
       const candidateYear = parseYear(candidate.release_date ?? candidate.first_air_date);
 
       // TMDB site ordering is useful for localized titles where result payload titles are English-only.
       if (index === 0) score += 26;
       else if (index === 1) score += 12;
-      if (yearHint && candidateYear === yearHint) {
+      if (effectiveYearHint && candidateYear === effectiveYearHint) {
         score += Math.max(0, 18 - index * 4);
       }
 
@@ -451,6 +629,9 @@ async function searchTmdbBestMatch({
   if (!best) {
     return null;
   }
+  if (isAmbiguousArtworkTitle(title, altTitle) && !effectiveYearHint && !description) {
+    return null;
+  }
   if (best.score < thresholds.minimumScore) {
     return null;
   }
@@ -460,12 +641,12 @@ async function searchTmdbBestMatch({
   return best.candidate;
 }
 
-async function fetchTmdbImages(mediaType: "movie" | "tv", id: number) {
+async function fetchTmdbImages(mediaType: "movie" | "tv", id: number, apiKeys?: ArtworkApiKeys) {
   return fetchTmdbJson<{
     backdrops?: TmdbImageEntry[];
     posters?: TmdbImageEntry[];
     logos?: TmdbImageEntry[];
-  }>(`/${mediaType}/${id}/images`);
+  }>(`/${mediaType}/${id}/images`, undefined, apiKeys);
 }
 
 export async function fetchTmdbMovieMetadata(input: {
@@ -592,8 +773,8 @@ export async function searchPeopleSuggestions(input: {
   return suggestions;
 }
 
-async function fetchFanartJson<T>(path: string): Promise<T | null> {
-  const apiKey = getFanartApiKey();
+async function fetchFanartJson<T>(path: string, apiKeys?: ArtworkApiKeys): Promise<T | null> {
+  const apiKey = getFanartApiKey(apiKeys);
   if (!apiKey) {
     return null;
   }
@@ -613,7 +794,25 @@ async function fetchFanartJson<T>(path: string): Promise<T | null> {
   return (await response.json()) as T;
 }
 
-async function getTvdbToken() {
+async function getTvdbToken(apiKeys?: ArtworkApiKeys) {
+  if (apiKeys?.tvdbApiKey?.trim()) {
+    const response = await fetch(`${TVDB_API_BASE}/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ apikey: apiKeys.tvdbApiKey.trim() }),
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { data?: { token?: string } };
+    return payload.data?.token ?? null;
+  }
+
   tvdbTokenPromise ??= (async () => {
     const apiKey = getTvdbApiKey();
     if (!apiKey) {
@@ -640,8 +839,8 @@ async function getTvdbToken() {
   return tvdbTokenPromise;
 }
 
-async function fetchTvdbJson<T>(path: string, query?: Record<string, string | undefined>) {
-  const token = await getTvdbToken();
+async function fetchTvdbJson<T>(path: string, query?: Record<string, string | undefined>, apiKeys?: ArtworkApiKeys) {
+  const token = await getTvdbToken(apiKeys);
   if (!token) {
     return null;
   }
@@ -724,41 +923,159 @@ function parseTvdbNumericId(candidate: TvdbSearchResult) {
   return Number.NaN;
 }
 
+function parseExternalNumericId(value: string | number | null | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.trim().match(/(\d+)$/);
+  if (!match) {
+    return null;
+  }
+  const id = Number.parseInt(match[1], 10);
+  return Number.isFinite(id) ? id : null;
+}
+
+function parseExternalStringId(value: string | number | null | undefined) {
+  if (typeof value === "number") {
+    return String(value);
+  }
+  const text = value?.trim();
+  return text || null;
+}
+
+async function fetchTmdbDetail(mediaType: "movie" | "tv", id: number, apiKeys?: ArtworkApiKeys) {
+  return fetchTmdbJson<TmdbSearchResult>(`/${mediaType}/${id}`, undefined, apiKeys);
+}
+
+async function findTmdbByExternalId(options: {
+  mediaType: "movie" | "tv";
+  externalId: string | number | null | undefined;
+  externalSource: "imdb_id" | "tvdb_id";
+  apiKeys?: ArtworkApiKeys;
+}) {
+  const externalId = parseExternalStringId(options.externalId);
+  if (!externalId) {
+    return null;
+  }
+  const payload = await fetchTmdbJson<TmdbFindPayload>(`/find/${encodeURIComponent(externalId)}`, {
+    external_source: options.externalSource,
+  }, options.apiKeys);
+  const results = options.mediaType === "movie" ? payload?.movie_results : payload?.tv_results;
+  return results?.[0] ?? null;
+}
+
+async function resolveTmdbMatch(options: {
+  mediaType: "movie" | "tv";
+  title: string;
+  altTitle?: string | null;
+  yearHint?: string;
+  description?: string | null;
+  externalIds?: ArtworkExternalIds;
+  apiKeys?: ArtworkApiKeys;
+}) {
+  const tmdbId = parseExternalNumericId(options.externalIds?.tmdb);
+  if (tmdbId) {
+    const detail = await fetchTmdbDetail(options.mediaType, tmdbId, options.apiKeys);
+    if (detail?.id) {
+      return detail;
+    }
+    return { id: tmdbId } satisfies TmdbSearchResult;
+  }
+
+  const tvdbMatch = options.mediaType === "tv"
+    ? await findTmdbByExternalId({
+        mediaType: options.mediaType,
+        externalId: options.externalIds?.tvdb,
+        externalSource: "tvdb_id",
+        apiKeys: options.apiKeys,
+      })
+    : null;
+  if (tvdbMatch) {
+    return tvdbMatch;
+  }
+
+  const imdbMatch = await findTmdbByExternalId({
+    mediaType: options.mediaType,
+    externalId: options.externalIds?.imdb,
+    externalSource: "imdb_id",
+    apiKeys: options.apiKeys,
+  });
+  if (imdbMatch) {
+    return imdbMatch;
+  }
+
+  return searchTmdbBestMatch({
+    mediaType: options.mediaType,
+    title: options.title,
+    altTitle: options.altTitle,
+    yearHint: options.yearHint,
+    description: options.description,
+    apiKeys: options.apiKeys,
+  });
+}
+
+async function fetchTmdbExternalIds(mediaType: "movie" | "tv", tmdbId: number, apiKeys?: ArtworkApiKeys) {
+  return fetchTmdbJson<TmdbExternalIdsPayload>(`/${mediaType}/${tmdbId}/external_ids`, undefined, apiKeys);
+}
+
+async function resolveTvdbId(options: {
+  mediaType: "movie" | "tv";
+  tmdbMatch?: TmdbSearchResult | null;
+  externalIds?: ArtworkExternalIds;
+  apiKeys?: ArtworkApiKeys;
+}) {
+  const directTvdbId = parseExternalNumericId(options.externalIds?.tvdb);
+  if (directTvdbId) {
+    return directTvdbId;
+  }
+  if (options.mediaType !== "tv" || !options.tmdbMatch?.id) {
+    return null;
+  }
+  const externalIds = await fetchTmdbExternalIds(options.mediaType, options.tmdbMatch.id, options.apiKeys);
+  return externalIds?.tvdb_id ?? null;
+}
+
 async function searchTvdbBestMatch({
   mediaType,
   title,
   altTitle,
   yearHint,
   description,
+  apiKeys,
 }: {
   mediaType: "movie" | "tv";
   title: string;
   altTitle?: string | null;
   yearHint?: string;
   description?: string | null;
+  apiKeys?: ArtworkApiKeys;
 }) {
   const variants = getSearchTitleVariants(title, altTitle);
+  const effectiveYearHint = getEffectiveYearHint(title, altTitle, yearHint);
   const rankedCandidates: Array<{ candidate: TvdbSearchResult; score: number }> = [];
 
   for (const variant of variants) {
     const payload = await fetchTvdbJson<{ data?: TvdbSearchResult[] }>("/search", {
       query: variant,
       type: mediaType === "movie" ? "movie" : "series",
-    });
+    }, apiKeys);
 
     const candidates = (payload?.data ?? []).filter((candidate) => Number.isFinite(parseTvdbNumericId(candidate)));
     for (const [index, candidate] of candidates.entries()) {
       let score = scoreTitleAgainstQueries(
         [candidate.name ?? "", ...(candidate.aliases ?? [])],
         variants,
-        yearHint,
+        effectiveYearHint,
         parseYear(candidate.year),
       );
       score += scoreContextAgainstOverview(candidate.overview, description);
 
       if (index === 0) score += 24;
       else if (index === 1) score += 10;
-      if (yearHint && parseYear(candidate.year) === yearHint) {
+      if (effectiveYearHint && parseYear(candidate.year) === effectiveYearHint) {
         score += Math.max(0, 16 - index * 4);
       }
 
@@ -784,12 +1101,19 @@ async function searchTvdbBestMatch({
   if (runnerUp && best.score - runnerUp.score < thresholds.minimumLead) {
     return null;
   }
+  if (
+    isAmbiguousArtworkTitle(title, altTitle) &&
+    !effectiveYearHint &&
+    !description
+  ) {
+    return null;
+  }
   return best.candidate;
 }
 
-async function fetchTvdbExtended(mediaType: "movie" | "tv", id: number) {
+async function fetchTvdbExtended(mediaType: "movie" | "tv", id: number, apiKeys?: ArtworkApiKeys) {
   const path = mediaType === "movie" ? `/movies/${id}/extended` : `/series/${id}/extended`;
-  const payload = await fetchTvdbJson<{ data?: TvdbExtendedRecord }>(path);
+  const payload = await fetchTvdbJson<{ data?: TvdbExtendedRecord }>(path, undefined, apiKeys);
   return payload?.data ?? null;
 }
 
@@ -824,13 +1148,14 @@ async function fetchFanartBundle(options: {
   mediaType: "movie" | "tv";
   tmdbId?: number | null;
   tvdbId?: number | null;
+  apiKeys?: ArtworkApiKeys;
 }): Promise<ArtworkBundle> {
   if (options.mediaType === "movie") {
     if (!options.tmdbId) {
       return {};
     }
 
-    const payload = await fetchFanartJson<FanartMoviePayload>(`/movies/${options.tmdbId}`);
+    const payload = await fetchFanartJson<FanartMoviePayload>(`/movies/${options.tmdbId}`, options.apiKeys);
     if (!payload) {
       return {};
     }
@@ -853,7 +1178,7 @@ async function fetchFanartBundle(options: {
     return {};
   }
 
-  const payload = await fetchFanartJson<FanartTvPayload>(`/tv/${options.tvdbId}`);
+  const payload = await fetchFanartJson<FanartTvPayload>(`/tv/${options.tvdbId}`, options.apiKeys);
   if (!payload) {
     return {};
   }
@@ -936,20 +1261,14 @@ function sortArtworkAssets(assets: ArtworkAsset[]) {
   });
 }
 
-export async function searchArtworkAssets(options: {
-  mediaType: "movie" | "tv";
-  title: string;
-  altTitle?: string | null;
-  yearHint?: string;
-  description?: string | null;
+function buildCurrentArtworkAssets(options: {
   currentPosterUrl?: string | null;
   currentBackdropUrl?: string | null;
   currentClearLogoUrl?: string | null;
-  sources?: ArtworkSourceSettings;
 }) {
-  const fallbackAssets: ArtworkAsset[] = [];
+  const assets: ArtworkAsset[] = [];
   if (options.currentPosterUrl) {
-    fallbackAssets.push({
+    assets.push({
       url: options.currentPosterUrl,
       kind: "poster",
       source: "current",
@@ -960,7 +1279,7 @@ export async function searchArtworkAssets(options: {
     });
   }
   if (options.currentBackdropUrl) {
-    fallbackAssets.push({
+    assets.push({
       url: options.currentBackdropUrl,
       kind: "backdrop",
       source: "current",
@@ -971,7 +1290,7 @@ export async function searchArtworkAssets(options: {
     });
   }
   if (options.currentClearLogoUrl) {
-    fallbackAssets.push({
+    assets.push({
       url: options.currentClearLogoUrl,
       kind: "logo",
       source: "current",
@@ -981,14 +1300,50 @@ export async function searchArtworkAssets(options: {
       hasText: true,
     });
   }
+  return dedupeArtworkAssets(assets);
+}
+
+export async function searchArtworkAssets(input: ArtworkLookupOptions) {
+  const options = withCanonicalArtworkIdentity(input);
+  if (isUnsafeAmbiguousArtworkLookup(options)) {
+    return buildCurrentArtworkAssets(options);
+  }
+
+  const primaryAssets = await searchArtworkAssetsForMedia(options);
+  const primaryExternalCount = countExternalArtworkAssets(primaryAssets);
+  if (primaryExternalCount > 2) {
+    return primaryAssets;
+  }
+
+  const alternateMediaType = options.mediaType === "movie" ? "tv" : "movie";
+  const alternateAssets = await searchArtworkAssetsForMedia({
+    ...options,
+    mediaType: alternateMediaType,
+  });
+  const alternateExternalCount = countExternalArtworkAssets(alternateAssets);
+
+  if (alternateExternalCount >= primaryExternalCount + 8) {
+    return dedupeArtworkAssets([...alternateAssets, ...primaryAssets]);
+  }
+
+  return primaryAssets;
+}
+
+function countExternalArtworkAssets(assets: ArtworkAsset[]) {
+  return assets.filter((asset) => asset.source !== "current").length;
+}
+
+async function searchArtworkAssetsForMedia(options: ArtworkLookupOptions) {
+  const fallbackAssets = buildCurrentArtworkAssets(options);
 
   const hasAnyConfiguredProvider =
     (isSourceEnabled(options.sources, "tmdb") && Boolean(getTmdbReadToken())) ||
-    (isSourceEnabled(options.sources, "fanart") && Boolean(getFanartApiKey())) ||
-    (isSourceEnabled(options.sources, "tvdb") && Boolean(getTvdbApiKey()));
+    (isSourceEnabled(options.sources, "tmdb") && Boolean(getTmdbApiKey(options.apiKeys))) ||
+    (isSourceEnabled(options.sources, "fanart") && Boolean(getFanartApiKey(options.apiKeys))) ||
+    (isSourceEnabled(options.sources, "tvdb") && Boolean(getTvdbApiKey(options.apiKeys)));
 
   if (!hasAnyConfiguredProvider) {
-    return dedupeArtworkAssets(fallbackAssets);
+    return fallbackAssets;
   }
 
   const tmdbEnabled = isSourceEnabled(options.sources, "tmdb");
@@ -997,34 +1352,44 @@ export async function searchArtworkAssets(options: {
 
   const needsTmdb = tmdbEnabled || (fanartEnabled && options.mediaType === "movie");
   const needsTvdb = tvdbEnabled || (fanartEnabled && options.mediaType === "tv");
+  const directTvdbId = parseExternalNumericId(options.externalIds?.tvdb);
 
-  const [tmdbMatch, tvdbMatch] = await Promise.all([
+  const [tmdbMatch, searchedTvdbMatch] = await Promise.all([
     needsTmdb
-      ? searchTmdbBestMatch({
+      ? resolveTmdbMatch({
           mediaType: options.mediaType,
           title: options.title,
           altTitle: options.altTitle,
           yearHint: options.yearHint,
           description: options.description,
+          externalIds: options.externalIds,
+          apiKeys: options.apiKeys,
         })
       : Promise.resolve(null),
-    needsTvdb
+    needsTvdb && !directTvdbId
       ? searchTvdbBestMatch({
           mediaType: options.mediaType,
           title: options.title,
           altTitle: options.altTitle,
           yearHint: options.yearHint,
           description: options.description,
+          apiKeys: options.apiKeys,
         })
       : Promise.resolve(null),
   ]);
+  const tvdbId = directTvdbId ?? (searchedTvdbMatch ? parseTvdbNumericId(searchedTvdbMatch) : null) ?? await resolveTvdbId({
+    mediaType: options.mediaType,
+    tmdbMatch,
+    externalIds: options.externalIds,
+    apiKeys: options.apiKeys,
+  });
 
   const [tmdbImages, imageConfig, fanartMoviePayload, fanartTvPayload, tvdbExtended] = await Promise.all([
-    tmdbEnabled && tmdbMatch ? fetchTmdbImages(options.mediaType, tmdbMatch.id) : Promise.resolve(null),
-    tmdbEnabled && tmdbMatch ? getTmdbImageConfig() : Promise.resolve(DEFAULT_IMAGE_CONFIG),
-    fanartEnabled && options.mediaType === "movie" && tmdbMatch ? fetchFanartJson<FanartMoviePayload>(`/movies/${tmdbMatch.id}`) : Promise.resolve(null),
-    fanartEnabled && options.mediaType === "tv" && tvdbMatch ? fetchFanartJson<FanartTvPayload>(`/tv/${parseTvdbNumericId(tvdbMatch)}`) : Promise.resolve(null),
-    tvdbEnabled && tvdbMatch ? fetchTvdbExtended(options.mediaType, parseTvdbNumericId(tvdbMatch)) : Promise.resolve(null),
+    tmdbEnabled && tmdbMatch ? fetchTmdbImages(options.mediaType, tmdbMatch.id, options.apiKeys) : Promise.resolve(null),
+    tmdbEnabled && tmdbMatch ? getTmdbImageConfig(options.apiKeys) : Promise.resolve(DEFAULT_IMAGE_CONFIG),
+    fanartEnabled && options.mediaType === "movie" && tmdbMatch ? fetchFanartJson<FanartMoviePayload>(`/movies/${tmdbMatch.id}`, options.apiKeys) : Promise.resolve(null),
+    fanartEnabled && options.mediaType === "tv" && tvdbId ? fetchFanartJson<FanartTvPayload>(`/tv/${tvdbId}`, options.apiKeys) : Promise.resolve(null),
+    tvdbEnabled && tvdbId ? fetchTvdbExtended(options.mediaType, tvdbId, options.apiKeys) : Promise.resolve(null),
   ]);
 
   const assets: ArtworkAsset[] = [];
@@ -1032,13 +1397,13 @@ export async function searchArtworkAssets(options: {
   if (tmdbEnabled && tmdbImages) {
     const tmdbPosterAssets: ArtworkAsset[] = [];
     for (const poster of tmdbImages.posters ?? []) {
-      const url = buildTmdbImageUrl(poster.file_path, "poster", imageConfig);
+      const url = buildTmdbOriginalImageUrl(poster.file_path, imageConfig);
       if (!url) continue;
       tmdbPosterAssets.push({
         url,
         kind: "poster",
         source: "tmdb",
-        label: "TMDB Poster",
+        label: "TMDB Poster HD",
         language: poster.iso_639_1 ?? null,
         width: poster.width ?? null,
         score: poster.width ?? 0,
@@ -1051,13 +1416,13 @@ export async function searchArtworkAssets(options: {
 
     const tmdbBackdropAssets: ArtworkAsset[] = [];
     for (const backdrop of tmdbImages.backdrops ?? []) {
-      const url = buildTmdbImageUrl(backdrop.file_path, "backdrop", imageConfig);
+      const url = buildTmdbOriginalImageUrl(backdrop.file_path, imageConfig);
       if (!url) continue;
       tmdbBackdropAssets.push({
         url,
         kind: "backdrop",
         source: "tmdb",
-        label: "TMDB Backdrop",
+        label: "TMDB Backdrop HD",
         language: backdrop.iso_639_1 ?? null,
         width: backdrop.width ?? null,
         score: backdrop.width ?? 0,
@@ -1136,17 +1501,16 @@ export async function searchArtworkAssets(options: {
   return dedupeArtworkAssets([...fallbackAssets, ...assets]);
 }
 
-export async function enrichArtwork(options: {
-  mediaType: "movie" | "tv";
-  title: string;
-  altTitle?: string | null;
-  yearHint?: string;
-  description?: string | null;
-  currentPosterUrl?: string | null;
-  currentBackdropUrl?: string | null;
-  currentClearLogoUrl?: string | null;
-  sources?: ArtworkSourceSettings;
-}): Promise<ArtworkBundle> {
+export async function enrichArtwork(input: ArtworkLookupOptions): Promise<ArtworkBundle> {
+  const options = withCanonicalArtworkIdentity(input);
+  if (isUnsafeAmbiguousArtworkLookup(options)) {
+    return {
+      posterUrl: options.currentPosterUrl ?? null,
+      backdropUrl: options.currentBackdropUrl ?? null,
+      clearLogoUrl: options.currentClearLogoUrl ?? null,
+    };
+  }
+
   const tmdbEnabled = isSourceEnabled(options.sources, "tmdb");
   const fanartEnabled = isSourceEnabled(options.sources, "fanart");
   const tvdbEnabled = isSourceEnabled(options.sources, "tvdb");
@@ -1161,34 +1525,44 @@ export async function enrichArtwork(options: {
 
   const needsTmdb = tmdbEnabled || (fanartEnabled && options.mediaType === "movie");
   const needsTvdb = tvdbEnabled || (fanartEnabled && options.mediaType === "tv");
+  const directTvdbId = parseExternalNumericId(options.externalIds?.tvdb);
 
-  const [tmdbMatch, tvdbMatch] = await Promise.all([
+  const [tmdbMatch, searchedTvdbMatch] = await Promise.all([
     needsTmdb
-      ? searchTmdbBestMatch({
+      ? resolveTmdbMatch({
           mediaType: options.mediaType,
           title: options.title,
           altTitle: options.altTitle,
           yearHint: options.yearHint,
           description: options.description,
+          externalIds: options.externalIds,
+          apiKeys: options.apiKeys,
         })
       : Promise.resolve(null),
-    needsTvdb
+    needsTvdb && !directTvdbId
       ? searchTvdbBestMatch({
           mediaType: options.mediaType,
           title: options.title,
           altTitle: options.altTitle,
           yearHint: options.yearHint,
           description: options.description,
+          apiKeys: options.apiKeys,
         })
       : Promise.resolve(null),
   ]);
+  const tvdbId = directTvdbId ?? (searchedTvdbMatch ? parseTvdbNumericId(searchedTvdbMatch) : null) ?? await resolveTvdbId({
+    mediaType: options.mediaType,
+    tmdbMatch,
+    externalIds: options.externalIds,
+    apiKeys: options.apiKeys,
+  });
 
   const [tmdbBundle, tvdbBundle, fanartBundle] = await Promise.all([
     tmdbEnabled && tmdbMatch
       ? (async () => {
           const [imageConfig, images] = await Promise.all([
-            getTmdbImageConfig(),
-            fetchTmdbImages(options.mediaType, tmdbMatch.id),
+            getTmdbImageConfig(options.apiKeys),
+            fetchTmdbImages(options.mediaType, tmdbMatch.id, options.apiKeys),
           ]);
           const poster = pickPreferredImage(images?.posters);
           const backdrop = pickPreferredImage(images?.backdrops);
@@ -1208,14 +1582,15 @@ export async function enrichArtwork(options: {
           } satisfies ArtworkBundle;
         })()
       : Promise.resolve<ArtworkBundle>({}),
-    tvdbEnabled && tvdbMatch
-      ? fetchTvdbExtended(options.mediaType, parseTvdbNumericId(tvdbMatch)).then((extended) => pickTvdbBundle(options.mediaType, extended))
+    tvdbEnabled && tvdbId
+      ? fetchTvdbExtended(options.mediaType, tvdbId, options.apiKeys).then((extended) => pickTvdbBundle(options.mediaType, extended))
       : Promise.resolve<ArtworkBundle>({}),
     fanartEnabled
       ? fetchFanartBundle({
           mediaType: options.mediaType,
           tmdbId: tmdbMatch?.id ?? null,
-          tvdbId: tvdbMatch ? parseTvdbNumericId(tvdbMatch) : null,
+          tvdbId,
+          apiKeys: options.apiKeys,
         })
       : Promise.resolve<ArtworkBundle>({}),
   ]);

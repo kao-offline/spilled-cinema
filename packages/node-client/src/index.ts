@@ -24,10 +24,22 @@ import {
 import { fetchBombujMovie, searchBombuj } from "../../../apps/dashboard/src/server/bombuj";
 import { getExploreFeed } from "../../../apps/dashboard/src/server/explore-feed";
 import { loadProviderFeed } from "../../../apps/dashboard/src/server/provider-feed";
+import { importProviderModuleItem } from "../../../apps/dashboard/src/server/provider-import";
 import { loadProviderModulesFromControlPlane } from "../../../apps/dashboard/src/server/provider-modules";
 import { searchProviderModule } from "../../../apps/dashboard/src/server/provider-search";
-import { fetchSvetSerialuShow, searchSvetSerialu } from "../../../apps/dashboard/src/server/svetserialu";
+import {
+  fetchSvetSerialuShow,
+  searchSvetSerialu,
+  verifySvetSerialuLogin,
+  type SvetSerialuCredentials,
+} from "../../../apps/dashboard/src/server/svetserialu";
 import { getTrendingFeed } from "../../../apps/dashboard/src/server/trending-feed";
+import {
+  importResolvedTitle,
+  listIntegrationCatalog,
+  resolveTitle,
+  searchTitles,
+} from "../../../apps/dashboard/src/server/title-resolver";
 import { SpilledCinemaNodeRuntime } from "../../../apps/server/src/runtime";
 import { sha256 } from "../../security/src";
 
@@ -67,8 +79,11 @@ export async function getNodeStatus() {
   };
 }
 
-export async function searchNode(query: string) {
-  const [svet, bomb] = await Promise.allSettled([searchSvetSerialu(query), searchBombuj(query)]);
+export async function searchNode(query: string, options: { svetserialuCredentials?: SvetSerialuCredentials | null } = {}) {
+  const [svet, bomb] = await Promise.allSettled([
+    searchSvetSerialu(query, options.svetserialuCredentials),
+    searchBombuj(query),
+  ]);
   const merged = [
     ...(svet.status === "fulfilled" ? svet.value : []),
     ...(bomb.status === "fulfilled" ? bomb.value : []),
@@ -83,10 +98,25 @@ export async function searchNode(query: string) {
   return keepHighConfidenceSearchResults(merged.sort(compareSearchScores));
 }
 
-export async function importShow(source: "svetserialu" | "bombuj", slug: string, _mediaType?: "movie" | "serial") {
+export async function verifySvetSerialuCredentials(credentials?: SvetSerialuCredentials | null) {
+  return verifySvetSerialuLogin(credentials);
+}
+
+export async function importShow(
+  source: "svetserialu" | "bombuj",
+  slug: string,
+  _mediaType?: "movie" | "serial",
+  options: { svetserialuCredentials?: SvetSerialuCredentials | null } = {},
+) {
   const show = source === "bombuj"
     ? await fetchBombujMovie(slug)
-    : await fetchSvetSerialuShow(slug);
+    : await fetchSvetSerialuShow(slug, options.svetserialuCredentials);
+  await runtime.persistImportedShow(show.slug, show.title, show);
+  return show;
+}
+
+export async function importProviderItem(input: Parameters<typeof importProviderModuleItem>[0]) {
+  const show = await importProviderModuleItem(input);
   await runtime.persistImportedShow(show.slug, show.title, show);
   return show;
 }
@@ -117,6 +147,24 @@ export async function loadProviderFeedItems(input: Parameters<typeof loadProvide
 
 export async function searchProviderModuleItems(input: Parameters<typeof searchProviderModule>[0]) {
   return searchProviderModule(input);
+}
+
+export async function loadIntegrationCatalog(input: Parameters<typeof listIntegrationCatalog>[0]) {
+  return listIntegrationCatalog(input);
+}
+
+export async function searchTitleItems(input: Parameters<typeof searchTitles>[0]) {
+  return searchTitles(input);
+}
+
+export async function resolveTitleItem(input: Parameters<typeof resolveTitle>[0]) {
+  return resolveTitle(input);
+}
+
+export async function importTitleItem(input: Parameters<typeof importResolvedTitle>[0]) {
+  const result = await importResolvedTitle(input);
+  await runtime.persistImportedShow(result.show.slug, result.show.title, result.show);
+  return result;
 }
 
 export async function startDownload(input: Parameters<typeof createFullDownloadJob>[0]) {

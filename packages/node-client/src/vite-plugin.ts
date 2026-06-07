@@ -5,12 +5,21 @@ export function createDashboardApiPlugin(): Plugin {
   const handlers = createHttpHandlers();
   const attach = (server: { middlewares: { use: (path: string, handler: (req: RequestLike, res: JsonResponse) => void | Promise<void>) => void } }) => {
     server.middlewares.use("/api/status", handlers.statusHandler);
+    server.middlewares.use("/api/server", handlers.controlPlaneProxyHandler);
     server.middlewares.use("/api/import-svetserialu", handlers.importSvetSerialuHandler);
+    server.middlewares.use("/api/svetserialu/auth/verify", handlers.svetSerialuAuthVerifyHandler);
     server.middlewares.use("/api/import-bombuj", handlers.importBombujHandler);
     server.middlewares.use("/api/search", handlers.searchHandler);
     server.middlewares.use("/api/provider-modules", handlers.providerModulesHandler);
     server.middlewares.use("/api/provider-feed", handlers.providerFeedHandler);
     server.middlewares.use("/api/provider-search", handlers.providerSearchHandler);
+    server.middlewares.use("/api/provider-import", handlers.providerImportHandler);
+    server.middlewares.use("/api/integrations/catalog", handlers.integrationsCatalogHandler);
+    server.middlewares.use("/api/integrations/refresh", handlers.integrationsRefreshHandler);
+    server.middlewares.use("/api/integrations/config", handlers.integrationsConfigHandler);
+    server.middlewares.use("/api/title/search", handlers.titleSearchHandler);
+    server.middlewares.use("/api/title/resolve", handlers.titleResolveHandler);
+    server.middlewares.use("/api/title/import", handlers.titleImportHandler);
     server.middlewares.use("/api/explore/feed", handlers.exploreFeedHandler);
     server.middlewares.use("/api/explore/people", handlers.explorePeopleHandler);
     server.middlewares.use("/api/trending/feed", handlers.trendingFeedHandler);

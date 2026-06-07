@@ -94,12 +94,13 @@ function createSeriesItem(input: {
   sectionKey: ExploreSectionKey;
   audioBuckets?: ExploreAudioBucket[];
   episodeCode?: string | null;
+  episodeImportSlug?: string | null;
 }) {
   return {
     id: `bombuj-series:${input.slug}:${input.sectionKey}:${input.episodeCode ?? "title"}`,
     title: input.title,
     slug: input.slug,
-    importSlug: input.slug,
+    importSlug: input.episodeImportSlug ?? input.slug,
     provider: "bombuj" as const,
     mediaType: "serial" as const,
     detailUrl: input.detailUrl ?? `${SERIES_BASE_URL}/serial-${input.slug}#serial`,
@@ -204,21 +205,24 @@ export function parseBombujSeriesCardGrid(html: string, sectionKey: ExploreSecti
 export function parseBombujSeriesLatestEpisodes(html: string, audioBucket: ExploreAudioBucket) {
   const matches = [
     ...html.matchAll(
-      /<a href="([^"]*\/serial\/([^"/]+)\/(s\d+e\d+))"[^>]*>\s*<div[^>]*class="hover_serial"[\s\S]*?<div style="float:left;overflow:hidden;height:35px;">([\s\S]*?)<\/div>/gi,
+      /<a href="([^"]*\/serial\/(?:(?:([^"/]+)\/(s\d+e\d+))|([^"#?]+?)-(\d+x\d+))(?:#[^"]*)?)"[^>]*>\s*<div[^>]*class="hover_serial"[\s\S]*?<div style="float:left;overflow:hidden;height:35px;">([\s\S]*?)<\/div>/gi,
     ),
   ];
 
   return uniqueBy(
-    matches.map((match) =>
-      createSeriesItem({
-        title: stripTags(match[4]).trim() || match[2].replace(/-/g, " "),
-        slug: match[2],
-        detailUrl: `${SERIES_BASE_URL}/serial-${match[2]}#serial`,
+    matches.map((match) => {
+      const slug = match[2] ?? match[4] ?? "";
+      const episodeCode = match[3] ?? match[5] ?? null;
+      return createSeriesItem({
+        title: stripTags(match[6]).trim() || slug.replace(/-/g, " "),
+        slug,
+        detailUrl: `${SERIES_BASE_URL}/serial-${slug}#serial`,
         sectionKey: "latestEpisodes",
         audioBuckets: audioBucket === "all" ? ["all"] : [audioBucket],
-        episodeCode: match[3],
-      }),
-    ),
+        episodeCode,
+        episodeImportSlug: episodeCode ? `${slug}-${episodeCode}` : null,
+      });
+    }),
     (item) => `${item.slug}:${item.episode?.episodeCode ?? "title"}`,
   );
 }

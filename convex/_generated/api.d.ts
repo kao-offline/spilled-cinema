@@ -10,6 +10,7 @@
 
 import type * as controlPlane from "../controlPlane.js";
 import type * as http from "../http.js";
+import type * as integrations from "../integrations.js";
 import type * as providerModules from "../providerModules.js";
 
 import type {
@@ -21,6 +22,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   controlPlane: typeof controlPlane;
   http: typeof http;
+  integrations: typeof integrations;
   providerModules: typeof providerModules;
 }>;
 

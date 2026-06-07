@@ -1,7 +1,4 @@
-import {
-  createProviderFeedKey,
-  DEFAULT_PROVIDER_MODULES,
-} from "./provider-modules-shared";
+import { createProviderFeedKey } from "./provider-modules-shared";
 import type { EnabledProviderFeed, ProviderModuleManifest } from "./types";
 
 const ENABLED_PROVIDER_FEEDS_KEY = "spilled.provider-feeds.enabled.v1";
@@ -12,6 +9,8 @@ export type ProviderModulesCache = {
   updatedAt: number;
   modules: ProviderModuleManifest[];
 };
+
+export const DEFAULT_PROVIDER_REPOSITORY_URL = "https://github.com/kao-offline/spilled-connectors";
 
 function canUseStorage() {
   return typeof window !== "undefined";
@@ -86,10 +85,10 @@ export function sanitizeEnabledProviderFeeds(
 export function readCachedProviderModules() {
   const fallback: ProviderModulesCache = {
     updatedAt: 0,
-    modules: DEFAULT_PROVIDER_MODULES,
+    modules: [],
   };
   const parsed = readJson<ProviderModulesCache>(CACHED_PROVIDER_MODULES_KEY, fallback);
-  if (!Array.isArray(parsed.modules) || parsed.modules.length === 0) {
+  if (!Array.isArray(parsed.modules)) {
     return fallback;
   }
   return parsed;
@@ -103,17 +102,21 @@ export function writeCachedProviderModules(modules: ProviderModuleManifest[]) {
 }
 
 function normalizeRepositoryUrl(value: string) {
-  return value.trim().replace(/\/+$/, "");
+  const normalized = value.trim().replace(/\/+$/, "");
+  if (normalized === "https://github.com/kao-offline/spilled-conectors") {
+    return DEFAULT_PROVIDER_REPOSITORY_URL;
+  }
+  return normalized;
 }
 
 export function readProviderRepositoryUrls() {
   const parsed = readJson<unknown[]>(PROVIDER_REPOSITORY_URLS_KEY, []);
   return Array.from(
     new Set(
-      parsed
+      [DEFAULT_PROVIDER_REPOSITORY_URL, ...parsed
         .filter((value): value is string => typeof value === "string")
         .map(normalizeRepositoryUrl)
-        .filter(Boolean),
+        .filter(Boolean)],
     ),
   );
 }
@@ -121,6 +124,6 @@ export function readProviderRepositoryUrls() {
 export function writeProviderRepositoryUrls(urls: string[]) {
   writeJson(
     PROVIDER_REPOSITORY_URLS_KEY,
-    Array.from(new Set(urls.map(normalizeRepositoryUrl).filter(Boolean))),
+    Array.from(new Set([DEFAULT_PROVIDER_REPOSITORY_URL, ...urls.map(normalizeRepositoryUrl).filter(Boolean)])),
   );
 }

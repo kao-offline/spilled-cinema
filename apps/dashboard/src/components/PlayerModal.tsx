@@ -22,6 +22,7 @@ export function PlayerModal({ episode, onClose, onSelectPlayer }: PlayerModalPro
   const [resolvedRemoteUrl, setResolvedRemoteUrl] = useState<string | null>(null);
   const [resolvingRemoteUrl, setResolvingRemoteUrl] = useState(false);
   const [playerFrameLoaded, setPlayerFrameLoaded] = useState(false);
+  const [iframeInteractionUnlocked, setIframeInteractionUnlocked] = useState(false);
 
   const groupedPlayers = useMemo(() => {
     if (!episode) return [];
@@ -68,6 +69,7 @@ export function PlayerModal({ episode, onClose, onSelectPlayer }: PlayerModalPro
 
   useEffect(() => {
     setPlayerFrameLoaded(false);
+    setIframeInteractionUnlocked(false);
   }, [activePlayer?.alias]);
 
   useEffect(() => {
@@ -197,6 +199,7 @@ export function PlayerModal({ episode, onClose, onSelectPlayer }: PlayerModalPro
   const slowRemoteProvider = /streamtape|steamtag/.test(remoteProviderSignature);
   const remoteIframeSrc = isLocalPlayer ? null : resolvedRemoteUrl;
   const showRemoteLoadingOverlay = !isLocalPlayer && (resolvingRemoteUrl || !playerFrameLoaded);
+  const showRemoteInteractionShield = !isLocalPlayer && remoteIframeSrc && playerFrameLoaded && !iframeInteractionUnlocked;
 
 
   if (!episode || !activePlayer) {
@@ -232,7 +235,8 @@ export function PlayerModal({ episode, onClose, onSelectPlayer }: PlayerModalPro
                     key={`${activePlayer.alias}:${remoteIframeSrc}`}
                     title={isMovieEntry ? (episode.showTitle ?? "Player") : formatEpisodeTitle(episode)}
                     src={remoteIframeSrc}
-                    className="h-full w-full border-0 lg:h-[80vh]"
+                    className={clsx("h-full w-full border-0 lg:h-[80vh]", !iframeInteractionUnlocked && "pointer-events-none")}
+                    allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                     allowFullScreen
                     referrerPolicy="no-referrer"
                     onLoad={() => setPlayerFrameLoaded(true)}
@@ -254,6 +258,17 @@ export function PlayerModal({ episode, onClose, onSelectPlayer }: PlayerModalPro
                           : "Resolving the provider frame and waiting for playback UI."}
                       </div>
                     </div>
+                  </div>
+                ) : null}
+                {showRemoteInteractionShield ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/35 backdrop-blur-[2px]">
+                    <button
+                      type="button"
+                      onClick={() => setIframeInteractionUnlocked(true)}
+                      className="rounded-full border border-white/12 bg-white px-5 py-3 text-sm font-bold text-black shadow-2xl transition hover:bg-orange-200"
+                    >
+                      Enable player interaction
+                    </button>
                   </div>
                 ) : null}
               </div>

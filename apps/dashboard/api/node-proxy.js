@@ -22,10 +22,18 @@ export function isAllowedNodePath(path) {
     path === "/api/status" ||
     path === "/api/search" ||
     path === "/api/import-svetserialu" ||
+    path === "/api/svetserialu/auth/verify" ||
     path === "/api/import-bombuj" ||
     path === "/api/provider-modules" ||
     path === "/api/provider-feed" ||
     path === "/api/provider-search" ||
+    path === "/api/provider-import" ||
+    path === "/api/integrations/catalog" ||
+    path === "/api/integrations/refresh" ||
+    path === "/api/integrations/config" ||
+    path === "/api/title/search" ||
+    path === "/api/title/resolve" ||
+    path === "/api/title/import" ||
     path === "/api/explore/feed" ||
     path === "/api/explore/people" ||
     path === "/api/trending/feed" ||

@@ -27,6 +27,9 @@ export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
     displayName: "SvetSerialu",
     version: 1,
     status: "active",
+    runtime: {
+      entry: "connectors/svetserialu.js",
+    },
     capabilities: {
       import: true,
       player: true,
@@ -57,6 +60,9 @@ export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
     displayName: "Bombuj",
     version: 1,
     status: "active",
+    runtime: {
+      entry: "connectors/bombuj.js",
+    },
     capabilities: {
       import: true,
       player: true,
@@ -100,9 +106,12 @@ export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
     displayName: "Synova",
     version: 1,
     status: "active",
+    runtime: {
+      entry: "connectors/synova.js",
+    },
     capabilities: {
-      import: false,
-      player: false,
+      import: true,
+      player: true,
       search: true,
       download: false,
       feeds: [
@@ -115,7 +124,7 @@ export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
           pageTitle: "Synova Popular Movies",
           supportsSearch: true,
           supportsOpenSource: true,
-          supportsImport: false,
+          supportsImport: true,
           sortMode: "newest",
           itemGranularity: "movie",
         },
@@ -128,7 +137,7 @@ export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
           pageTitle: "Synova Popular TV",
           supportsSearch: true,
           supportsOpenSource: true,
-          supportsImport: false,
+          supportsImport: true,
           sortMode: "newest",
           itemGranularity: "show",
         },

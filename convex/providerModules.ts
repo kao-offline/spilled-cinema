@@ -31,12 +31,17 @@ const providerCapabilitiesValidator = v.object({
   feeds: v.array(providerFeedValidator),
 });
 
+const providerRuntimeValidator = v.object({
+  entry: v.string(),
+});
+
 const providerModuleValidator = v.object({
   moduleId: v.string(),
   providerId: v.string(),
   displayName: v.string(),
   version: v.number(),
   status: v.union(v.literal("active"), v.literal("disabled")),
+  runtime: v.optional(providerRuntimeValidator),
   capabilities: providerCapabilitiesValidator,
   publishedAt: v.number(),
   updatedAt: v.number(),
@@ -51,6 +56,9 @@ const DEFAULT_PROVIDER_MODULES = [
     displayName: "SvetSerialu",
     version: 1,
     status: "active" as const,
+    runtime: {
+      entry: "connectors/svetserialu.js",
+    },
     capabilities: {
       import: true,
       player: true,
@@ -81,6 +89,9 @@ const DEFAULT_PROVIDER_MODULES = [
     displayName: "Bombuj",
     version: 1,
     status: "active" as const,
+    runtime: {
+      entry: "connectors/bombuj.js",
+    },
     capabilities: {
       import: true,
       player: true,
@@ -124,9 +135,12 @@ const DEFAULT_PROVIDER_MODULES = [
     displayName: "Synova",
     version: 1,
     status: "active" as const,
+    runtime: {
+      entry: "connectors/synova.js",
+    },
     capabilities: {
-      import: false,
-      player: false,
+      import: true,
+      player: true,
       search: true,
       download: false,
       feeds: [
@@ -139,7 +153,7 @@ const DEFAULT_PROVIDER_MODULES = [
           pageTitle: "Synova Popular Movies",
           supportsSearch: true,
           supportsOpenSource: true,
-          supportsImport: false,
+          supportsImport: true,
           sortMode: "newest" as const,
           itemGranularity: "movie" as const,
         },
@@ -152,7 +166,7 @@ const DEFAULT_PROVIDER_MODULES = [
           pageTitle: "Synova Popular TV",
           supportsSearch: true,
           supportsOpenSource: true,
-          supportsImport: false,
+          supportsImport: true,
           sortMode: "newest" as const,
           itemGranularity: "show" as const,
         },
@@ -171,6 +185,9 @@ async function upsertProviderModuleDocument(
     displayName: string;
     version: number;
     status: "active" | "disabled";
+    runtime?: {
+      entry: string;
+    };
     capabilities: {
       import: boolean;
       player: boolean;

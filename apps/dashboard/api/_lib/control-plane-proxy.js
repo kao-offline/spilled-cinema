@@ -7,7 +7,15 @@ async function readBody(req) {
   });
 }
 
-function normalizeTargetPath(req) {
+export function normalizeTargetPath(req) {
+  const queryPath = req.query?.path;
+  if (typeof queryPath === "string" && queryPath.length > 0) {
+    return queryPath.replace(/^\/+/, "");
+  }
+  if (Array.isArray(queryPath) && queryPath.length > 0) {
+    return queryPath.join("/").replace(/^\/+/, "");
+  }
+
   const slug = req.query?.path;
   if (Array.isArray(slug) && slug.length > 0) {
     return slug.join("/");
@@ -30,6 +38,14 @@ function normalizeTargetPath(req) {
   return "";
 }
 
+export function buildControlPlaneTarget(siteUrl, req, pathOverride) {
+  const targetPath = pathOverride ?? normalizeTargetPath(req);
+  const source = new URL(req.url || "/", "https://spilled.local");
+  source.searchParams.delete("path");
+  const query = source.searchParams.toString();
+  return `${siteUrl.replace(/\/$/, "")}/server/${targetPath}${query ? `?${query}` : ""}`;
+}
+
 export async function proxyControlPlane(req, res, pathOverride) {
   const siteUrl = process.env.CONVEX_SITE_URL;
   if (!siteUrl) {
@@ -37,10 +53,7 @@ export async function proxyControlPlane(req, res, pathOverride) {
     return;
   }
 
-  const targetPath = pathOverride ?? normalizeTargetPath(req);
-  const queryIndex = req.url.indexOf("?");
-  const query = queryIndex >= 0 ? req.url.slice(queryIndex) : "";
-  const target = `${siteUrl.replace(/\/$/, "")}/server/${targetPath}${query}`;
+  const target = buildControlPlaneTarget(siteUrl, req, pathOverride);
 
   try {
     const init = {

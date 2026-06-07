@@ -84,9 +84,9 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
     kind: "mixed",
     description: "Catalog connector for Cinenova/Synova movie and TV discovery feeds.",
     capabilities: {
-      import: false,
+      import: true,
       remoteSearch: true,
-      streaming: false,
+      streaming: true,
       downloads: false,
       subtitles: false,
     },

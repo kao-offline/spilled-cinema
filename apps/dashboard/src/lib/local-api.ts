@@ -29,6 +29,9 @@ export function isHostedSameOriginApiPath(path: string) {
 function getRuntimeTimeoutMs(path: string) {
   if (
     path.startsWith("/api/import-") ||
+    path.startsWith("/api/provider-import") ||
+    path.startsWith("/api/integrations/refresh") ||
+    path.startsWith("/api/title/") ||
     path.startsWith("/api/artwork/refresh")
   ) {
     return LONG_RUNTIME_TIMEOUT_MS;
@@ -348,6 +351,21 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
   return lastFailure;
 }
 
+function shouldTryNextRuntime<T>(result: RuntimeApiResult<T>) {
+  if (result.ok) {
+    return false;
+  }
+  if (result.status === 408 || result.status === 409 || result.status === 422 || result.status >= 500) {
+    return (
+      result.transport === "native" ||
+      result.transport === "node" ||
+      result.transport === "direct" ||
+      result.transport === "extension"
+    );
+  }
+  return false;
+}
+
 
 export function resolveRuntimeUrl(url: string, origin?: string) {
   if (!origin || !url.startsWith("/")) {
@@ -364,39 +382,38 @@ export function buildRuntimeUrl(path: string) {
   return `http://127.0.0.1:8787${path}`;
 }
 
+function returnIfUsable<T>(result: RuntimeApiResult<T> | null) {
+  if (!result || shouldTryNextRuntime(result)) {
+    return null;
+  }
+  return result;
+}
+
 export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit = {}): Promise<RuntimeApiResult<T>> {
   try {
-    const native = await fetchNative<T>(path, init);
-    if (native) {
-      return native;
-    }
+    const native = returnIfUsable(await fetchNative<T>(path, init));
+    if (native) return native;
   } catch {
     // Fall through to hosted/local/extension/direct/remote.
   }
 
   try {
-    const sameOrigin = await fetchSameOriginLocalNode<T>(path, init);
-    if (sameOrigin) {
-      return sameOrigin;
-    }
+    const sameOrigin = returnIfUsable(await fetchSameOriginLocalNode<T>(path, init));
+    if (sameOrigin) return sameOrigin;
   } catch {
     // Fall through to extension/direct/remote.
   }
 
   try {
-    const extension = await fetchExtension<T>(path, init);
-    if (extension) {
-      return extension;
-    }
+    const extension = returnIfUsable(await fetchExtension<T>(path, init));
+    if (extension) return extension;
   } catch {
     // Fall through to direct/remote.
   }
 
   try {
-    const direct = await fetchDirect<T>(path, init);
-    if (direct) {
-      return direct;
-    }
+    const direct = returnIfUsable(await fetchDirect<T>(path, init));
+    if (direct) return direct;
   } catch {
     // Fall through to discovered fetch servers.
   }

@@ -10,7 +10,9 @@ import {
   scoreSearchCandidate,
 } from "../lib/search-ranking";
 
-const BASE_URL = "https://bombuj.si";
+const MOVIE_BASE_URL = "https://www.bombuj.si";
+const SERIES_BASE_URL = "https://serialy.bombuj.si";
+const BASE_URL = MOVIE_BASE_URL;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
@@ -251,13 +253,14 @@ function isVipGateHtml(html: string) {
 
 async function fetchPlayerHtmlWithFallback(
   url: string,
-  movieUrl: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
   headers: Record<string, string>,
 ) {
   const primary = await fetchText(url, {
     headers: {
       ...headers,
-      Referer: movieUrl,
+      Referer: sourcePageUrl,
     },
   }).catch(() => "");
 
@@ -273,7 +276,7 @@ async function fetchPlayerHtmlWithFallback(
   const fallback = await fetchText(url, {
     headers: {
       ...headers,
-      Referer: BASE_URL,
+      Referer: siteBaseUrl,
     },
   }).catch(() => "");
 
@@ -282,17 +285,18 @@ async function fetchPlayerHtmlWithFallback(
 
 async function resolveBombujPlayerUrl(
   rawLink: string,
-  movieUrl: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
   headers: Record<string, string>,
   maxDepth = 3,
 ): Promise<string> {
-  let currentUrl = normalizeBombujLink(rawLink, BASE_URL);
+  let currentUrl = normalizeBombujLink(rawLink, siteBaseUrl);
   if (!currentUrl) {
     return rawLink;
   }
 
   for (let depth = 0; depth < maxDepth; depth += 1) {
-    const html = await fetchPlayerHtmlWithFallback(currentUrl, movieUrl, headers);
+    const html = await fetchPlayerHtmlWithFallback(currentUrl, sourcePageUrl, siteBaseUrl, headers);
 
     if (!html) {
       return currentUrl;
@@ -332,15 +336,16 @@ async function buildBombujPlayer(
   providerDomain: string,
   language: string,
   playerIndex: number,
-  movieUrl: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
   headers: Record<string, string>,
 ) {
   const isExternal = /primewire|byse|mixdrop|voe|embed|netu/i.test(providerDomain) &&
     !/multiembed|2embed|movies/i.test(providerDomain);
   const isPremium = /vidlink|vidstream|vidsrc|multiembed|2embed|movies/i.test(providerDomain);
-  const normalizedLink = normalizeBombujLink(rawLink, BASE_URL);
+  const normalizedLink = normalizeBombujLink(rawLink, siteBaseUrl);
   const finalEmbed = normalizedLink
-    ? await resolveBombujPlayerUrl(normalizedLink, movieUrl, headers)
+    ? await resolveBombujPlayerUrl(normalizedLink, sourcePageUrl, siteBaseUrl, headers)
     : rawLink;
 
   return {
@@ -348,7 +353,7 @@ async function buildBombujPlayer(
     provider: providerDomain,
     label: `${providerDomain.toUpperCase()}${isPremium ? " ⭐" : ""}${isExternal ? " EX" : ""}`,
     language,
-    sourcePageUrl: movieUrl,
+    sourcePageUrl,
     embedUrl: finalEmbed,
   };
 }
@@ -363,15 +368,147 @@ function providerScore(player: { provider: string; label: string }) {
   return premium + blockedPenalty;
 }
 
+type BombujEpisodeSlug = {
+  showSlug: string;
+  episodeCode: string;
+  seasonNumber: number;
+  episodeNumber: number;
+};
+
+function parseBombujEpisodeSlug(slug: string): BombujEpisodeSlug | null {
+  const normalized = slug
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/serialy\.bombuj\.si\/serial\//i, "")
+    .replace(/#.*$/, "")
+    .replace(/\/$/, "");
+  const slashEpisode = normalized.match(/^(.+)\/s(\d+)e(\d+)$/i);
+  if (slashEpisode) {
+    return {
+      showSlug: slashEpisode[1],
+      episodeCode: `s${slashEpisode[2]}e${slashEpisode[3]}`,
+      seasonNumber: Number.parseInt(slashEpisode[2], 10),
+      episodeNumber: Number.parseInt(slashEpisode[3], 10),
+    };
+  }
+
+  const suffixedEpisode = normalized.match(/^(.+)-s(\d+)e(\d+)$/i);
+  if (suffixedEpisode) {
+    return {
+      showSlug: suffixedEpisode[1],
+      episodeCode: `s${suffixedEpisode[2]}e${suffixedEpisode[3]}`,
+      seasonNumber: Number.parseInt(suffixedEpisode[2], 10),
+      episodeNumber: Number.parseInt(suffixedEpisode[3], 10),
+    };
+  }
+
+  const xEpisode = normalized.match(/^(.+)-(\d+)x(\d+)$/i);
+  if (xEpisode) {
+    return {
+      showSlug: xEpisode[1],
+      episodeCode: `${xEpisode[2]}x${xEpisode[3]}`,
+      seasonNumber: Number.parseInt(xEpisode[2], 10),
+      episodeNumber: Number.parseInt(xEpisode[3], 10),
+    };
+  }
+
+  return null;
+}
+
+async function extractBombujPlayersFromHtml(
+  html: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
+  headers: Record<string, string>,
+  fallbackLanguage = "Unknown Lang",
+) {
+  const players: { alias: PlayerAlias; provider: string; label: string; language?: string; sourcePageUrl: string; embedUrl: string }[] = [];
+  let playerIndex = 0;
+
+  const addServer = async (rawLink: string, label: string, language: string) => {
+    const providerDomain = stripTags(label).trim().toLowerCase();
+    if (!rawLink || !providerDomain) {
+      return;
+    }
+
+    players.push(await buildBombujPlayer(
+      rawLink,
+      providerDomain,
+      language,
+      playerIndex,
+      sourcePageUrl,
+      siteBaseUrl,
+      headers,
+    ));
+    playerIndex++;
+  };
+
+  const dataMatch = html.match(/url:\s*'prehravace_ajax\.php'[\s\S]*?data:\s*({[\s\S]*?}),\s*success:/i);
+  if (dataMatch) {
+    const params = new URLSearchParams();
+    const kvMatches = dataMatch[1].matchAll(/([a-z_]+):\s*'([^']*)'/g);
+    for (const m of kvMatches) {
+      params.append(m[1], m[2]);
+    }
+
+    const ajaxUrl = `${siteBaseUrl}/prehravace_ajax.php?${params.toString()}`;
+    const ajaxHtml = await fetchText(ajaxUrl, {
+      headers: { ...headers, "X-Requested-With": "XMLHttpRequest", Referer: sourcePageUrl },
+    }).catch(() => "");
+
+    const languageBlocksArr = ajaxHtml.split(/<div class="dropdownlink">/gi).slice(1);
+    if (languageBlocksArr.length === 0) {
+      const servers = [...ajaxHtml.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
+      for (const server of servers) {
+        await addServer(server[1], server[2], fallbackLanguage);
+      }
+    } else {
+      for (const block of languageBlocksArr) {
+        const langMatch = block.match(/<img[^>]+cflag[^>]*>([^<]+)/i);
+        const fallbackMatch = block.match(/^([\s\S]*?)<\/div>/i);
+        const language = langMatch
+          ? stripTags(langMatch[1]).trim()
+          : fallbackMatch
+            ? stripTags(fallbackMatch[1]).trim()
+            : fallbackLanguage;
+        const servers = [...block.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
+        for (const server of servers) {
+          await addServer(server[1], server[2], language || fallbackLanguage);
+        }
+      }
+    }
+  }
+
+  const directServers = [...html.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
+  for (const server of directServers) {
+    const normalized = normalizeBombujLink(server[1], siteBaseUrl);
+    if (!players.some((player) => normalizeBombujLink(player.embedUrl, siteBaseUrl) === normalized)) {
+      await addServer(server[1], server[2], fallbackLanguage);
+    }
+  }
+
+  return players.sort((a, b) => providerScore(b) - providerScore(a));
+}
+
 /**
  * Basic Bombuj Extractor Skeleton 
  * NOTE: Bombuj leverages anti-bot mechanics. This initial scraper creates a skeleton implementation.
  */
-export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
+export async function fetchBombujMovie(slug: string, mediaType?: "movie" | "serial"): Promise<ImportedShow> {
   const isDirectUrl = slug.startsWith("http");
-  const prefix = slug.includes("serial") ? "online-serial" : "online-film";
-  const rawSlug = slug.replace(/online-(serial|film)-/, "");
-  const movieUrl = isDirectUrl ? slug : `${BASE_URL}/${prefix}-${rawSlug}`;
+  const episodePart = mediaType === "serial" ? parseBombujEpisodeSlug(slug) : null;
+  const isSerial = mediaType === "serial" || slug.includes("serial") || Boolean(episodePart);
+  const rawSlug = (episodePart?.showSlug ?? slug)
+    .replace(/^online-(serial|film)-/, "")
+    .replace(/^serial-/, "");
+  const siteBaseUrl = isSerial ? SERIES_BASE_URL : MOVIE_BASE_URL;
+  const movieUrl = isDirectUrl
+    ? slug
+    : episodePart
+      ? `${SERIES_BASE_URL}/serial/${rawSlug}-${episodePart.seasonNumber}x${episodePart.episodeNumber}`
+      : isSerial
+        ? `${SERIES_BASE_URL}/serial-${rawSlug}#serial`
+        : `${MOVIE_BASE_URL}/online-film-${rawSlug}`;
   
   const headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0" };
   const html = await fetchText(movieUrl, { headers }).catch(() => "");
@@ -392,7 +529,7 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
      if (posterUrl.startsWith("//")) {
          posterUrl = `https:${posterUrl}`;
      } else if (!posterUrl.startsWith("http")) {
-         posterUrl = `${BASE_URL}${posterUrl}`;
+         posterUrl = `${siteBaseUrl}${posterUrl}`;
      }
   }
 
@@ -403,78 +540,7 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
       globalLanguage = stripTags(globalLangMatch[1]).trim() || "Unknown Lang";
   }
 
-  const players: { alias: PlayerAlias; provider: string; label: string; language?: string; sourcePageUrl: string; embedUrl: string }[] = [];
-  
-  // 1. Extract AJAX data block
-  const dataMatch = html.match(/url:\s*'prehravace_ajax\.php'[\s\S]*?data:\s*({[\s\S]*?}),\s*success:/i);
-  if (dataMatch) {
-      const rawDataStr = dataMatch[1];
-      const params = new URLSearchParams();
-      const kvMatches = rawDataStr.matchAll(/([a-z_]+):\s*'([^']*)'/g);
-      for (const m of kvMatches) {
-          params.append(m[1], m[2]);
-      }
-
-      const ajaxUrl = `${BASE_URL}/prehravace_ajax.php?${params.toString()}`;
-      const ajaxHtml = await fetchText(ajaxUrl, { 
-          headers: { ...headers, "X-Requested-With": "XMLHttpRequest", "Referer": movieUrl } 
-      }).catch(() => "");
-
-      // Extract each accordion block containing language and players
-      // Splitting by dropdownlink guarantees we find every language accordion regardless of its wrapper's open/close status
-      const languageBlocksArr = ajaxHtml.split(/<div class="dropdownlink">/gi).slice(1);
-      
-      let playerIndex = 0;
-      
-      // If split failed, fallback to the generic global match
-      if (languageBlocksArr.length === 0) {
-          const servers = [...ajaxHtml.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
-            for (const s of servers) {
-              const providerDomain = stripTags(s[2]).trim().toLowerCase();
-              const player = await buildBombujPlayer(
-              s[1],
-              providerDomain,
-              globalLanguage,
-              playerIndex,
-              movieUrl,
-              headers,
-              );
-              players.push(player);
-              playerIndex++;
-            }
-      } else {
-          // Parse properly with language detection
-          for (const block of languageBlocksArr) {
-             const langMatch = block.match(/<img[^>]+cflag[^>]*>([^<]+)/i);
-             const fallbackMatch = block.match(/^([\s\S]*?)<\/div>/i);
-             
-             let language = globalLanguage;
-             if (langMatch) {
-                 language = stripTags(langMatch[1]).trim();
-             } else if (fallbackMatch) {
-                 language = stripTags(fallbackMatch[1]).trim();
-             }
-             
-             const servers = [...block.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
-             for (const s of servers) {
-                const providerDomain = stripTags(s[2]).trim().toLowerCase();
-                const player = await buildBombujPlayer(
-                s[1],
-                providerDomain,
-                language,
-                playerIndex,
-                movieUrl,
-                headers,
-                );
-                players.push(player);
-                playerIndex++;
-             }
-          }
-      }
-      
-        // Prefer providers that are less likely to be blocked in external embeds.
-        players.sort((a, b) => providerScore(b) - providerScore(a));
-  }
+  const players = await extractBombujPlayersFromHtml(html, movieUrl, siteBaseUrl, headers, globalLanguage);
 
   if (players.length === 0) {
       players.push({
@@ -489,13 +555,13 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
   const importedAt = Date.now();
 
   const episode: LibraryEpisode = {
-     id: `bombuj:${rawSlug}:s1e1`,
+     id: `bombuj:${rawSlug}:${episodePart?.episodeCode ?? (isSerial ? "serial" : "movie")}`,
      showSlug: rawSlug,
      showTitle: title,
      posterUrl: posterUrl || undefined,
-     seasonNumber: 1,
-     episodeNumber: 1,
-     episodeCode: "movie",
+     seasonNumber: episodePart?.seasonNumber ?? 1,
+     episodeNumber: episodePart?.episodeNumber ?? 1,
+     episodeCode: episodePart?.episodeCode ?? (isSerial ? null : "movie"),
      episodeTitle: title,
      episodeUrl: movieUrl,
      players,
@@ -509,7 +575,7 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
     ? `${yearText}${csfdMeta?.rating !== null && csfdMeta?.rating !== undefined ? ` - CSFD ${csfdMeta.rating}%` : ""}`
     : (csfdMeta?.rating !== null && csfdMeta?.rating !== undefined ? `CSFD ${csfdMeta.rating}%` : null);
   const artwork = await enrichArtwork({
-    mediaType: prefix.includes("serial") ? "tv" : "movie",
+    mediaType: isSerial ? "tv" : "movie",
     title,
     altTitle: altTitle || null,
     yearHint: yearHint ?? undefined,
@@ -526,8 +592,9 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
     posterUrl: artwork.posterUrl ?? posterUrl,
     backdropUrl: artwork.backdropUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
-    availableSeasons: [1],
+    availableSeasons: [episodePart?.seasonNumber ?? 1],
     importedAt,
+    mediaType: isSerial ? "serial" : "movie",
     episodes: [episode]
   };
 }

@@ -71,11 +71,14 @@ export function ArtworkPickerModal({ show, open, onClose, onApplyArtwork }: Artw
     setArtworkLoading(true);
     setArtworkError(null);
 
-    void searchArtworkAssetsForShow(show, {
-      tmdb: true,
-      fanart: true,
-      tvdb: true,
-    })
+    void searchArtworkAssetsForShow(
+      show,
+      {
+        tmdb: true,
+        fanart: true,
+        tvdb: true,
+      },
+    )
       .then((assets) => {
         if (!canceled) {
           setArtworkAssets(assets);

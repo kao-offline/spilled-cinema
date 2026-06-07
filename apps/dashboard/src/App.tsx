@@ -20,7 +20,7 @@ import { DownloadEngineModal } from "./components/DownloadEngineModal";
 import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
-import { importSvetSerialuShow, importBombujMovie, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
+import { importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
 import { preloadHeroImage } from "./lib/hero-assets";
 import {
   clearOfflineDownloads,
@@ -99,6 +99,7 @@ import type {
   ProviderFeedCatalogEntry,
   ProviderFeedResponse,
   ProviderModuleManifest,
+  IntegrationManifestV2,
   UserTasteProfile,
 } from "./lib/types";
 import {
@@ -111,7 +112,7 @@ import {
   writeEnabledProviderFeeds,
   writeProviderRepositoryUrls,
 } from "./lib/provider-feed-storage";
-import { fetchProviderFeed, fetchProviderModules, searchProviderModuleItems } from "./lib/provider-modules-client";
+import { fetchIntegrationCatalog, fetchProviderFeed, fetchProviderModules, searchProviderModuleItems } from "./lib/provider-modules-client";
 import {
   createProviderFeedViewId,
   isProviderFeedViewId,
@@ -285,6 +286,20 @@ function resolveImportInput(rawValue: string): {
         };
       }
     }
+
+    if (host.includes("cinenova.store")) {
+      const parts = path.split("/").filter(Boolean);
+      const languageIndex = parts.findIndex((part) => part === "en");
+      const sourceParts = parts.slice(languageIndex >= 0 ? languageIndex + 1 : 0);
+      if ((sourceParts[0] === "movie" || sourceParts[0] === "tv") && sourceParts[1]) {
+        return {
+          mode: "direct",
+          platform: "synova",
+          slug: sourceParts.slice(0, 3).join("/").trim().toLowerCase(),
+          mediaType: sourceParts[0] === "tv" ? "serial" : "movie",
+        };
+      }
+    }
   } catch {
     // Non-URL input falls through to title search.
   }
@@ -365,7 +380,9 @@ function App() {
 
 function AppContent() {
   const HERO_ROTATION_MS = 7000;
+  const initialProviderRepositoryUrls = readProviderRepositoryUrls();
   const cachedProviderModules = readCachedProviderModules();
+  const initialProviderModules = initialProviderRepositoryUrls.length > 0 ? cachedProviderModules.modules : [];
   const [state, setState] = useState<LibraryState>(() => readLibraryState());
   const [importSlug, setImportSlug] = useState("");
   const [importing, setImporting] = useState(false);
@@ -423,10 +440,11 @@ function AppContent() {
   const [exploreCursor, setExploreCursor] = useState<string | null>(readDiscoveryUiState().cachedExplore?.payload.continueCursor ?? null);
   const [exploreLoading, setExploreLoading] = useState(false);
   const [exploreError, setExploreError] = useState<string | null>(null);
-  const [providerModules, setProviderModules] = useState<ProviderModuleManifest[]>(() => cachedProviderModules.modules);
-  const [providerRepositoryUrls, setProviderRepositoryUrls] = useState<string[]>(() => readProviderRepositoryUrls());
+  const [providerModules, setProviderModules] = useState<ProviderModuleManifest[]>(() => initialProviderModules);
+  const [integrationCatalog, setIntegrationCatalog] = useState<IntegrationManifestV2[]>([]);
+  const [providerRepositoryUrls, setProviderRepositoryUrls] = useState<string[]>(() => initialProviderRepositoryUrls);
   const [enabledProviderFeeds, setEnabledProviderFeeds] = useState<EnabledProviderFeed[]>(() =>
-    sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), cachedProviderModules.modules),
+    sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), initialProviderModules),
   );
   const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>({});
   const stateRef = useRef(state);
@@ -468,11 +486,13 @@ function AppContent() {
     const loadProviderModuleCatalog = async () => {
       try {
         const modules = await fetchProviderModules(providerRepositoryUrls);
+        const integrations = await fetchIntegrationCatalog(providerRepositoryUrls);
         if (canceled) {
           return;
         }
 
         setProviderModules(modules);
+        setIntegrationCatalog(integrations);
         writeCachedProviderModules(modules);
         setEnabledProviderFeeds((current) => {
           const next = sanitizeEnabledProviderFeeds(current, modules);
@@ -1086,6 +1106,9 @@ function AppContent() {
     return state.shows.find((show) => {
       if (item.provider === "bombuj") {
         return show.slug === `bombuj-${item.importSlug}`;
+      }
+      if (item.provider === "synova") {
+        return show.slug === `synova-${item.importSlug.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
       }
       return show.slug === item.importSlug;
     }) ?? null;
@@ -1777,13 +1800,7 @@ function AppContent() {
     setImportMessage(null);
 
     try {
-      if (platform === "synova") {
-        throw new Error("Synova currently supports catalog discovery only. Open the source page from the feed instead.");
-      }
-
-      const show = platform === "bombuj"
-        ? await importBombujMovie(slug, mediaType)
-        : await importSvetSerialuShow(slug);
+      const show = await importProviderItem(platform, slug, mediaType);
 
       const nextState = upsertImportedShow(show);
       setState(nextState);
@@ -2823,6 +2840,7 @@ function AppContent() {
                 void refreshVaultState();
               }}
               providerFeeds={providerFeedCatalog}
+              integrationCatalog={integrationCatalog}
               providerRepositoryUrls={providerRepositoryUrls}
               onToggleProviderFeed={handleToggleProviderFeed}
               onProviderRepositoriesChange={(urls) => {
