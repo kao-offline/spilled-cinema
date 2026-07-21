@@ -7,8 +7,9 @@ type DownloadEngineModalProps = {
   preferredEngine: DownloadEngine;
   localBackendAvailable: boolean;
   vaultConnected: boolean;
+  privateNodeAvailable: boolean;
   onClose: () => void;
-  onSelect: (engine: DownloadEngine) => void;
+  onSelect: (engine: DownloadEngine, target: "local-vault" | "private-node") => void;
 };
 
 const ENGINES: Array<{
@@ -25,8 +26,8 @@ const ENGINES: Array<{
   },
   {
     id: "wasm",
-    label: "FFmpeg.wasm",
-    note: "Downloads and muxes in the browser, then saves the final MP4 through the browser download flow.",
+    label: "FFmpeg.wasm Fast",
+    note: "Experimental browser path with parallel HLS fetching, retry, wake lock, and local muxing.",
     icon: Cpu,
   },
 ];
@@ -36,6 +37,7 @@ export function DownloadEngineModal({
   preferredEngine,
   localBackendAvailable,
   vaultConnected,
+  privateNodeAvailable,
   onClose,
   onSelect,
 }: DownloadEngineModalProps) {
@@ -44,27 +46,26 @@ export function DownloadEngineModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[141] flex items-center justify-center bg-black/80 px-3 py-6 backdrop-blur-xl">
-      <div className="relative w-full max-w-2xl overflow-hidden rounded-[28px] border border-white/10 bg-[#101218]/95 shadow-[0_40px_120px_rgba(0,0,0,0.65)]">
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-orange-400 via-cyan-400 to-emerald-400" />
+    <div className="fixed inset-0 z-[141] flex items-center justify-center bg-black/82 px-3 py-6 backdrop-blur-2xl">
+      <div className="relative max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-[1.5rem] border border-white/[0.1] bg-[#0b0c10]/96 shadow-[0_40px_120px_rgba(0,0,0,0.72)] custom-scrollbar">
 
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-white/5 text-white/50 transition hover:bg-white/10 hover:text-white"
+          className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] text-white/45 transition hover:border-white/15 hover:bg-white/[0.09] hover:text-white"
           aria-label="Close engine chooser"
         >
           <X className="h-5 w-5" />
         </button>
 
-        <div className="p-6 sm:p-8">
-          <div className="mb-6 space-y-2">
-            <div className="text-[10px] font-black uppercase tracking-[0.45em] text-white/30">
-              Choose download engine
+        <div className="p-5 sm:p-7">
+          <div className="mb-5 border-b border-white/[0.07] pb-5 pr-12">
+            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30">
+              Download method
             </div>
-            <h3 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+            <h3 className="mt-2 text-2xl font-black tracking-[-0.03em] text-white">
               {episode.showTitle}
             </h3>
-            <p className="text-sm text-white/45">
+            <p className="mt-1.5 text-sm leading-6 text-white/42">
               Select how this video should be downloaded.
             </p>
           </div>
@@ -82,14 +83,14 @@ export function DownloadEngineModal({
                   key={engine.id}
                   type="button"
                   disabled={disabled}
-                  onClick={() => onSelect(engine.id)}
+                  onClick={() => onSelect(engine.id, "local-vault")}
                   className={clsx(
-                    "group flex w-full items-center justify-between gap-4 rounded-[20px] border p-4 text-left transition",
+                    "group flex w-full items-center justify-between gap-3 rounded-2xl border p-3.5 text-left transition",
                     disabled
                       ? "cursor-not-allowed border-white/8 bg-white/[0.03] text-white/25"
                       : selected
-                        ? "border-orange-400/40 bg-orange-500/10 hover:border-orange-300/60"
-                        : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10",
+                        ? "border-white/22 bg-white/[0.085] hover:border-white/32"
+                        : "border-white/[0.07] bg-white/[0.025] hover:border-white/16 hover:bg-white/[0.065]",
                   )}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -106,7 +107,7 @@ export function DownloadEngineModal({
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold text-white">{engine.label}</span>
                         {selected ? (
-                          <span className="rounded-full bg-orange-400/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-orange-200">
+                          <span className="rounded-full border border-white/10 bg-white/[0.07] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white/62">
                             Preferred
                           </span>
                         ) : null}
@@ -125,7 +126,7 @@ export function DownloadEngineModal({
                       "rounded-full px-4 py-2 text-[10px] font-black uppercase tracking-[0.28em] transition",
                       disabled
                         ? "bg-white/6 text-white/30"
-                        : "bg-white text-black shadow-[0_8px_24px_rgba(255,255,255,0.25)] group-hover:bg-cyan-300",
+                        : "bg-white text-black group-hover:bg-white/85",
                     )}
                   >
                     {disabled ? "Unavailable" : "Use"}
@@ -133,6 +134,40 @@ export function DownloadEngineModal({
                 </button>
               );
             })}
+            <button
+              type="button"
+              disabled={!privateNodeAvailable}
+              onClick={() => onSelect("localffmpeg", "private-node")}
+              className={clsx(
+                "group flex w-full items-center justify-between gap-3 rounded-2xl border p-3.5 text-left transition",
+                privateNodeAvailable
+                  ? "border-white/14 bg-white/[0.045] hover:border-white/24 hover:bg-white/[0.075]"
+                  : "cursor-not-allowed border-white/8 bg-white/[0.03] text-white/25",
+              )}
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <span className={clsx("flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl", privateNodeAvailable ? "bg-white/[0.07] text-white/72" : "bg-white/5 text-white/25")}>
+                  <ServerCog className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-white">Private node</span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-white/55">
+                      Server storage
+                    </span>
+                    {!privateNodeAvailable ? (
+                      <span className="rounded-full bg-red-500/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-red-200">
+                        Sign in first
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="text-xs text-white/35">Downloads on your private server and links the record to the selected watcher profile.</div>
+                </div>
+              </div>
+              <div className={clsx("rounded-full px-4 py-2 text-[10px] font-black uppercase tracking-[0.28em]", privateNodeAvailable ? "bg-white text-black" : "bg-white/6 text-white/30")}>
+                {privateNodeAvailable ? "Use" : "Unavailable"}
+              </div>
+            </button>
           </div>
 
           <div className="mt-6 flex items-center justify-between text-[11px] uppercase tracking-[0.25em] text-white/25">

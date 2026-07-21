@@ -5,12 +5,8 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/server/:path*",
-      "destination": "/api/server?path=:path*"
-    },
-    {
-      "source": "/api/server/:path*",
-      "destination": "/api/server?path=:path*"
+      "source": "/((?!api/|server/|assets/|worker-).*)",
+      "destination": "/index.html"
     }
   ],
   "functions": {
@@ -25,6 +21,9 @@
     },
     "api/artwork/search.ts": {
       "maxDuration": 30
+    },
+    "api/node-proxy.js": {
+      "maxDuration": 60
     }
   }
 }

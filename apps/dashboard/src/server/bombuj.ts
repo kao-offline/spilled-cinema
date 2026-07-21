@@ -1,8 +1,18 @@
 import type { ImportedShow, LibraryEpisode, PlayerAlias } from "../lib/types";
 import { enrichArtwork } from "./artwork";
-import { compareSearchScores, normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking";
+import { searchExternalTitles, type ExternalTitleCandidate } from "./external-title-search";
+import {
+  compareSearchScores,
+  hasRequiredSearchTokenCoverage,
+  hasSignificantSearchTokenMatch,
+  keepHighConfidenceSearchResults,
+  normalizeSearchText,
+  scoreSearchCandidate,
+} from "../lib/search-ranking";
 
-const BASE_URL = "https://bombuj.si";
+const MOVIE_BASE_URL = "https://www.bombuj.si";
+const SERIES_BASE_URL = "https://serialy.bombuj.si";
+const BASE_URL = MOVIE_BASE_URL;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
@@ -210,6 +220,23 @@ function normalizeBombujLink(rawLink: string, baseUrl: string) {
   return absoluteBombujUrl(withProtocol, baseUrl);
 }
 
+function extractSubtitleUrlFromEmbedUrl(embedUrl: string) {
+  try {
+    const parsed = new URL(embedUrl);
+    for (let index = 1; index <= 8; index += 1) {
+      const file = parsed.searchParams.get(`c${index}_file`);
+      if (!file?.trim()) continue;
+      const subtitleUrl = new URL(file, parsed).toString();
+      if (/^https?:\/\//i.test(subtitleUrl)) {
+        return subtitleUrl;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function extractIframeSrc(html: string) {
   const direct = html.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1];
   if (direct) {
@@ -243,13 +270,14 @@ function isVipGateHtml(html: string) {
 
 async function fetchPlayerHtmlWithFallback(
   url: string,
-  movieUrl: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
   headers: Record<string, string>,
 ) {
   const primary = await fetchText(url, {
     headers: {
       ...headers,
-      Referer: movieUrl,
+      Referer: sourcePageUrl,
     },
   }).catch(() => "");
 
@@ -265,7 +293,7 @@ async function fetchPlayerHtmlWithFallback(
   const fallback = await fetchText(url, {
     headers: {
       ...headers,
-      Referer: BASE_URL,
+      Referer: siteBaseUrl,
     },
   }).catch(() => "");
 
@@ -274,17 +302,18 @@ async function fetchPlayerHtmlWithFallback(
 
 async function resolveBombujPlayerUrl(
   rawLink: string,
-  movieUrl: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
   headers: Record<string, string>,
   maxDepth = 3,
-): Promise<string> {
-  let currentUrl = normalizeBombujLink(rawLink, BASE_URL);
+): Promise<string | null> {
+  let currentUrl = normalizeBombujLink(rawLink, siteBaseUrl);
   if (!currentUrl) {
     return rawLink;
   }
 
   for (let depth = 0; depth < maxDepth; depth += 1) {
-    const html = await fetchPlayerHtmlWithFallback(currentUrl, movieUrl, headers);
+    const html = await fetchPlayerHtmlWithFallback(currentUrl, sourcePageUrl, siteBaseUrl, headers);
 
     if (!html) {
       return currentUrl;
@@ -292,6 +321,12 @@ async function resolveBombujPlayerUrl(
 
     const iframeSrc = extractIframeSrc(html);
     if (!iframeSrc) {
+      // Bombuj sometimes leaves old server rows in the movie page even though
+      // their wrapper now contains only the VIP gate. Those rows have no media
+      // behind them and must not be exposed as playable sources.
+      if (isVipGateHtml(html)) {
+        return null;
+      }
       return currentUrl;
     }
 
@@ -324,24 +359,34 @@ async function buildBombujPlayer(
   providerDomain: string,
   language: string,
   playerIndex: number,
-  movieUrl: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
   headers: Record<string, string>,
 ) {
   const isExternal = /primewire|byse|mixdrop|voe|embed|netu/i.test(providerDomain) &&
     !/multiembed|2embed|movies/i.test(providerDomain);
   const isPremium = /vidlink|vidstream|vidsrc|multiembed|2embed|movies/i.test(providerDomain);
-  const normalizedLink = normalizeBombujLink(rawLink, BASE_URL);
+  const normalizedLink = normalizeBombujLink(rawLink, siteBaseUrl);
   const finalEmbed = normalizedLink
-    ? await resolveBombujPlayerUrl(normalizedLink, movieUrl, headers)
+    ? await resolveBombujPlayerUrl(normalizedLink, sourcePageUrl, siteBaseUrl, headers)
     : rawLink;
+  if (!finalEmbed) {
+    return null;
+  }
+  const subtitlesUrl =
+    extractSubtitleUrlFromEmbedUrl(finalEmbed) ??
+    extractSubtitleUrlFromEmbedUrl(normalizedLink || rawLink) ??
+    undefined;
 
   return {
     alias: `bombuj-${playerIndex}` as PlayerAlias,
     provider: providerDomain,
     label: `${providerDomain.toUpperCase()}${isPremium ? " ⭐" : ""}${isExternal ? " EX" : ""}`,
     language,
-    sourcePageUrl: movieUrl,
+    sourcePageUrl,
     embedUrl: finalEmbed,
+    subtitlesUrl,
+    resolutionStatus: "unresolved" as const,
   };
 }
 
@@ -355,15 +400,180 @@ function providerScore(player: { provider: string; label: string }) {
   return premium + blockedPenalty;
 }
 
+type BombujEpisodeSlug = {
+  showSlug: string;
+  episodeCode: string;
+  seasonNumber: number;
+  episodeNumber: number;
+};
+
+function parseBombujEpisodeSlug(slug: string): BombujEpisodeSlug | null {
+  const normalized = slug
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/serialy\.bombuj\.si\/serial\//i, "")
+    .replace(/#.*$/, "")
+    .replace(/\/$/, "");
+  const slashEpisode = normalized.match(/^(.+)\/s(\d+)e(\d+)$/i);
+  if (slashEpisode) {
+    return {
+      showSlug: slashEpisode[1],
+      episodeCode: `s${slashEpisode[2]}e${slashEpisode[3]}`,
+      seasonNumber: Number.parseInt(slashEpisode[2], 10),
+      episodeNumber: Number.parseInt(slashEpisode[3], 10),
+    };
+  }
+
+  const suffixedEpisode = normalized.match(/^(.+)-s(\d+)e(\d+)$/i);
+  if (suffixedEpisode) {
+    return {
+      showSlug: suffixedEpisode[1],
+      episodeCode: `s${suffixedEpisode[2]}e${suffixedEpisode[3]}`,
+      seasonNumber: Number.parseInt(suffixedEpisode[2], 10),
+      episodeNumber: Number.parseInt(suffixedEpisode[3], 10),
+    };
+  }
+
+  const xEpisode = normalized.match(/^(.+)-(\d+)x(\d+)$/i);
+  if (xEpisode) {
+    return {
+      showSlug: xEpisode[1],
+      episodeCode: `${xEpisode[2]}x${xEpisode[3]}`,
+      seasonNumber: Number.parseInt(xEpisode[2], 10),
+      episodeNumber: Number.parseInt(xEpisode[3], 10),
+    };
+  }
+
+  return null;
+}
+
+async function extractBombujPlayersFromHtml(
+  html: string,
+  sourcePageUrl: string,
+  siteBaseUrl: string,
+  headers: Record<string, string>,
+  fallbackLanguage = "Unknown Lang",
+) {
+  const players: LibraryEpisode["players"] = [];
+  let playerIndex = 0;
+
+  const addServer = async (rawLink: string, label: string, language: string) => {
+    const providerDomain = stripTags(label).trim().toLowerCase();
+    if (!rawLink || !providerDomain) {
+      return;
+    }
+
+    const player = await buildBombujPlayer(
+      rawLink,
+      providerDomain,
+      language,
+      playerIndex,
+      sourcePageUrl,
+      siteBaseUrl,
+      headers,
+    );
+    if (!player) {
+      return;
+    }
+    players.push(player);
+    playerIndex++;
+  };
+
+  const dataMatch = html.match(/url:\s*'prehravace_ajax\.php'[\s\S]*?data:\s*({[\s\S]*?}),\s*success:/i);
+  if (dataMatch) {
+    const params = new URLSearchParams();
+    const kvMatches = dataMatch[1].matchAll(/([a-z_]+):\s*'([^']*)'/g);
+    for (const m of kvMatches) {
+      params.append(m[1], m[2]);
+    }
+
+    const ajaxUrl = `${siteBaseUrl}/prehravace_ajax.php?${params.toString()}`;
+    const ajaxHtml = await fetchText(ajaxUrl, {
+      headers: { ...headers, "X-Requested-With": "XMLHttpRequest", Referer: sourcePageUrl },
+    }).catch(() => "");
+
+    const languageBlocksArr = ajaxHtml.split(/<div class="dropdownlink">/gi).slice(1);
+    if (languageBlocksArr.length === 0) {
+      const servers = [...ajaxHtml.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
+      for (const server of servers) {
+        await addServer(server[1], server[2], fallbackLanguage);
+      }
+    } else {
+      for (const block of languageBlocksArr) {
+        const langMatch = block.match(/<img[^>]+cflag[^>]*>([^<]+)/i);
+        const fallbackMatch = block.match(/^([\s\S]*?)<\/div>/i);
+        const language = langMatch
+          ? stripTags(langMatch[1]).trim()
+          : fallbackMatch
+            ? stripTags(fallbackMatch[1]).trim()
+            : fallbackLanguage;
+        const servers = [...block.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
+        for (const server of servers) {
+          await addServer(server[1], server[2], language || fallbackLanguage);
+        }
+      }
+    }
+  }
+
+  const directServers = [...html.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
+  for (const server of directServers) {
+    const normalized = normalizeBombujLink(server[1], siteBaseUrl);
+    if (!players.some((player) => normalizeBombujLink(player.embedUrl, siteBaseUrl) === normalized)) {
+      await addServer(server[1], server[2], fallbackLanguage);
+    }
+  }
+
+  return players.sort((a, b) => providerScore(b) - providerScore(a));
+}
+
+async function removeUnavailableBombujAggregators(
+  players: LibraryEpisode["players"],
+  sourcePageUrl: string,
+) {
+  const aggregatorPattern = /^(?:vidsrc|vidlink|primewire|vidstream|multiembed|2embed|moviesclub)$/i;
+  const checks = await Promise.all(players.map(async (player) => {
+    if (!aggregatorPattern.test(player.provider ?? "")) {
+      return true;
+    }
+
+    try {
+      const { resolvePlaybackStream } = await import("./full-download");
+      const resolution = resolvePlaybackStream({
+        episodeId: `bombuj-preflight-${player.alias}`,
+        activePlayerAlias: player.alias,
+        players: [{ ...player, sourcePageUrl }],
+      }).then(() => true, () => false);
+      return await Promise.race([
+        resolution,
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 12_000)),
+      ]);
+    } catch {
+      return false;
+    }
+  }));
+
+  return players.filter((_player, index) => checks[index]);
+}
+
 /**
  * Basic Bombuj Extractor Skeleton 
  * NOTE: Bombuj leverages anti-bot mechanics. This initial scraper creates a skeleton implementation.
  */
-export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
+export async function fetchBombujMovie(slug: string, mediaType?: "movie" | "serial"): Promise<ImportedShow> {
   const isDirectUrl = slug.startsWith("http");
-  const prefix = slug.includes("serial") ? "online-serial" : "online-film";
-  const rawSlug = slug.replace(/online-(serial|film)-/, "");
-  const movieUrl = isDirectUrl ? slug : `${BASE_URL}/${prefix}-${rawSlug}`;
+  const episodePart = mediaType === "serial" ? parseBombujEpisodeSlug(slug) : null;
+  const isSerial = mediaType === "serial" || slug.includes("serial") || Boolean(episodePart);
+  const rawSlug = (episodePart?.showSlug ?? slug)
+    .replace(/^online-(serial|film)-/, "")
+    .replace(/^serial-/, "");
+  const siteBaseUrl = isSerial ? SERIES_BASE_URL : MOVIE_BASE_URL;
+  const movieUrl = isDirectUrl
+    ? slug
+    : episodePart
+      ? `${SERIES_BASE_URL}/serial/${rawSlug}-${episodePart.seasonNumber}x${episodePart.episodeNumber}`
+      : isSerial
+        ? `${SERIES_BASE_URL}/serial-${rawSlug}#serial`
+        : `${MOVIE_BASE_URL}/online-film-${rawSlug}`;
   
   const headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0" };
   const html = await fetchText(movieUrl, { headers }).catch(() => "");
@@ -384,7 +594,7 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
      if (posterUrl.startsWith("//")) {
          posterUrl = `https:${posterUrl}`;
      } else if (!posterUrl.startsWith("http")) {
-         posterUrl = `${BASE_URL}${posterUrl}`;
+         posterUrl = `${siteBaseUrl}${posterUrl}`;
      }
   }
 
@@ -395,78 +605,8 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
       globalLanguage = stripTags(globalLangMatch[1]).trim() || "Unknown Lang";
   }
 
-  const players: { alias: PlayerAlias; provider: string; label: string; language?: string; sourcePageUrl: string; embedUrl: string }[] = [];
-  
-  // 1. Extract AJAX data block
-  const dataMatch = html.match(/url:\s*'prehravace_ajax\.php'[\s\S]*?data:\s*({[\s\S]*?}),\s*success:/i);
-  if (dataMatch) {
-      const rawDataStr = dataMatch[1];
-      const params = new URLSearchParams();
-      const kvMatches = rawDataStr.matchAll(/([a-z_]+):\s*'([^']*)'/g);
-      for (const m of kvMatches) {
-          params.append(m[1], m[2]);
-      }
-
-      const ajaxUrl = `${BASE_URL}/prehravace_ajax.php?${params.toString()}`;
-      const ajaxHtml = await fetchText(ajaxUrl, { 
-          headers: { ...headers, "X-Requested-With": "XMLHttpRequest", "Referer": movieUrl } 
-      }).catch(() => "");
-
-      // Extract each accordion block containing language and players
-      // Splitting by dropdownlink guarantees we find every language accordion regardless of its wrapper's open/close status
-      const languageBlocksArr = ajaxHtml.split(/<div class="dropdownlink">/gi).slice(1);
-      
-      let playerIndex = 0;
-      
-      // If split failed, fallback to the generic global match
-      if (languageBlocksArr.length === 0) {
-          const servers = [...ajaxHtml.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
-            for (const s of servers) {
-              const providerDomain = stripTags(s[2]).trim().toLowerCase();
-              const player = await buildBombujPlayer(
-              s[1],
-              providerDomain,
-              globalLanguage,
-              playerIndex,
-              movieUrl,
-              headers,
-              );
-              players.push(player);
-              playerIndex++;
-            }
-      } else {
-          // Parse properly with language detection
-          for (const block of languageBlocksArr) {
-             const langMatch = block.match(/<img[^>]+cflag[^>]*>([^<]+)/i);
-             const fallbackMatch = block.match(/^([\s\S]*?)<\/div>/i);
-             
-             let language = globalLanguage;
-             if (langMatch) {
-                 language = stripTags(langMatch[1]).trim();
-             } else if (fallbackMatch) {
-                 language = stripTags(fallbackMatch[1]).trim();
-             }
-             
-             const servers = [...block.matchAll(/<li[^>]*link="([^"]+)"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi)];
-             for (const s of servers) {
-                const providerDomain = stripTags(s[2]).trim().toLowerCase();
-                const player = await buildBombujPlayer(
-                s[1],
-                providerDomain,
-                language,
-                playerIndex,
-                movieUrl,
-                headers,
-                );
-                players.push(player);
-                playerIndex++;
-             }
-          }
-      }
-      
-        // Prefer providers that are less likely to be blocked in external embeds.
-        players.sort((a, b) => providerScore(b) - providerScore(a));
-  }
+  const extractedPlayers = await extractBombujPlayersFromHtml(html, movieUrl, siteBaseUrl, headers, globalLanguage);
+  const players = await removeUnavailableBombujAggregators(extractedPlayers, movieUrl);
 
   if (players.length === 0) {
       players.push({
@@ -474,20 +614,22 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
           provider: "bombuj-native",
           label: "Bombuj Native",
           sourcePageUrl: movieUrl,
-          embedUrl: movieUrl
+          embedUrl: movieUrl,
+          resolutionStatus: "failed",
+          resolutionError: "No external Bombuj player links could be extracted for this title.",
       });
   }
 
   const importedAt = Date.now();
 
   const episode: LibraryEpisode = {
-     id: `bombuj:${rawSlug}:s1e1`,
+     id: `bombuj:${rawSlug}:${episodePart?.episodeCode ?? (isSerial ? "serial" : "movie")}`,
      showSlug: rawSlug,
      showTitle: title,
      posterUrl: posterUrl || undefined,
-     seasonNumber: 1,
-     episodeNumber: 1,
-     episodeCode: "movie",
+     seasonNumber: episodePart?.seasonNumber ?? 1,
+     episodeNumber: episodePart?.episodeNumber ?? 1,
+     episodeCode: episodePart?.episodeCode ?? (isSerial ? null : "movie"),
      episodeTitle: title,
      episodeUrl: movieUrl,
      players,
@@ -501,7 +643,7 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
     ? `${yearText}${csfdMeta?.rating !== null && csfdMeta?.rating !== undefined ? ` - CSFD ${csfdMeta.rating}%` : ""}`
     : (csfdMeta?.rating !== null && csfdMeta?.rating !== undefined ? `CSFD ${csfdMeta.rating}%` : null);
   const artwork = await enrichArtwork({
-    mediaType: prefix.includes("serial") ? "tv" : "movie",
+    mediaType: isSerial ? "tv" : "movie",
     title,
     altTitle: altTitle || null,
     yearHint: yearHint ?? undefined,
@@ -517,49 +659,64 @@ export async function fetchBombujMovie(slug: string): Promise<ImportedShow> {
     years: yearWithRating,
     posterUrl: artwork.posterUrl ?? posterUrl,
     backdropUrl: artwork.backdropUrl ?? null,
+    bannerUrl: artwork.bannerUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
-    availableSeasons: [1],
+    availableSeasons: [episodePart?.seasonNumber ?? 1],
     importedAt,
+    mediaType: isSerial ? "serial" : "movie",
     episodes: [episode]
   };
 }
 
-export async function searchBombuj(
+export type BombujSearchResult = {
+  title: string;
+  slug: string;
+  platform: "bombuj";
+  posterUrl?: string | null;
+  mediaType?: "movie" | "serial";
+  year?: string | null;
+  matchScore?: number;
+};
+
+async function searchBombujProvider(
   query: string,
-): Promise<
-  {
-    title: string;
-    slug: string;
-    platform: "bombuj";
-    posterUrl?: string | null;
-    mediaType?: "movie" | "serial";
-    year?: string | null;
-    matchScore?: number;
-  }[]
-> {
+  options: { limit?: number; scoreBoost?: number; mediaTypeHint?: "movie" | "serial"; strict?: boolean } = {},
+): Promise<BombujSearchResult[]> {
   try {
      const normalizedQuery = normalizeSearch(query);
      if (!normalizedQuery) return [];
+     const limit = options.limit ?? 8;
 
      const directResults = (
        await Promise.allSettled([
-         fetchBombujSuggestionResults(query, "https://www.bombuj.si"),
-         fetchBombujSuggestionResults(query, "https://serialy.bombuj.si"),
+         options.mediaTypeHint === "serial" ? Promise.resolve([]) : fetchBombujSuggestionResults(query, "https://www.bombuj.si"),
+         options.mediaTypeHint === "movie" ? Promise.resolve([]) : fetchBombujSuggestionResults(query, "https://serialy.bombuj.si"),
        ])
      )
        .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
        .filter((item) => item.slug);
 
-     const directUnique = Array.from(new Map(directResults.map((item) => [`${item.mediaType}:${item.slug}`, item])).values()).map((item, index) => ({
-       ...item,
-       matchScore: scoreSearchCandidate(query, [
-         item.title,
-         item.slug.replace(/-/g, " "),
-         item.year,
-       ], index) + 200,
-     }));
+     const directUnique = Array.from(new Map(directResults.map((item) => [`${item.mediaType}:${item.slug}`, item])).values())
+       .map((item, index) => {
+         const baseScore = scoreSearchCandidate(query, [
+           item.title,
+           item.slug.replace(/-/g, " "),
+           item.year,
+         ], index);
+         return {
+           ...item,
+           matchScore: baseScore > 0 && providerCandidateMatches(query, [
+             item.title,
+             item.slug.replace(/-/g, " "),
+             item.year,
+           ], Boolean(options.strict))
+             ? baseScore + 200 + (options.scoreBoost ?? 0)
+             : 0,
+         };
+       })
+       .filter((item) => (item.matchScore ?? 0) > 0);
      if (directUnique.length > 0) {
-       return directUnique.sort(compareSearchScores).slice(0, 6);
+       return directUnique.sort(compareSearchScores).slice(0, limit);
      }
 
      const sitemapXml = await fetchText("https://www.bombuj.si/sitemap.xml", {
@@ -571,6 +728,8 @@ export async function searchBombuj(
      for (const match of urlMatches) {
         const url = match[1].trim();
         if (!/online-(film|serial)-/i.test(url)) continue;
+        if (options.mediaTypeHint === "movie" && !/online-film-/i.test(url)) continue;
+        if (options.mediaTypeHint === "serial" && !/online-serial-/i.test(url)) continue;
         const slug = url.split("/").pop() ?? "";
         if (!slug) continue;
         const normalizedSlug = normalizeSearch(slug.replace(/^online-(film|serial)-/i, ""));
@@ -582,7 +741,10 @@ export async function searchBombuj(
           extractYearFromSlug(slug),
         ]);
 
-        if (score > 0) {
+        if (score > 0 && providerCandidateMatches(query, [
+          slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
+          extractYearFromSlug(slug),
+        ], Boolean(options.strict))) {
           candidates.push({ url, slug, score });
         }
       }
@@ -617,7 +779,7 @@ export async function searchBombuj(
               title,
               item.slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
               extractYearFromSlug(item.slug),
-            ]),
+            ]) + (options.scoreBoost ?? 0),
           };
         } catch {
           return null;
@@ -641,13 +803,13 @@ export async function searchBombuj(
      );
 
      combined.sort(compareSearchScores);
-     if (combined.length >= 6) {
-        return combined.slice(0, 6);
+     if (combined.length >= limit) {
+        return combined.slice(0, limit);
      }
 
      const fallback = unique
         .filter((item) => !combined.some((r) => item.slug.endsWith(r.slug)))
-        .slice(0, 6 - combined.length)
+        .slice(0, limit - combined.length)
         .map((item) => ({
           title: item.slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
           slug: item.slug.replace(/^online-(film|serial)-/i, ""),
@@ -658,13 +820,88 @@ export async function searchBombuj(
           matchScore: scoreSearchCandidate(query, [
             item.slug.replace(/^online-(film|serial)-/i, "").replace(/-/g, " "),
             extractYearFromSlug(item.slug),
-          ]),
+          ]) + (options.scoreBoost ?? 0),
         }));
 
-     return [...combined, ...fallback].sort(compareSearchScores).slice(0, 6);
+     return [...combined, ...fallback].sort(compareSearchScores).slice(0, limit);
   } catch {
       return []; // Return empty array if CF blocks the search so the unified search doesn't crash
   }
+}
+
+function providerCandidateMatches(query: string, fields: Array<string | null | undefined>, strict: boolean) {
+  return strict
+    ? hasRequiredSearchTokenCoverage(query, fields)
+    : hasSignificantSearchTokenMatch(query, fields);
+}
+
+function scoreProviderMatchForCatalog(query: string, result: BombujSearchResult, catalog: ExternalTitleCandidate, index: number) {
+  const titleScore = scoreSearchCandidate(catalog.title, [
+    result.title,
+    result.slug.replace(/-/g, " "),
+    result.year,
+  ], index);
+  const originalScore = catalog.originalTitle
+    ? scoreSearchCandidate(catalog.originalTitle, [result.title, result.slug.replace(/-/g, " "), result.year], index)
+    : 0;
+  const queryScore = scoreSearchCandidate(query, [catalog.title, catalog.originalTitle, catalog.year], index);
+  const yearBonus = catalog.year && result.year === catalog.year ? 260 : 0;
+  const yearPenalty = catalog.year && result.year && result.year !== catalog.year ? -180 : 0;
+
+  return Math.max(titleScore, originalScore) + queryScore + yearBonus + yearPenalty + Math.round(catalog.matchScore / 2);
+}
+
+export async function searchBombuj(query: string): Promise<BombujSearchResult[]> {
+  const normalizedQuery = normalizeSearch(query);
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  // Bombuj's own suggestion endpoint is both faster and more authoritative than
+  // expanding the query through the external title catalog. Exact native hits
+  // must return immediately so unified search does not discard them on timeout.
+  const direct = await searchBombujProvider(query, { limit: 8 });
+  const hasExactDirectMatch = direct.some((result) =>
+    normalizeSearch(result.title) === normalizedQuery ||
+    normalizeSearch(result.slug.replace(/-/g, " ")) === normalizedQuery
+  );
+  if (hasExactDirectMatch) {
+    return keepHighConfidenceSearchResults(direct).slice(0, 8);
+  }
+
+  const catalog = await searchExternalTitles(query, 10);
+  const targeted = await mapWithConcurrency(catalog, 4, async (candidate) => {
+    const terms = [
+      candidate.title,
+      candidate.originalTitle && candidate.originalTitle !== candidate.title ? candidate.originalTitle : null,
+    ].filter(Boolean) as string[];
+    const termResults = await mapWithConcurrency(terms, 2, async (term) => (
+      searchBombujProvider(term, {
+        limit: 4,
+        mediaTypeHint: candidate.mediaType,
+        scoreBoost: Math.round(candidate.matchScore / 3),
+        strict: true,
+      })
+    ));
+
+    return termResults.flat().map((result, index) => ({
+      ...result,
+      posterUrl: result.posterUrl ?? candidate.posterUrl ?? null,
+      year: result.year ?? candidate.year ?? null,
+      matchScore: scoreProviderMatchForCatalog(query, result, candidate, index),
+    }));
+  });
+  const merged = [...targeted.flat(), ...direct];
+  const unique = new Map<string, BombujSearchResult>();
+
+  for (const result of merged.sort(compareSearchScores)) {
+    const key = `${result.mediaType ?? "unknown"}:${result.slug}`;
+    if (!unique.has(key)) {
+      unique.set(key, result);
+    }
+  }
+
+  return keepHighConfidenceSearchResults([...unique.values()]).slice(0, 8);
 }
 
 function normalizeSearch(value: string) {

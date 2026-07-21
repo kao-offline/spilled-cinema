@@ -22,11 +22,33 @@ const defaultPublishedAt = Date.UTC(2026, 4, 8);
 
 export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
   {
+    moduleId: "vidking",
+    providerId: "vidking",
+    displayName: "VidKing",
+    version: 1,
+    status: "active",
+    runtime: {
+      entry: "connectors/vidking.js",
+    },
+    capabilities: {
+      import: true,
+      player: true,
+      search: true,
+      download: false,
+      feeds: [],
+    },
+    publishedAt: defaultPublishedAt,
+    updatedAt: defaultPublishedAt,
+  },
+  {
     moduleId: "svetserialu",
     providerId: "svetserialu",
     displayName: "SvetSerialu",
     version: 1,
     status: "active",
+    runtime: {
+      entry: "connectors/svetserialu.js",
+    },
     capabilities: {
       import: true,
       player: true,
@@ -57,6 +79,9 @@ export const DEFAULT_PROVIDER_MODULE_RECORDS: ProviderModuleRecord[] = [
     displayName: "Bombuj",
     version: 1,
     status: "active",
+    runtime: {
+      entry: "connectors/bombuj.js",
+    },
     capabilities: {
       import: true,
       player: true,

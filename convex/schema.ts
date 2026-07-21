@@ -57,6 +57,16 @@ const providerCapabilitiesValidator = v.object({
   feeds: v.array(providerFeedValidator),
 });
 
+const providerRuntimeValidator = v.object({
+  entry: v.string(),
+});
+
+const integrationSecretStatusValidator = v.union(
+  v.literal("active"),
+  v.literal("disabled"),
+  v.literal("testing"),
+);
+
 export default defineSchema({
   nodes: defineTable({
     nodeId: v.string(),
@@ -103,10 +113,45 @@ export default defineSchema({
     displayName: v.string(),
     version: v.number(),
     status: v.union(v.literal("active"), v.literal("disabled")),
+    runtime: v.optional(providerRuntimeValidator),
     capabilities: providerCapabilitiesValidator,
     publishedAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_module_id", ["moduleId"])
     .index("by_status_and_provider_id", ["status", "providerId"]),
+  integrationPublicConfigs: defineTable({
+    integrationId: v.string(),
+    enabled: v.boolean(),
+    priority: v.number(),
+    defaultLocale: v.optional(v.string()),
+    sharedKeyAvailable: v.boolean(),
+    updatedAt: v.number(),
+  }).index("by_integration_id", ["integrationId"]),
+  integrationSecrets: defineTable({
+    integrationId: v.string(),
+    secretName: v.string(),
+    ciphertext: v.string(),
+    keyVersion: v.string(),
+    status: integrationSecretStatusValidator,
+    updatedAt: v.number(),
+    updatedBy: v.string(),
+  })
+    .index("by_integration_id", ["integrationId"])
+    .index("by_integration_id_and_secret_name", ["integrationId", "secretName"]),
+  integrationSecretAuditEvents: defineTable({
+    integrationId: v.string(),
+    action: v.string(),
+    actor: v.string(),
+    createdAt: v.number(),
+    success: v.boolean(),
+  })
+    .index("by_integration_id_and_created_at", ["integrationId", "createdAt"])
+    .index("by_actor_and_created_at", ["actor", "createdAt"]),
+  integrationUsageBuckets: defineTable({
+    integrationId: v.string(),
+    bucket: v.string(),
+    count: v.number(),
+    resetAt: v.number(),
+  }).index("by_integration_id_and_bucket", ["integrationId", "bucket"]),
 });

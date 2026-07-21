@@ -1,5 +1,6 @@
 import type { ArtworkSourceSettings } from "../../src/lib/types.js";
-import { searchArtworkAssets } from "../../src/server/artwork.js";
+import { searchArtworkAssets, type ArtworkApiKeys, type ArtworkExternalIds } from "../../src/server/artwork.js";
+import { resolveArtworkApiKeys } from "../../src/server/shared-artwork-api-keys.js";
 
 type RequestBody = {
   mediaType?: unknown;
@@ -9,8 +10,12 @@ type RequestBody = {
   description?: unknown;
   posterUrl?: unknown;
   backdropUrl?: unknown;
+  bannerUrl?: unknown;
+  bannerWithLogoUrl?: unknown;
   clearLogoUrl?: unknown;
+  externalIds?: unknown;
   artworkSources?: unknown;
+  artworkApiKeys?: unknown;
 };
 
 function readRequestBody(req: { body?: unknown }): RequestBody {
@@ -42,6 +47,7 @@ export default async function handler(
   const body = readRequestBody(req);
 
   try {
+    const apiKeys = await resolveArtworkApiKeys((body.artworkApiKeys as ArtworkApiKeys | undefined) ?? undefined);
     const assets = await searchArtworkAssets({
       mediaType: body.mediaType === "movie" ? "movie" : "tv",
       title: typeof body.title === "string" ? body.title : "",
@@ -50,8 +56,12 @@ export default async function handler(
       description: typeof body.description === "string" ? body.description : null,
       currentPosterUrl: typeof body.posterUrl === "string" ? body.posterUrl : null,
       currentBackdropUrl: typeof body.backdropUrl === "string" ? body.backdropUrl : null,
+      currentBannerUrl: typeof body.bannerUrl === "string" ? body.bannerUrl : null,
+      currentBannerWithLogoUrl: typeof body.bannerWithLogoUrl === "string" ? body.bannerWithLogoUrl : null,
       currentClearLogoUrl: typeof body.clearLogoUrl === "string" ? body.clearLogoUrl : null,
+      externalIds: typeof body.externalIds === "object" && body.externalIds ? body.externalIds as ArtworkExternalIds : undefined,
       sources: (body.artworkSources as ArtworkSourceSettings | undefined) ?? undefined,
+      apiKeys,
     });
 
     return res.status(200).json({ assets });

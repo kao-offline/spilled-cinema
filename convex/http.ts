@@ -158,6 +158,16 @@ async function parseJson(req: Request) {
   }
 }
 
+function isAuthorizedControlPlaneRequest(req: Request) {
+  const configuredSecret = process.env.SPILLED_CONTROL_PLANE_SECRET;
+  return !configuredSecret || req.headers.get("x-spilled-control-plane-secret") === configuredSecret;
+}
+
+function isAuthorizedConfiguredControlPlaneRequest(req: Request) {
+  const configuredSecret = process.env.SPILLED_CONTROL_PLANE_SECRET;
+  return Boolean(configuredSecret && req.headers.get("x-spilled-control-plane-secret") === configuredSecret);
+}
+
 http.route({
   path: "/server/status",
   method: "GET",
@@ -359,15 +369,56 @@ http.route({
   path: "/server/provider-modules/seed",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
-    const configuredSecret = process.env.SPILLED_CONTROL_PLANE_SECRET;
-    if (configuredSecret) {
-      const providedSecret = req.headers.get("x-spilled-control-plane-secret");
-      if (providedSecret !== configuredSecret) {
-        return json({ error: "Unauthorized." }, { status: 401 });
-      }
+    if (!isAuthorizedControlPlaneRequest(req)) {
+      return json({ error: "Unauthorized." }, { status: 401 });
     }
     const result = await ctx.runMutation(internal.providerModules.ensureDefaultProviderModules, {});
     return json({ ok: true, ...result });
+  }),
+});
+
+http.route({
+  path: "/server/integrations/shared-artwork-api-keys",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    if (!isAuthorizedConfiguredControlPlaneRequest(req)) {
+      return json({ error: "Unauthorized." }, { status: 401 });
+    }
+    const keys = await ctx.runAction(internal.integrations.internalResolveSharedArtworkApiKeys, {});
+    return json({
+      keys,
+      available: {
+        tmdb: Boolean(keys.tmdbApiKey),
+        fanart: Boolean(keys.fanartApiKey),
+        tvdb: Boolean(keys.tvdbApiKey),
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/server/integrations/shared-artwork-api-keys/seed",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    if (!isAuthorizedConfiguredControlPlaneRequest(req)) {
+      return json({ error: "Unauthorized." }, { status: 401 });
+    }
+    const body = (await parseJson(req)) as {
+      keys?: {
+        tmdbApiKey?: unknown;
+        fanartApiKey?: unknown;
+        tvdbApiKey?: unknown;
+      };
+    };
+    const result = await ctx.runAction(internal.integrations.internalSeedSharedArtworkApiKeys, {
+      keys: {
+        tmdbApiKey: typeof body.keys?.tmdbApiKey === "string" ? body.keys.tmdbApiKey : undefined,
+        fanartApiKey: typeof body.keys?.fanartApiKey === "string" ? body.keys.fanartApiKey : undefined,
+        tvdbApiKey: typeof body.keys?.tvdbApiKey === "string" ? body.keys.tvdbApiKey : undefined,
+      },
+      updatedBy: "control-plane",
+    });
+    return json(result);
   }),
 });
 

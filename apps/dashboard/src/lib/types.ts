@@ -10,6 +10,13 @@ export type EpisodePlayer = {
   sourcePageUrl: string;
   embedUrl: string;
   subtitlesUrl?: string;
+  streamUrl?: string;
+  streamType?: "hls" | "mp4" | "dash" | "embed" | "unknown";
+  streamRefererUrl?: string;
+  resolvedAt?: number;
+  resolutionHash?: string;
+  resolutionStatus?: "unresolved" | "resolving" | "resolved" | "failed";
+  resolutionError?: string;
 };
 
 export type LibraryEpisode = {
@@ -24,7 +31,29 @@ export type LibraryEpisode = {
   episodeUrl: string;
   players: EpisodePlayer[];
   selectedPlayerAlias: PlayerAlias;
+  durationSeconds?: number;
+  playbackPositionSeconds?: number;
+  playbackDurationSeconds?: number;
+  playbackUpdatedAt?: number;
   importedAt: number;
+};
+
+export type CastMember = {
+  name: string;
+  role?: string | null;
+  profileUrl?: string | null;
+};
+
+export type PersonCredit = {
+  id: string;
+  tmdbId: number;
+  title: string;
+  mediaType: ExploreMediaType;
+  role?: string | null;
+  year?: string | null;
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  description?: string | null;
 };
 
 export type ImportedShow = {
@@ -33,13 +62,66 @@ export type ImportedShow = {
   altTitle?: string | null;
   description?: string | null;
   years?: string | null;
+  mediaType?: ExploreMediaType;
+  externalIds?: {
+    imdb?: string;
+    tmdb?: string;
+    tvdb?: string;
+  };
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  bannerUrl?: string | null;
+  homepagePosterUrl?: string | null;
+  homepageBannerUrl?: string | null;
+  homepageArtworkVersion?: number | null;
   clearLogoUrl?: string | null;
+  artwork?: LibraryArtworkSet;
+  metadata?: LibraryTitleMetadata;
+  canonicalIdentity?: TitleIdentity;
+  providerMatches?: ProviderMatch[];
+  actors?: CastMember[];
+  directors?: CastMember[];
   availableSeasons: number[];
   importedAt: number;
   episodes: LibraryEpisode[];
   isFavorite?: boolean;
+};
+
+export type LibraryRating = {
+  source: "csfd" | "tmdb" | "imdb" | "user" | "provider";
+  value: number;
+  scale: 5 | 10 | 100;
+  label?: string | null;
+};
+
+export type LibraryArtworkSet = {
+  posterUrl?: string | null;
+  /** Clean, wide artwork used behind a separate HD logo. */
+  bannerUrl?: string | null;
+  /** Transparent title treatment layered over a clean banner. */
+  clearLogoUrl?: string | null;
+  /** Self-contained wide artwork with the title/logo baked in. */
+  bannerWithLogoUrl?: string | null;
+  /** @deprecated Legacy alias for a clean banner. */
+  backdropUrl?: string | null;
+};
+
+export type LibraryTitleMetadata = {
+  title: string;
+  originalTitle?: string | null;
+  description?: string | null;
+  year?: number | null;
+  years?: string | null;
+  mediaType?: ExploreMediaType;
+  runtimeMinutes?: number | null;
+  seasonCount: number;
+  episodeCount: number;
+  genres: string[];
+  ratings: LibraryRating[];
+  actors: CastMember[];
+  directors: CastMember[];
+  updatedAt: number;
+  enrichmentVersion?: number;
 };
 
 export type ArtworkSourceSettings = {
@@ -113,8 +195,10 @@ export type ExploreItem = {
   detailUrl: string;
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  bannerUrl?: string | null;
   year?: string | null;
   yearLabel?: string | null;
+  alternateTitles?: string[];
   description?: string | null;
   genres: string[];
   audioBuckets: ExploreAudioBucket[];
@@ -125,7 +209,17 @@ export type ExploreItem = {
   sectionKeys: ExploreSectionKey[];
   inVault: boolean;
   availableNow: boolean;
+  availability?: "available" | "checking" | "unavailable" | "unknown";
+  availabilityReason?: string | null;
   matchScore?: number;
+  searchSignals?: {
+    source?: "tmdb" | "imdb" | "tvmaze" | "wikidata" | "provider";
+    popularity?: number | null;
+    voteCount?: number | null;
+    voteAverage?: number | null;
+    releaseDate?: string | null;
+    originalLanguage?: string | null;
+  };
   discoveryScore?: number;
   recommendationReasons?: RecommendationReason[];
   importedAt?: number;
@@ -251,6 +345,9 @@ export type ProviderModuleManifest = {
   displayName: string;
   version: number;
   status: "active" | "disabled";
+  runtime?: {
+    entry: string;
+  };
   capabilities: {
     import: boolean;
     player: boolean;
@@ -260,6 +357,179 @@ export type ProviderModuleManifest = {
   };
   publishedAt: number;
   updatedAt: number;
+};
+
+export type IntegrationCapability =
+  | "search"
+  | "discovery"
+  | "metadata"
+  | "artwork"
+  | "import"
+  | "players"
+  | "subtitles"
+  | "downloads"
+  | "sharedAppKey"
+  | "userApiKey"
+  | "siteLogin"
+  | "noCredentials";
+
+export type IntegrationRuntimeManifest = {
+  apiVersion: 2;
+  entry: string;
+  integrity?: string;
+};
+
+export type IntegrationConfigSchemaField = {
+  key: string;
+  label: string;
+  type: "string" | "password" | "boolean" | "number" | "select";
+  required?: boolean;
+  description?: string;
+  options?: Array<{ label: string; value: string }>;
+};
+
+export type IntegrationConfigSchema = {
+  fields: IntegrationConfigSchemaField[];
+};
+
+export type CredentialRequirement = {
+  kind: "none" | "sharedAppKey" | "userApiKey" | "siteLogin";
+  label?: string;
+  secretName?: string;
+  optional?: boolean;
+};
+
+export type IntegrationManifestV2 = {
+  id: string;
+  displayName: string;
+  version: string;
+  homepage?: string;
+  status: "stable" | "experimental" | "disabled";
+  runtime?: IntegrationRuntimeManifest;
+  capabilities: IntegrationCapability[];
+  configSchema?: IntegrationConfigSchema;
+  credentialRequirements?: CredentialRequirement[];
+  networkPermissions?: string[];
+  repositoryUrl?: string;
+  manifestUrl?: string;
+};
+
+export type IntegrationRepositoryManifestV2 = {
+  schemaVersion: 2;
+  repositoryId: string;
+  repositoryName: string;
+  updatedAt: string;
+  integrations: IntegrationManifestV2[];
+};
+
+export type TitleIdentity = {
+  identityId: string;
+  mediaType: "movie" | "series";
+  canonicalTitle: string;
+  originalTitle?: string;
+  year?: number;
+  externalIds: {
+    imdb?: string;
+    tmdb?: string;
+    tvdb?: string;
+  };
+  normalizedKey: string;
+};
+
+export type ProviderCandidate = {
+  integrationId: string;
+  providerItemId: string;
+  mediaType: "movie" | "series";
+  title: string;
+  originalTitle?: string;
+  year?: number;
+  sourceUrl?: string;
+  posterUrl?: string | null;
+  externalIds?: {
+    imdb?: string;
+    tmdb?: string;
+    tvdb?: string;
+  };
+  confidenceHints?: {
+    normalizedTitle?: string;
+    durationMinutes?: number;
+    releaseDate?: string;
+  };
+};
+
+export type ProviderMatch = {
+  identityId: string;
+  integrationId: string;
+  providerItemId: string;
+  sourceUrl?: string;
+  confidenceScore: number;
+  resolvedCapabilities: IntegrationCapability[];
+};
+
+export type PlayerSource = {
+  integrationId: string;
+  label: string;
+  quality?: string;
+  language?: string;
+  url: string;
+  type: "embed" | "direct" | "hls" | "dash";
+};
+
+export type SubtitleSource = {
+  integrationId: string;
+  label: string;
+  language?: string;
+  url: string;
+};
+
+export type DownloadSource = {
+  integrationId: string;
+  label: string;
+  quality?: string;
+  url: string;
+};
+
+export type CanonicalMetadata = {
+  title: string;
+  originalTitle?: string;
+  description?: string | null;
+  year?: number;
+  years?: string | null;
+  genres?: string[];
+};
+
+export type ArtworkSet = {
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  bannerUrl?: string | null;
+  clearLogoUrl?: string | null;
+};
+
+export type ResolvedTitleStatus = "pending" | "partial" | "complete" | "failed";
+
+export type ResolvedTitle = {
+  identity: TitleIdentity;
+  metadata: CanonicalMetadata;
+  artwork: ArtworkSet;
+  providerMatches: ProviderMatch[];
+  players: PlayerSource[];
+  subtitles: SubtitleSource[];
+  downloads: DownloadSource[];
+  resolutionStatus: {
+    metadata: ResolvedTitleStatus;
+    players: ResolvedTitleStatus;
+  };
+};
+
+export type TitleSearchResult = ResolvedTitle & {
+  candidates: ProviderCandidate[];
+  importedShow?: ImportedShow;
+};
+
+export type TitleSearchResponse = {
+  generatedAt: number;
+  query: string;
+  results: TitleSearchResult[];
 };
 
 export type EnabledProviderFeed = {

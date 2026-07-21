@@ -2,6 +2,7 @@ import { Hero } from "./Hero";
 import { ShowCard } from "./ShowCard";
 import type { ImportedShow } from "../lib/types";
 import type { IntegrationId } from "../lib/integrations";
+import { balancedBackgroundImage } from "../lib/image-resolution";
 
 type RemoteSearchResult = {
   title: string;
@@ -73,7 +74,7 @@ export function HomeView({
         </div>
 
         <div
-          className="animate-fade-in grid grid-cols-[repeat(auto-fill,minmax(150px,182px))] justify-start gap-5 opacity-0 sm:grid-cols-[repeat(auto-fill,minmax(168px,190px))] xl:grid-cols-[repeat(auto-fill,minmax(182px,210px))]"
+          className="animate-fade-in grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-5 opacity-0 sm:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
           style={{ animationDelay: "0.2s" }}
         >
           {filteredShows.map((show) => (
@@ -130,7 +131,7 @@ export function HomeView({
                             >
                               <div
                                 className="relative aspect-[2/3] w-full bg-[#0f1016] bg-cover bg-center"
-                                style={result.posterUrl ? { backgroundImage: `url(${result.posterUrl})` } : undefined}
+                                style={balancedBackgroundImage(result.posterUrl, "poster-card")}
                               >
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
                                 <div className="absolute inset-x-2 top-2 flex items-center justify-end">

@@ -1,46 +1,49 @@
 import { requestRuntimeJson } from "./local-api";
 import {
-  DEFAULT_PROVIDER_MODULES,
-  hydrateProviderModules,
-  type ProviderModuleRecord,
-} from "./provider-modules-shared";
-import type { ExploreItem, ProviderFeedResponse, ProviderModuleManifest } from "./types";
+  fetchIntegrationRepositoryCatalogSettled,
+  fetchProviderRepositoryModulesSettled,
+  mergeProviderModules,
+} from "./provider-repositories";
+import { readProviderRepositoryUrls } from "./provider-feed-storage";
+import { readSvetSerialuCredentials } from "./integration-user-config";
+import type {
+  ExploreItem,
+  ImportedShow,
+  IntegrationManifestV2,
+  ProviderFeedResponse,
+  ProviderModuleManifest,
+  ResolvedTitle,
+  TitleSearchResponse,
+} from "./types";
 
-async function fetchControlPlaneProviderModules() {
-  const response = await fetch("/api/server/provider-modules", {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`Control plane provider modules failed (${response.status}).`);
+export async function fetchProviderModules(repositoryUrls = readProviderRepositoryUrls()) {
+  if (repositoryUrls.length === 0) {
+    return [];
   }
-
-  const payload = await response.json() as { modules?: ProviderModuleRecord[] };
-  if (!Array.isArray(payload.modules) || payload.modules.length === 0) {
-    return DEFAULT_PROVIDER_MODULES;
-  }
-
-  return hydrateProviderModules(payload.modules) as ProviderModuleManifest[];
+  const repositoryModules = await fetchProviderRepositoryModulesSettled(repositoryUrls);
+  return mergeProviderModules([repositoryModules]) as ProviderModuleManifest[];
 }
 
-export async function fetchProviderModules() {
-  try {
-    return await fetchControlPlaneProviderModules();
-  } catch {
-    const response = await requestRuntimeJson<{ modules?: ProviderModuleRecord[]; error?: string }>("/api/provider-modules", {
-      method: "GET",
-    });
-
-    if (!response.ok) {
-      throw new Error(response.data?.error ?? "Failed to load provider modules.");
-    }
-
-    if (!Array.isArray(response.data?.modules) || response.data.modules.length === 0) {
-      return DEFAULT_PROVIDER_MODULES;
-    }
-
-    return hydrateProviderModules(response.data.modules) as ProviderModuleManifest[];
+export async function fetchIntegrationCatalog(repositoryUrls = readProviderRepositoryUrls()) {
+  if (repositoryUrls.length === 0) {
+    return [];
   }
+  return await fetchIntegrationRepositoryCatalogSettled(repositoryUrls);
+}
+
+export async function refreshIntegrationCatalog(repositoryUrls = readProviderRepositoryUrls()) {
+  const response = await requestRuntimeJson<{ integrations?: IntegrationManifestV2[]; error?: string }>("/api/integrations/refresh", {
+    method: "POST",
+    body: {
+      repositoryUrls,
+    },
+  });
+
+  if (!response.ok || !Array.isArray(response.data?.integrations)) {
+    throw new Error(response.data?.error ?? "Failed to refresh integrations.");
+  }
+
+  return response.data.integrations;
 }
 
 export async function fetchProviderFeed(input: {
@@ -51,7 +54,11 @@ export async function fetchProviderFeed(input: {
 }) {
   const response = await requestRuntimeJson<ProviderFeedResponse & { error?: string }>("/api/provider-feed", {
     method: "POST",
-    body: input,
+    body: {
+      ...input,
+      repositoryUrls: readProviderRepositoryUrls(),
+      svetserialuCredentials: input.moduleId === "svetserialu" ? readSvetSerialuCredentials() : undefined,
+    },
   });
 
   if (!response.ok || !response.data?.items) {
@@ -64,7 +71,11 @@ export async function fetchProviderFeed(input: {
 export async function searchProviderModuleItems(input: { moduleId: string; query: string }) {
   const response = await requestRuntimeJson<{ results?: ExploreItem[]; error?: string }>("/api/provider-search", {
     method: "POST",
-    body: input,
+    body: {
+      ...input,
+      repositoryUrls: readProviderRepositoryUrls(),
+      svetserialuCredentials: input.moduleId === "svetserialu" ? readSvetSerialuCredentials() : undefined,
+    },
   });
 
   if (!response.ok || !Array.isArray(response.data?.results)) {
@@ -72,4 +83,52 @@ export async function searchProviderModuleItems(input: { moduleId: string; query
   }
 
   return response.data.results;
+}
+
+export async function searchTitleItems(input: { query: string; mediaType?: "movie" | "series" }) {
+  const response = await requestRuntimeJson<TitleSearchResponse & { error?: string }>("/api/title/search", {
+    method: "POST",
+    body: {
+      ...input,
+      repositoryUrls: readProviderRepositoryUrls(),
+    },
+  });
+
+  if (!response.ok || !Array.isArray(response.data?.results)) {
+    throw new Error(response.data?.error ?? "Failed to search titles.");
+  }
+
+  return response.data;
+}
+
+export async function resolveTitleItem(title: ResolvedTitle) {
+  const response = await requestRuntimeJson<{ title?: ResolvedTitle; error?: string }>("/api/title/resolve", {
+    method: "POST",
+    body: {
+      title,
+      repositoryUrls: readProviderRepositoryUrls(),
+    },
+  });
+
+  if (!response.ok || !response.data?.title) {
+    throw new Error(response.data?.error ?? "Failed to resolve title.");
+  }
+
+  return response.data.title;
+}
+
+export async function importTitleItem(title: ResolvedTitle) {
+  const response = await requestRuntimeJson<{ show?: ImportedShow; resolvedTitle?: ResolvedTitle; error?: string }>("/api/title/import", {
+    method: "POST",
+    body: {
+      title,
+      repositoryUrls: readProviderRepositoryUrls(),
+    },
+  });
+
+  if (!response.ok || !response.data?.show) {
+    throw new Error(response.data?.error ?? "Failed to import title.");
+  }
+
+  return response.data;
 }

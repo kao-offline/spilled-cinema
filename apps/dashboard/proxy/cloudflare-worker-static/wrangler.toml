@@ -1,0 +1,3 @@
+name = "spilled-import-fetch-proxy"
+main = "worker.js"
+compatibility_date = "2026-06-06"

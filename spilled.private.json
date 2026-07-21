@@ -1,0 +1,25 @@
+{
+  "privateNode": {
+    "enabled": true,
+    "nodeName": "kaoSERVER",
+    "setupSecretHash": "sha256:ceee85b156397cebec1f057e6a0421550e80f91a2bf89a44d0143f539d2f79f3",
+    "allowPublicFetch": true,
+    "allowedOrigins": [
+      "https://spilled.overload.studio"
+    ]
+  },
+  "publicCapabilities": {
+    "fetch": true,
+    "search": true,
+    "import": true,
+    "stream": true,
+    "download": true,
+    "spillshare": true,
+    "relay": true
+  },
+  "oidcProviders": [],
+  "storage": {
+    "root": "./spilled-data",
+    "defaultAccountQuotaBytes": 214748364800
+  }
+}

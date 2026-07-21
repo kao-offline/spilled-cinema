@@ -1,14 +1,19 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import type { SidebarFeedLink, ViewState } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
 import { ShowCard } from "./components/ShowCard";
+import { CinematicHomePage } from "./components/CinematicHomePage";
+import { MobileDock, type MobileDockItem } from "./components/MobileDock";
 import { ShowDetail } from "./components/ShowDetail";
 import { PlayerModal } from "./components/PlayerModal";
-import { ImportView } from "./components/ImportView";
+import { ImportView, type ImportPlatformFilter } from "./components/ImportView";
 import { SettingsView } from "./components/SettingsView";
+import { NodeSetupView } from "./components/NodeSetupView";
+import { NodeAdminView } from "./components/NodeAdminView";
 import { SupportView } from "./components/SupportView";
 import { DownloadedView } from "./components/DownloadedView";
 import { ExploreView } from "./components/ExploreView";
@@ -18,8 +23,9 @@ import { DownloadEngineModal } from "./components/DownloadEngineModal";
 import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
-import { importSvetSerialuShow, importBombujMovie, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
+import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
 import { preloadHeroImage } from "./lib/hero-assets";
+import { getShowArtwork, mergeTitleMetadata, needsTitleMetadataEnrichment } from "./lib/media-library";
 import {
   clearOfflineDownloads,
   dismissWelcome,
@@ -28,6 +34,9 @@ import {
   readLibraryState,
   selectEpisode,
   updateSelectedPlayer,
+  updateEpisodePlaybackProgress,
+  updateEpisodePlayerFailure,
+  updateEpisodePlayerResolution,
   upsertImportedShow,
   writeLibraryState,
   updateSettings,
@@ -40,7 +49,7 @@ import {
   exportLibraryState,
   importLibraryState,
 } from "./lib/storage";
-import type { DownloadEngine, ImportedShow, LibraryEpisode, LibraryState, PlayerAlias } from "./lib/types";
+import type { DownloadEngine, EpisodePlayer, ImportedShow, LibraryEpisode, LibraryState, PlayerAlias } from "./lib/types";
 import { clearOfflineCache } from "./lib/offline";
 import {
   clearEpisodeFolderRecords,
@@ -61,7 +70,7 @@ import {
   type VaultSnapshot,
   type VaultStatus,
 } from "./lib/library-folder";
-import { getLanguagePresentation } from "./lib/language";
+import { getCanonicalLanguageLabel, getCanonicalLanguageKey, getLanguagePresentation } from "./lib/language";
 import type { IntegrationId } from "./lib/integrations";
 import {
   readDownloadQueue,
@@ -75,15 +84,20 @@ import {
   cancelDownload,
   deleteDownload,
   getFullDownloadStatus,
+  getFullDownloadStatusFromNode,
+  resolveUniversalPlayback,
   startBrowserResolvedDownload,
   startFullDownload,
+  startFullDownloadOnNode,
   type FullDownloadJob,
+  type PlaybackResolveResult,
 } from "./lib/full-download-client";
 import { downloadResolvedVideoInBrowser } from "./lib/browser-ffmpeg";
 import { formatEpisodeTitle } from "./lib/episode-title";
 import { scoreSearchCandidate } from "./lib/search-ranking";
 import { buildRuntimeUrl } from "./lib/local-api";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
+import { balancedBackgroundImage } from "./lib/image-resolution";
 import { cacheExploreFeed, deriveTasteProfileFromLibraryState, readDiscoveryUiState, readTasteProfile, recordAudioPreferenceSignal, recordEpisodePlaySignal, recordFavoriteSignal, recordImportedShowSignal, recordShowOpenSignal, updateDiscoveryUiState, type DiscoveryUiState } from "./lib/discovery-storage";
 import { fetchExploreFeed } from "./lib/discovery-client";
 import type {
@@ -95,22 +109,42 @@ import type {
   ProviderFeedCatalogEntry,
   ProviderFeedResponse,
   ProviderModuleManifest,
+  IntegrationManifestV2,
   UserTasteProfile,
 } from "./lib/types";
 import {
   readCachedProviderModules,
   readEnabledProviderFeeds,
+  readProviderRepositoryUrls,
   sanitizeEnabledProviderFeeds,
   toggleEnabledProviderFeed,
   writeCachedProviderModules,
   writeEnabledProviderFeeds,
+  writeProviderRepositoryUrls,
 } from "./lib/provider-feed-storage";
-import { fetchProviderFeed, fetchProviderModules, searchProviderModuleItems } from "./lib/provider-modules-client";
+import { fetchIntegrationCatalog, fetchProviderFeed, fetchProviderModules, searchProviderModuleItems } from "./lib/provider-modules-client";
 import {
   createProviderFeedViewId,
   isProviderFeedViewId,
   parseProviderFeedViewId,
 } from "./lib/provider-modules-shared";
+import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/private-node-client";
+import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLibraryPath } from "./lib/library-routes";
+
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (callback: () => void) => { finished: Promise<void> };
+};
+
+function runRouteTransition(update: () => void) {
+  const transitionDocument = document as ViewTransitionDocument;
+  if (!transitionDocument.startViewTransition) {
+    update();
+    return;
+  }
+  transitionDocument.startViewTransition(() => {
+    flushSync(update);
+  });
+}
 
 function sanitizeEpisodeIdForLookup(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80).toLowerCase();
@@ -183,6 +217,44 @@ function getSeasonEpisodeKey(season: number, episode: number | null): string {
   return `s${season}e${episode}`;
 }
 
+function isRemoteResolvablePlayer(player: EpisodePlayer) {
+  const provider = player.provider?.toLowerCase();
+  return Boolean(player.embedUrl) && provider !== "local" && provider !== "spillsave";
+}
+
+function stablePlayerResolutionHash(player: EpisodePlayer) {
+  const fingerprint = [
+    player.provider,
+    player.label,
+    player.language,
+    player.sourcePageUrl,
+    player.embedUrl,
+    player.subtitlesUrl,
+  ].map((value) => String(value ?? "")).join("\u001f");
+
+  let hash = 2166136261;
+  for (let index = 0; index < fingerprint.length; index += 1) {
+    hash ^= fingerprint.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `v3:${(hash >>> 0).toString(36)}`;
+}
+
+function playerNeedsStandbyResolve(player: EpisodePlayer) {
+  if (!isRemoteResolvablePlayer(player)) return false;
+  const currentHash = stablePlayerResolutionHash(player);
+  if (player.resolutionHash !== currentHash) return true;
+  return player.resolutionStatus !== "resolved" && player.resolutionStatus !== "failed";
+}
+
+function buildSinglePlayerEpisode(episode: LibraryEpisode, player: EpisodePlayer): LibraryEpisode {
+  return {
+    ...episode,
+    players: [player],
+    selectedPlayerAlias: player.alias,
+  };
+}
+
 function getPlatformPriority(
   platform: IntegrationId,
   preferredSeriesSource: IntegrationId,
@@ -205,26 +277,68 @@ function getPlatformPriority(
 type RemoteSearchResult = {
   title: string;
   slug: string;
-  platform: "svetserialu" | "bombuj";
+  platform?: IntegrationId;
+  provider?: IntegrationId;
   posterUrl?: string | null;
   mediaType?: "movie" | "serial";
   year?: string | null;
 };
 
-function prioritizeImportSearchResults(results: RemoteSearchResult[]) {
-  return results.slice(0, 4);
+function remoteResultPlatform(result: RemoteSearchResult): IntegrationId | null {
+  return result.platform ?? result.provider ?? null;
 }
 
-function isExactImportSearchMatch(query: string, result: RemoteSearchResult) {
-  const normalizedQuery = normalizeLooseText(query);
-  if (!normalizedQuery) {
+function parseRemoteYear(value: string | number | null | undefined) {
+  const match = String(value ?? "").match(/\b(19|20)\d{2}\b/);
+  return match ? Number.parseInt(match[0], 10) : null;
+}
+
+function inferShowSearchMediaType(show: ImportedShow): "movie" | "serial" {
+  return show.mediaType === "movie" || show.episodes.length <= 1 ? "movie" : "serial";
+}
+
+function remoteResultMatchesShow(show: ImportedShow, result: RemoteSearchResult) {
+  const resultPlatform = remoteResultPlatform(result);
+  if (!resultPlatform) {
     return false;
   }
 
-  return (
-    normalizeLooseText(result.title) === normalizedQuery ||
-    normalizeLooseText(result.slug) === normalizedQuery
-  );
+  const showMediaType = inferShowSearchMediaType(show);
+  if (result.mediaType && result.mediaType !== showMediaType) {
+    return false;
+  }
+
+  if (resultPlatform === "vidking" && show.externalIds?.tmdb && result.slug.includes(show.externalIds.tmdb)) {
+    return true;
+  }
+
+  const showYear = parseRemoteYear(show.metadata?.year ?? show.years ?? show.canonicalIdentity?.year);
+  const resultYear = parseRemoteYear(result.year);
+  if (showYear !== null && resultYear !== null && Math.abs(showYear - resultYear) > 1) {
+    return false;
+  }
+
+  const titleKeys = new Set([
+    show.title,
+    show.altTitle,
+    show.metadata?.title,
+    show.metadata?.originalTitle,
+    show.canonicalIdentity?.canonicalTitle,
+    show.canonicalIdentity?.originalTitle,
+  ].map((value) => normalizeLooseText(String(value ?? ""))).filter(Boolean));
+
+  return titleKeys.has(normalizeLooseText(result.title));
+}
+
+function filterImportSearchResults(results: RemoteSearchResult[], platformFilter: ImportPlatformFilter) {
+  if (platformFilter === "all") {
+    return results;
+  }
+  return results.filter((result) => remoteResultPlatform(result) === platformFilter);
+}
+
+function prioritizeImportSearchResults(results: RemoteSearchResult[]) {
+  return results.slice(0, 6);
 }
 
 function resolveImportInput(rawValue: string): {
@@ -239,10 +353,35 @@ function resolveImportInput(rawValue: string): {
     return { mode: "search", query: "" };
   }
 
+  const vidkingSlug = value.match(/^(movie|tv)\/(\d+)(?:\/(\d+)\/(\d+))?$/i);
+  if (vidkingSlug) {
+    return {
+      mode: "direct",
+      platform: "vidking",
+      slug: value.toLowerCase(),
+      mediaType: vidkingSlug[1].toLowerCase() === "tv" ? "serial" : "movie",
+    };
+  }
+
   try {
     const parsed = new URL(value);
     const host = parsed.hostname.toLowerCase();
     const path = parsed.pathname.replace(/\/+$/, "");
+
+    if (host.includes("vidking.net")) {
+      const parts = path.split("/").filter(Boolean);
+      const embedIndex = parts.findIndex((part) => part === "embed");
+      const type = parts[embedIndex + 1];
+      const tmdbId = parts[embedIndex + 2];
+      if ((type === "movie" || type === "tv") && tmdbId) {
+        return {
+          mode: "direct",
+          platform: "vidking",
+          slug: parts.slice(embedIndex + 1, embedIndex + 5).join("/").trim().toLowerCase(),
+          mediaType: type === "tv" ? "serial" : "movie",
+        };
+      }
+    }
 
     if (host.includes("svetserialu")) {
       const serialMatch = path.match(/\/serial\/([^/?#]+)/i);
@@ -275,6 +414,18 @@ function resolveImportInput(rawValue: string): {
           platform: "bombuj",
           slug: serialMatch[1].trim().toLowerCase(),
           mediaType: "serial",
+        };
+      }
+    }
+
+    if (host.includes("cineby.at")) {
+      const parts = path.split("/").filter(Boolean);
+      if ((parts[0] === "movie" || parts[0] === "tv") && parts[1]) {
+        return {
+          mode: "direct",
+          platform: "cineby",
+          slug: parts.slice(0, 3).join("/").trim().toLowerCase(),
+          mediaType: parts[0] === "tv" ? "serial" : "movie",
         };
       }
     }
@@ -346,13 +497,29 @@ function mergeProviderFeedItems(left: ExploreItem[], right: ExploreItem[]) {
 }
 
 function App() {
+  const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
+  if (routePath === "/node/setup") {
+    return <NodeSetupView />;
+  }
+  if (routePath === "/node/admin") {
+    return <NodeAdminView />;
+  }
+  return <AppContent />;
+}
+
+function AppContent() {
   const HERO_ROTATION_MS = 7000;
+  const initialProviderRepositoryUrls = readProviderRepositoryUrls();
   const cachedProviderModules = readCachedProviderModules();
+  const initialProviderModules = initialProviderRepositoryUrls.length > 0 ? cachedProviderModules.modules : [];
   const [state, setState] = useState<LibraryState>(() => readLibraryState());
   const [importSlug, setImportSlug] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importPlatformFilter, setImportPlatformFilter] = useState<ImportPlatformFilter>("all");
   const [activeShowSlug, setActiveShowSlug] = useState<string | null>(null);
+  const [activeWatchEpisodeId, setActiveWatchEpisodeId] = useState<string | null>(null);
+  const [playerAutoPlayToken, setPlayerAutoPlayToken] = useState<number | null>(null);
   const [activeView, setActiveView] = useState<ViewState>("home");
   const [mediaFilter, setMediaFilter] = useState<"all" | "movies" | "series">("all");
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => !hasDismissedWelcome());
@@ -366,10 +533,12 @@ function App() {
     episode: LibraryEpisode;
     options: DownloadLanguageOption[];
   } | null>(null);
+  const playerReturnPathRef = useRef("/");
   const [downloadEngineChoice, setDownloadEngineChoice] = useState<{
     episode: LibraryEpisode;
     selectedAlias: PlayerAlias;
   } | null>(null);
+  const [privateNodeConnection, setPrivateNodeConnection] = useState(() => readPrivateNodeConnection());
   const [pendingDeleteEpisode, setPendingDeleteEpisode] = useState<LibraryEpisode | null>(null);
   const [pendingRemoveShow, setPendingRemoveShow] = useState<ImportedShow | null>(null);
   const activeDownloadPollsRef = useRef(new Set<string>());
@@ -386,7 +555,7 @@ function App() {
   const [remoteResults, setRemoteResults] = useState<{
     title: string;
     slug: string;
-    platform: "svetserialu" | "bombuj";
+    platform: IntegrationId;
     posterUrl?: string | null;
     mediaType?: "movie" | "serial";
     year?: string | null;
@@ -404,9 +573,11 @@ function App() {
   const [exploreCursor, setExploreCursor] = useState<string | null>(readDiscoveryUiState().cachedExplore?.payload.continueCursor ?? null);
   const [exploreLoading, setExploreLoading] = useState(false);
   const [exploreError, setExploreError] = useState<string | null>(null);
-  const [providerModules, setProviderModules] = useState<ProviderModuleManifest[]>(() => cachedProviderModules.modules);
+  const [providerModules, setProviderModules] = useState<ProviderModuleManifest[]>(() => initialProviderModules);
+  const [integrationCatalog, setIntegrationCatalog] = useState<IntegrationManifestV2[]>([]);
+  const [providerRepositoryUrls, setProviderRepositoryUrls] = useState<string[]>(() => initialProviderRepositoryUrls);
   const [enabledProviderFeeds, setEnabledProviderFeeds] = useState<EnabledProviderFeed[]>(() =>
-    sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), cachedProviderModules.modules),
+    sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), initialProviderModules),
   );
   const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>({});
   const stateRef = useRef(state);
@@ -414,11 +585,131 @@ function App() {
   const downloadQueueRef = useRef(downloadQueue);
   const lastKnownVaultSnapshotAtRef = useRef(0);
   const skipNextVaultWriteRef = useRef(false);
+  const standbyResolverActiveRef = useRef(false);
+  const playerPrefetchKeysRef = useRef(new Set<string>());
+  const companionSourceImportsRef = useRef(new Set<string>());
+  const metadataEnrichmentActiveRef = useRef(false);
+  const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
+  const activeWatchEpisodeIdRef = useRef(activeWatchEpisodeId);
   const deferredExploreQuery = useDeferredValue(discoveryState.exploreQuery);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    if (!vaultSnapshotReady || metadataEnrichmentActiveRef.current) return;
+    const candidates = state.shows.filter((show) =>
+      needsTitleMetadataEnrichment(show) && !metadataEnrichmentAttemptedRef.current.has(show.slug),
+    );
+    if (candidates.length === 0) return;
+
+    metadataEnrichmentActiveRef.current = true;
+    for (const show of candidates) metadataEnrichmentAttemptedRef.current.add(show.slug);
+
+    void (async () => {
+      const enriched = new Map<string, Awaited<ReturnType<typeof fetchTitleMetadataForShow>>>();
+      let cursor = 0;
+      const worker = async () => {
+        while (true) {
+          const show = candidates[cursor++];
+          if (!show) return;
+          try {
+            enriched.set(show.slug, await fetchTitleMetadataForShow(show));
+          } catch {
+            enriched.set(show.slug, null);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, worker));
+
+      const latestState = stateRef.current;
+      let changed = false;
+      const shows = latestState.shows.map((show) => {
+        const metadata = enriched.get(show.slug);
+        if (!metadata) return show;
+        const nextShow = mergeTitleMetadata(show, metadata);
+        changed ||= nextShow.metadata?.updatedAt !== show.metadata?.updatedAt;
+        return nextShow;
+      });
+      if (changed) {
+        const nextState = { ...latestState, shows };
+        writeLibraryState(nextState);
+        stateRef.current = nextState;
+        setState(nextState);
+      }
+    })().finally(() => {
+      metadataEnrichmentActiveRef.current = false;
+    });
+  }, [state.shows, vaultSnapshotReady]);
+
+  useEffect(() => {
+    activeWatchEpisodeIdRef.current = activeWatchEpisodeId;
+  }, [activeWatchEpisodeId]);
+
+  function prefetchEpisodePlayers(episodes: LibraryEpisode[], limit = 4) {
+    const candidates = episodes.flatMap((episode) => {
+      const selectedPlayer = episode.players.find((player) => player.alias === episode.selectedPlayerAlias);
+      const orderedPlayers = [
+        selectedPlayer,
+        ...episode.players.filter((player) => player.alias !== selectedPlayer?.alias),
+      ].filter((player): player is EpisodePlayer => Boolean(player));
+      return orderedPlayers
+        .filter((player) => playerNeedsStandbyResolve(player))
+        .map((player) => ({ episode, player }));
+    }).slice(0, limit);
+
+    for (const { episode, player } of candidates) {
+      const hash = stablePlayerResolutionHash(player);
+      const key = `${episode.id}:${player.provider}:${player.embedUrl}:${hash}`;
+      if (playerPrefetchKeysRef.current.has(key)) {
+        continue;
+      }
+      playerPrefetchKeysRef.current.add(key);
+
+      void (async () => {
+        try {
+          const latestEpisode = stateRef.current.shows
+            .flatMap((show) => show.episodes)
+            .find((entry) => entry.id === episode.id);
+          const latestPlayer = latestEpisode?.players.find((entry) =>
+            entry.alias === player.alias ||
+            (entry.provider === player.provider && entry.embedUrl === player.embedUrl)
+          );
+          if (!latestEpisode || !latestPlayer || !playerNeedsStandbyResolve(latestPlayer)) {
+            return;
+          }
+
+          const result = await resolveUniversalPlayback(buildSinglePlayerEpisode(latestEpisode, latestPlayer));
+          if (result.streamType === "embed") {
+            return;
+          }
+          const nextState = updateEpisodePlayerResolution(latestEpisode.id, latestPlayer, {
+            resolvedUrl: result.resolvedUrl,
+            refererUrl: result.refererUrl,
+            streamType: result.streamType,
+            subtitlesUrl: result.subtitlesUrl,
+            resolutionHash: stablePlayerResolutionHash(latestPlayer),
+          });
+          setState(nextState);
+        } catch (error) {
+          const latestEpisode = stateRef.current.shows
+            .flatMap((show) => show.episodes)
+            .find((entry) => entry.id === episode.id);
+          const latestPlayer = latestEpisode?.players.find((entry) =>
+            entry.alias === player.alias ||
+            (entry.provider === player.provider && entry.embedUrl === player.embedUrl)
+          );
+          if (!latestEpisode || !latestPlayer) {
+            return;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          const nextState = updateEpisodePlayerFailure(latestEpisode.id, latestPlayer, message, stablePlayerResolutionHash(latestPlayer));
+          setState(nextState);
+        }
+      })();
+    }
+  }
 
   useEffect(() => {
     setTasteProfile(deriveTasteProfileFromLibraryState(state));
@@ -433,16 +724,28 @@ function App() {
   }, [downloadQueue]);
 
   useEffect(() => {
+    const refreshPrivateNodeConnection = () => setPrivateNodeConnection(readPrivateNodeConnection());
+    window.addEventListener("storage", refreshPrivateNodeConnection);
+    window.addEventListener("focus", refreshPrivateNodeConnection);
+    return () => {
+      window.removeEventListener("storage", refreshPrivateNodeConnection);
+      window.removeEventListener("focus", refreshPrivateNodeConnection);
+    };
+  }, []);
+
+  useEffect(() => {
     let canceled = false;
 
     const loadProviderModuleCatalog = async () => {
       try {
-        const modules = await fetchProviderModules();
+        const modules = await fetchProviderModules(providerRepositoryUrls);
+        const integrations = await fetchIntegrationCatalog(providerRepositoryUrls);
         if (canceled) {
           return;
         }
 
         setProviderModules(modules);
+        setIntegrationCatalog(integrations);
         writeCachedProviderModules(modules);
         setEnabledProviderFeeds((current) => {
           const next = sanitizeEnabledProviderFeeds(current, modules);
@@ -459,7 +762,7 @@ function App() {
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [providerRepositoryUrls]);
 
   async function refreshVaultState() {
     const status = await getVaultStatus();
@@ -725,6 +1028,99 @@ function App() {
   }, [downloadQueue, downloadedEpisodeLanguageById, state, vaultSnapshotReady, vaultStatus.connected, vaultStatus.folderName]);
 
   useEffect(() => {
+    if (!vaultSnapshotReady) {
+      return;
+    }
+
+    let canceled = false;
+
+    const runStandbyResolvePass = async () => {
+      if (canceled || standbyResolverActiveRef.current || activeWatchEpisodeIdRef.current) {
+        return;
+      }
+
+      const candidates = stateRef.current.shows.flatMap((show) =>
+        show.episodes.flatMap((episode) =>
+          episode.players
+            .filter(playerNeedsStandbyResolve)
+            .map((player) => ({ episodeId: episode.id, playerAlias: player.alias, provider: player.provider, embedUrl: player.embedUrl })),
+        ),
+      ).slice(0, 20);
+
+      if (candidates.length === 0) {
+        return;
+      }
+
+      standbyResolverActiveRef.current = true;
+
+      let cursor = 0;
+      const concurrency = 1;
+
+      async function worker() {
+        while (!canceled && cursor < candidates.length) {
+          const candidate = candidates[cursor];
+          cursor += 1;
+
+          const latestEpisode = stateRef.current.shows
+            .flatMap((show) => show.episodes)
+            .find((entry) => entry.id === candidate.episodeId);
+          const latestPlayer = latestEpisode?.players.find((entry) =>
+            entry.alias === candidate.playerAlias ||
+            (entry.provider === candidate.provider && entry.embedUrl === candidate.embedUrl)
+          );
+          if (!latestEpisode || !latestPlayer || !playerNeedsStandbyResolve(latestPlayer)) {
+            continue;
+          }
+
+          const hash = stablePlayerResolutionHash(latestPlayer);
+
+          try {
+            const result = await resolveUniversalPlayback(buildSinglePlayerEpisode(latestEpisode, latestPlayer));
+            if (canceled || result.streamType === "embed") {
+              continue;
+            }
+            const nextState = updateEpisodePlayerResolution(latestEpisode.id, latestPlayer, {
+              resolvedUrl: result.resolvedUrl,
+              refererUrl: result.refererUrl,
+              streamType: result.streamType,
+              subtitlesUrl: result.subtitlesUrl,
+              resolutionHash: hash,
+            });
+            setState(nextState);
+          } catch (error) {
+            if (canceled) {
+              continue;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            const nextState = updateEpisodePlayerFailure(latestEpisode.id, latestPlayer, message, hash);
+            setState(nextState);
+          }
+        }
+      }
+
+      try {
+        await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, () => worker()));
+      } finally {
+        standbyResolverActiveRef.current = false;
+      }
+    };
+
+    const timeout = window.setTimeout(() => {
+      void runStandbyResolvePass();
+    }, 4000);
+    const interval = window.setInterval(() => {
+      void runStandbyResolvePass();
+    }, 90000);
+
+    return () => {
+      canceled = true;
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+      standbyResolverActiveRef.current = false;
+    };
+  }, [vaultSnapshotReady]);
+
+  useEffect(() => {
     setArtworkRefreshSummary(null);
   }, [state.settings.artworkSources.fanart, state.settings.artworkSources.tmdb, state.settings.artworkSources.tvdb]);
 
@@ -743,7 +1139,10 @@ function App() {
   }, [state.shows.length]);
 
   useEffect(() => {
-    const urls = state.shows.flatMap((show) => [show.backdropUrl, show.clearLogoUrl]).filter((value): value is string => Boolean(value));
+    const urls = state.shows.flatMap((show) => {
+      const artwork = getShowArtwork(show);
+      return [artwork.backdropUrl, artwork.bannerUrl, artwork.clearLogoUrl];
+    }).filter((value): value is string => Boolean(value));
     for (const url of urls) {
       void preloadHeroImage(url).catch(() => undefined);
     }
@@ -815,9 +1214,17 @@ function App() {
 
   useEffect(() => {
     const syncFromPath = () => {
-      const raw = window.location.pathname.replace(/^\/+/, "");
-      const slug = raw ? raw.split("/")[0] : null;
-      setActiveShowSlug(slug ? slug.toLowerCase() : null);
+      const parsed = parseLibraryPath(window.location.pathname);
+      if (parsed.kind === "watch") {
+        const episodeId = parsed.episodeId;
+        setActiveShowSlug(null);
+        setActiveWatchEpisodeId(episodeId);
+        setState(selectEpisode(episodeId));
+        return;
+      }
+
+      setActiveWatchEpisodeId(null);
+      setActiveShowSlug(parsed.kind === "show" ? parsed.slug : null);
     };
 
     syncFromPath();
@@ -903,7 +1310,12 @@ function App() {
       });
   }, [state.query, state.shows, activeView, mediaFilter]);
 
-  const selectedEpisode = useMemo(() => findSelectedEpisode(state), [state]);
+  const selectedEpisode = useMemo(() => {
+    if (activeWatchEpisodeId) {
+      return state.shows.flatMap((show) => show.episodes).find((episode) => episode.id === activeWatchEpisodeId) ?? null;
+    }
+    return findSelectedEpisode(state);
+  }, [activeWatchEpisodeId, state]);
   const totalOfflineBytes = useMemo(
     () => Object.values(state.offlineDownloads).reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0),
     [state.offlineDownloads],
@@ -943,17 +1355,22 @@ function App() {
   const remoteByPlatform = useMemo(() => {
     return remoteResults.reduce(
       (acc, item) => {
-        acc[item.platform].push(item);
+        const platform = remoteResultPlatform(item);
+        if (platform) {
+          acc[platform].push(item);
+        }
         return acc;
       },
       {
+        vidking: [] as typeof remoteResults,
         svetserialu: [] as typeof remoteResults,
         bombuj: [] as typeof remoteResults,
+        cineby: [] as typeof remoteResults,
       },
     );
   }, [remoteResults]);
   const remotePlatformOrder = useMemo(() => {
-    const baseOrder: IntegrationId[] = ["svetserialu", "bombuj"];
+    const baseOrder: IntegrationId[] = ["vidking", "svetserialu", "bombuj"];
     return [...baseOrder].sort((left, right) => {
       const rightScore = getPlatformPriority(
         right,
@@ -1053,8 +1470,16 @@ function App() {
 
   function findImportedShowForItem(item: Pick<ExploreItem, "provider" | "importSlug">) {
     return state.shows.find((show) => {
+      if (item.provider === "vidking") {
+        const match = item.importSlug.match(/^(movie|tv)\/(\d+)/i);
+        return match ? show.slug === `vidking-${match[1].toLowerCase()}-${match[2]}` : show.slug === item.importSlug;
+      }
       if (item.provider === "bombuj") {
         return show.slug === `bombuj-${item.importSlug}`;
+      }
+      if (item.provider === "cineby") {
+        const match = item.importSlug.match(/^(movie|tv)\/(\d+)/i);
+        return match ? show.slug === `cineby-${match[1].toLowerCase()}-${match[2]}` : show.slug === item.importSlug;
       }
       return show.slug === item.importSlug;
     }) ?? null;
@@ -1673,7 +2098,8 @@ function App() {
   }, []);
 
   function withLocalPlayer(episode: LibraryEpisode): LibraryEpisode {
-    if (!downloadedEpisodeIds.has(episode.id)) {
+    const shouldUseLocalPlayer = downloadedEpisodeIds.has(episode.id) || episode.selectedPlayerAlias === "local-file";
+    if (!shouldUseLocalPlayer) {
       return episode;
     }
 
@@ -1716,6 +2142,13 @@ function App() {
     return withLocalPlayer(selectedEpisode);
   }, [selectedEpisode, downloadedEpisodeIds, downloadedEpisodeFileById]);
 
+  const selectedEpisodeShow = useMemo(() => {
+    if (!selectedEpisode) {
+      return null;
+    }
+    return state.shows.find((show) => show.episodes.some((episode) => episode.id === selectedEpisode.id)) ?? null;
+  }, [selectedEpisode, state.shows]);
+
   const activeShowWithLocal = useMemo(() => {
     if (!activeShowSlug) {
       return null;
@@ -1731,10 +2164,63 @@ function App() {
     };
   }, [activeShowSlug, downloadedEpisodeIds, downloadedEpisodeFileById, state.shows]);
 
+  useEffect(() => {
+    if (!activeShowWithLocal || activeWatchEpisodeId) {
+      return;
+    }
+
+    const preferredEpisodes = [
+      activeShowWithLocal.episodes.find((episode) => episode.id === state.selectedEpisodeId),
+      ...activeShowWithLocal.episodes,
+    ].filter((episode): episode is LibraryEpisode => Boolean(episode));
+    const uniqueEpisodes = Array.from(new Map(preferredEpisodes.map((episode) => [episode.id, episode])).values());
+    const timeout = window.setTimeout(() => {
+      prefetchEpisodePlayers(uniqueEpisodes, 2);
+    }, 800);
+
+    return () => window.clearTimeout(timeout);
+  }, [activeShowWithLocal, activeWatchEpisodeId, state.selectedEpisodeId]);
+
+  async function discoverCompanionSources(show: ImportedShow) {
+    const showKey = show.externalIds?.tmdb ? `tmdb:${show.externalIds.tmdb}` : `slug:${show.slug}`;
+    const terms = Array.from(new Set([show.title, show.altTitle, show.metadata?.title, show.metadata?.originalTitle].filter((value): value is string => Boolean(value?.trim()))));
+    if (terms.length === 0) {
+      return;
+    }
+
+    const importMatches = async (term: string) => {
+      const results = await searchRemotes(term);
+      for (const result of results) {
+        const platform = remoteResultPlatform(result);
+        if (!platform || !remoteResultMatchesShow(show, result)) {
+          continue;
+        }
+        const sourceKey = `${showKey}:${platform}:${result.slug}`;
+        if (companionSourceImportsRef.current.has(sourceKey)) {
+          continue;
+        }
+        companionSourceImportsRef.current.add(sourceKey);
+        try {
+          const importedShow = await importProviderItem(platform, result.slug, result.mediaType, stateRef.current.settings.artworkSources);
+          const nextState = upsertImportedShow(importedShow);
+          setState(nextState);
+          setTasteProfile(recordImportedShowSignal(importedShow));
+        } catch (error) {
+          console.warn("Companion source import failed:", error instanceof Error ? error.message : String(error));
+        }
+      }
+    };
+
+    for (const term of terms.slice(0, 3)) {
+      await importMatches(term);
+    }
+  }
+
   async function handleImport(
     platform: IntegrationId,
     overrideSlug?: string,
     mediaType?: "movie" | "serial",
+    options: { discoverCompanions?: boolean } = {},
   ) {
     const slug = (overrideSlug ?? importSlug).trim().toLowerCase();
     if (!slug) {
@@ -1746,9 +2232,7 @@ function App() {
     setImportMessage(null);
 
     try {
-      const show = platform === "bombuj" 
-        ? await importBombujMovie(slug, mediaType)
-         : await importSvetSerialuShow(slug);
+      const show = await importProviderItem(platform, slug, mediaType, state.settings.artworkSources);
 
       const nextState = upsertImportedShow(show);
       setState(nextState);
@@ -1757,6 +2241,9 @@ function App() {
       setImportMessage(
         `${show.title}: imported ${show.episodes.length} episode entries across ${show.availableSeasons.length} season(s).`,
       );
+      if (options.discoverCompanions !== false) {
+        void discoverCompanionSources(show);
+      }
     } catch (error) {
       setImportMessage(error instanceof Error ? error.message : "Failed to import show.");
     } finally {
@@ -1785,18 +2272,16 @@ function App() {
 
     try {
       const results = await searchRemotes(query);
-      const prioritizedResults = prioritizeImportSearchResults(results);
-      const topResult = prioritizedResults[0];
+      const filteredResults = filterImportSearchResults(results, importPlatformFilter);
+      const prioritizedResults = prioritizeImportSearchResults(filteredResults);
 
-      if (topResult && isExactImportSearchMatch(query, topResult)) {
-        setImportSearchResults([]);
-        await handleImport(topResult.platform, topResult.slug, topResult.mediaType);
-        return;
-      }
-
-      setImportSearchResults(prioritizeImportSearchResults(results));
-      if (results.length === 0) {
-        setImportMessage("No external titles found.");
+      setImportSearchResults(prioritizedResults);
+      if (filteredResults.length === 0) {
+        setImportMessage(
+          results.length === 0
+            ? "No external titles found."
+            : "No matches found for the selected platform.",
+        );
       }
     } catch (error) {
       setImportSearchResults([]);
@@ -1807,9 +2292,14 @@ function App() {
   }
 
   async function handleImportSearchPick(result: RemoteSearchResult) {
+    const platform = remoteResultPlatform(result);
+    if (!platform) {
+      setImportMessage("This search result is missing a provider.");
+      return;
+    }
     setImportSlug(result.slug);
     setImportSearchResults([]);
-    await handleImport(result.platform, result.slug, result.mediaType);
+    await handleImport(platform, result.slug, result.mediaType);
   }
 
   function handleQueryChange(value: string) {
@@ -1950,6 +2440,23 @@ function App() {
     });
   }
 
+  async function handleChangeProviderRepositories(urls: string[]) {
+    writeProviderRepositoryUrls(urls);
+    setProviderRepositoryUrls(urls);
+    try {
+      const modules = await fetchProviderModules(urls);
+      setProviderModules(modules);
+      writeCachedProviderModules(modules);
+      setEnabledProviderFeeds((current) => {
+        const next = sanitizeEnabledProviderFeeds(current, modules);
+        writeEnabledProviderFeeds(next);
+        return next;
+      });
+    } catch {
+      // Keep the current catalog if a repository is temporarily unavailable.
+    }
+  }
+
   function handleOpenDiscoveryItem(item: ExploreItem) {
     const inVaultShow = findImportedShowForItem(item);
 
@@ -1971,34 +2478,59 @@ function App() {
   }
 
   function handleSelectEpisode(episode: LibraryEpisode) {
-    const nextState = selectEpisode(episode.id);
-    setState(nextState);
-    const show = state.shows.find((entry) => entry.episodes.some((entryEpisode) => entryEpisode.id === episode.id));
-    if (show) {
-      setTasteProfile(recordEpisodePlaySignal(show, episode));
-      const selectedPlayer = episode.players.find((player) => player.alias === episode.selectedPlayerAlias);
-      setTasteProfile(recordAudioPreferenceSignal(selectedPlayer?.language));
-    }
+    const watchPath = buildLibraryWatchPath(episode.id);
+    const applySelection = () => {
+      setPlayerAutoPlayToken(Date.now());
+      const nextState = selectEpisode(episode.id);
+      setState(nextState);
+      playerReturnPathRef.current = window.location.pathname === watchPath
+        ? buildLibraryShowPath(episode.showSlug)
+        : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      window.history.pushState({}, "", watchPath);
+      setActiveWatchEpisodeId(episode.id);
+      setActiveShowSlug(null);
+      const show = state.shows.find((entry) => entry.episodes.some((entryEpisode) => entryEpisode.id === episode.id));
+      if (show) {
+        setTasteProfile(recordEpisodePlaySignal(show, episode));
+        const selectedPlayer = episode.players.find((player) => player.alias === episode.selectedPlayerAlias);
+        setTasteProfile(recordAudioPreferenceSignal(selectedPlayer?.language));
+      }
 
-    if (downloadedEpisodeIds.has(episode.id)) {
-      const withLocalSelected = updateSelectedPlayer(episode.id, "local-file");
-      setState(withLocalSelected);
+      if (downloadedEpisodeIds.has(episode.id)) {
+        const withLocalSelected = updateSelectedPlayer(episode.id, "local-file");
+        setState(withLocalSelected);
+      }
+    };
+    if (window.location.pathname !== watchPath) {
+      runRouteTransition(applySelection);
+    } else {
+      applySelection();
     }
   }
 
   function handleOpenShow(slug: string) {
-    const nextPath = `/${slug}`;
-    window.history.pushState({}, "", nextPath);
-    setActiveShowSlug(slug);
-    const show = state.shows.find((entry) => entry.slug === slug);
-    if (show) {
-      setTasteProfile(recordShowOpenSignal(show));
+    const nextPath = buildLibraryShowPath(slug);
+    const openShow = () => {
+      window.history.pushState({}, "", nextPath);
+      setActiveWatchEpisodeId(null);
+      setActiveShowSlug(slug);
+      const show = state.shows.find((entry) => entry.slug === slug);
+      if (show) {
+        setTasteProfile(recordShowOpenSignal(show));
+      }
+    };
+    if (window.location.pathname !== nextPath) {
+      runRouteTransition(openShow);
+    } else {
+      openShow();
     }
   }
 
   function handleCloseShow() {
-    window.history.pushState({}, "", "/");
-    setActiveShowSlug(null);
+    runRouteTransition(() => {
+      window.history.pushState({}, "", buildLibraryPath());
+      setActiveShowSlug(null);
+    });
   }
 
   function handleRemoveShow(slug: string) {
@@ -2028,8 +2560,15 @@ function App() {
   }
 
   function handleClosePlayer() {
-    const nextState = selectEpisode(undefined);
-    setState(nextState);
+    runRouteTransition(() => {
+      const nextState = selectEpisode(undefined);
+      setState(nextState);
+      setActiveWatchEpisodeId(null);
+      const returnPath = playerReturnPathRef.current || buildLibraryPath();
+      window.history.pushState({}, "", returnPath.startsWith(`${buildLibraryPath()}/watch/`) ? buildLibraryPath() : returnPath);
+      const parsed = parseLibraryPath(window.location.pathname);
+      setActiveShowSlug(parsed.kind === "show" ? parsed.slug : null);
+    });
   }
 
   function handleChangeExploreVaultFilter(value: ExploreFilters["inVault"]) {
@@ -2153,15 +2692,15 @@ function App() {
 
   function buildDownloadLanguageOptions(episode: LibraryEpisode): DownloadLanguageOption[] {
     const remotePlayers = episode.players.filter((player) => player.provider !== "local");
-    const byLanguage = new Map<string, typeof remotePlayers>();
+    const byLanguage = new Map<string, { language: string; players: typeof remotePlayers }>();
     for (const player of remotePlayers) {
-      const key = (player.language || "Unspecified").trim();
-      const list = byLanguage.get(key) ?? [];
-      list.push(player);
-      byLanguage.set(key, list);
+      const key = getCanonicalLanguageKey(player.language);
+      const group = byLanguage.get(key) ?? { language: getCanonicalLanguageLabel(player.language), players: [] };
+      group.players.push(player);
+      byLanguage.set(key, group);
     }
 
-    return Array.from(byLanguage.entries()).map(([language, players]) => {
+    return Array.from(byLanguage.values()).map(({ language, players }) => {
       const presentation = getLanguagePresentation(language);
       const preferred =
         players.find((player) => player.alias === episode.selectedPlayerAlias) ?? players[0];
@@ -2258,6 +2797,96 @@ function App() {
     }
   }
 
+  async function startPrivateNodeDownloadForEpisode(episode: LibraryEpisode, selectedAlias?: PlayerAlias) {
+    const connection = readPrivateNodeConnection();
+    setPrivateNodeConnection(connection);
+    if (!connection.nodeUrl || !connection.token || !connection.profileId) {
+      window.alert("Sign in to a private node watcher profile before downloading to the private server.");
+      return;
+    }
+
+    const episodeForDownload =
+      selectedAlias && selectedAlias !== episode.selectedPlayerAlias
+        ? { ...episode, selectedPlayerAlias: selectedAlias }
+        : episode;
+
+    if (selectedAlias && selectedAlias !== episode.selectedPlayerAlias) {
+      const nextState = updateSelectedPlayer(episode.id, selectedAlias);
+      setState(nextState);
+    }
+
+    const existing = downloadQueue[episode.id];
+    if (existing && (existing.state === "queued" || existing.state === "resolving" || existing.state === "downloading")) {
+      return;
+    }
+
+    try {
+      const job = await startFullDownloadOnNode(connection.nodeUrl, episodeForDownload);
+      const selectedPlayer = episodeForDownload.players.find((player) => player.alias === episodeForDownload.selectedPlayerAlias) ?? episodeForDownload.players[0];
+      const queueItem: PersistentDownloadJob = {
+        episodeId: episode.id,
+        jobId: `private-node:${connection.nodeUrl}:${job.id}`,
+        showTitle: episode.showTitle,
+        episodeTitle: formatEpisodeTitle(episode),
+        seasonNumber: episode.seasonNumber,
+        episodeNumber: episode.episodeNumber,
+        episodeCode: episode.episodeCode,
+        selectedPlayerAlias: episodeForDownload.selectedPlayerAlias,
+        playerLabel: selectedPlayer?.label ?? "Unknown",
+        language: selectedPlayer?.language,
+        state: job.state,
+        percent: job.percent,
+        message: `Private node: ${job.message}`,
+        outputPath: job.outputPath,
+        error: job.error,
+        updatedAt: Date.now(),
+      };
+      setDownloadQueue((prev) => ({ ...prev, [episode.id]: queueItem }));
+      await pollPrivateNodeDownload(episodeForDownload, connection, job.id);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Failed to start private node download.");
+    }
+  }
+
+  async function pollPrivateNodeDownload(episode: LibraryEpisode, connection: ReturnType<typeof readPrivateNodeConnection>, jobId: string) {
+    for (;;) {
+      const job = await getFullDownloadStatusFromNode(connection.nodeUrl, jobId);
+      await persistDownloadJobUpdate(episode.id, {
+        jobId: `private-node:${connection.nodeUrl}:${job.id}`,
+        state: job.state,
+        percent: job.percent,
+        message: `Private node: ${job.message}`,
+        outputPath: job.outputPath,
+        error: job.error,
+      });
+
+      if (job.state === "completed") {
+        if (job.outputPath && connection.token && connection.profileId) {
+          const fileName = job.outputPath.split(/[\\/]/).pop() || `${episode.showTitle}.mp4`;
+          await registerPrivateNodeDownload({
+            nodeUrl: connection.nodeUrl,
+            token: connection.token,
+            profileId: connection.profileId,
+            downloadId: job.id,
+            episodeId: episode.id,
+            contentId: episode.showSlug,
+            fileName,
+            filePath: job.outputPath,
+            sizeBytes: 0,
+          }).catch(() => undefined);
+        }
+        setDownloadQueue((prev) => removeDownloadQueueItem(prev, episode.id));
+        return;
+      }
+
+      if (job.state === "failed") {
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+  }
+
   async function handleStartFullDownload(episode: LibraryEpisode) {
     const options = buildDownloadLanguageOptions(episode);
 
@@ -2285,13 +2914,18 @@ function App() {
     setDownloadEngineChoice({ episode, selectedAlias: alias });
   }
 
-  async function handleSelectDownloadEngine(engine: DownloadEngine) {
+  async function handleSelectDownloadEngine(engine: DownloadEngine, target: "local-vault" | "private-node" = "local-vault") {
     if (!downloadEngineChoice) {
       return;
     }
 
     const { episode, selectedAlias } = downloadEngineChoice;
     setDownloadEngineChoice(null);
+
+    if (target === "private-node") {
+      await startPrivateNodeDownloadForEpisode(episode, selectedAlias);
+      return;
+    }
 
     try {
       await requireWritableLibraryFolder();
@@ -2411,13 +3045,23 @@ function App() {
             const nextShow = {
               ...show,
               posterUrl: artwork.posterUrl ?? show.posterUrl ?? null,
-              backdropUrl: artwork.backdropUrl ?? show.backdropUrl ?? null,
+              backdropUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.backdropUrl ?? null,
+              bannerUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.bannerUrl ?? null,
               clearLogoUrl: artwork.clearLogoUrl ?? show.clearLogoUrl ?? null,
+              artwork: {
+                ...(show.artwork ?? {}),
+                posterUrl: artwork.posterUrl ?? show.artwork?.posterUrl ?? show.posterUrl ?? null,
+                backdropUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.artwork?.backdropUrl ?? show.backdropUrl ?? null,
+                bannerUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.artwork?.bannerUrl ?? show.bannerUrl ?? null,
+                clearLogoUrl: artwork.clearLogoUrl ?? show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null,
+                bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
+              },
             };
 
             if (
               nextShow.posterUrl !== show.posterUrl ||
               nextShow.backdropUrl !== show.backdropUrl ||
+              nextShow.bannerUrl !== show.bannerUrl ||
               nextShow.clearLogoUrl !== show.clearLogoUrl
             ) {
               updatedCount += 1;
@@ -2449,6 +3093,8 @@ function App() {
     artwork: {
       posterUrl?: string | null;
       backdropUrl?: string | null;
+      bannerUrl?: string | null;
+      bannerWithLogoUrl?: string | null;
       clearLogoUrl?: string | null;
     },
   ) {
@@ -2460,13 +3106,61 @@ function App() {
               ...show,
               posterUrl: artwork.posterUrl ?? null,
               backdropUrl: artwork.backdropUrl ?? null,
+              bannerUrl: artwork.bannerUrl ?? show.bannerUrl ?? null,
+              homepageBannerUrl: artwork.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
+              homepageArtworkVersion: artwork.bannerWithLogoUrl ? HOMEPAGE_ARTWORK_VERSION : show.homepageArtworkVersion,
               clearLogoUrl: artwork.clearLogoUrl ?? null,
+              artwork: {
+                ...(show.artwork ?? {}),
+                posterUrl: artwork.posterUrl ?? null,
+                backdropUrl: artwork.backdropUrl ?? null,
+                bannerUrl: artwork.bannerUrl ?? show.bannerUrl ?? null,
+                bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
+                clearLogoUrl: artwork.clearLogoUrl ?? null,
+              },
             }
           : show,
       ),
     };
     writeLibraryState(nextState);
     setState(nextState);
+  }
+
+  async function handleEnsureHomepageTextArtwork(slug: string) {
+    const show = state.shows.find((entry) => entry.slug === slug);
+    if (!show || show.homepageArtworkVersion === HOMEPAGE_ARTWORK_VERSION) {
+      return;
+    }
+
+    const artwork = await fetchHomepageTextArtworkForShow(show, state.settings.artworkSources).catch(() => null);
+
+    setState((current) => {
+      const currentShow = current.shows.find((entry) => entry.slug === slug);
+      if (!currentShow || currentShow.homepageArtworkVersion === HOMEPAGE_ARTWORK_VERSION) {
+        return current;
+      }
+
+      const nextState = {
+        ...current,
+        shows: current.shows.map((entry) =>
+          entry.slug === slug
+            ? {
+                ...entry,
+                homepagePosterUrl: artwork?.posterUrl ?? entry.homepagePosterUrl ?? null,
+                homepageBannerUrl: artwork?.bannerUrl ?? null,
+                artwork: {
+                  ...(entry.artwork ?? {}),
+                  posterUrl: artwork?.posterUrl ?? entry.artwork?.posterUrl ?? entry.posterUrl ?? null,
+                  bannerWithLogoUrl: artwork?.bannerUrl ?? entry.artwork?.bannerWithLogoUrl ?? null,
+                },
+                homepageArtworkVersion: artwork?.bannerUrl ? HOMEPAGE_ARTWORK_VERSION : null,
+              }
+            : entry,
+        ),
+      };
+      writeLibraryState(nextState);
+      return nextState;
+    });
   }
 
   function handleExportLibrary() {
@@ -2506,6 +3200,27 @@ function App() {
 
   function handleSelectPlayer(episodeId: string, alias: PlayerAlias) {
     const nextState = updateSelectedPlayer(episodeId, alias);
+    setState(nextState);
+  }
+
+  function handleResolvePlayer(episodeId: string, player: EpisodePlayer, playback: PlaybackResolveResult) {
+    const nextState = updateEpisodePlayerResolution(episodeId, player, {
+      resolvedUrl: playback.resolvedUrl,
+      refererUrl: playback.refererUrl,
+      streamType: playback.streamType,
+      subtitlesUrl: playback.subtitlesUrl,
+      resolutionHash: stablePlayerResolutionHash(player),
+    });
+    setState(nextState);
+  }
+
+  function handlePlayerResolveFailure(episodeId: string, player: EpisodePlayer, error: string) {
+    const nextState = updateEpisodePlayerFailure(episodeId, player, error, stablePlayerResolutionHash(player));
+    setState(nextState);
+  }
+
+  function handlePlaybackProgress(episodeId: string, progress: { currentTime: number; duration: number }) {
+    const nextState = updateEpisodePlaybackProgress(episodeId, progress);
     setState(nextState);
   }
 
@@ -2564,30 +3279,95 @@ function App() {
       ? `Search inside ${activeProviderFeedMeta.module.displayName}...`
       : "Search movies, series, shows...";
   const headerSearchWidth = isExploreSurface ? "compact" : "default";
-  const showHeader = true;
+  const isPlayerPage = Boolean(activeWatchEpisodeId && selectedEpisodeWithLocal);
+  const isImmersivePage = Boolean(isPlayerPage || activeShowSlug);
+  const showHeader = !isImmersivePage;
+  const currentRoute = parseLibraryPath(typeof window !== "undefined" ? window.location.pathname : "/");
+  const isHomeRoute = currentRoute.kind === "home";
+
+  if (isHomeRoute) {
+    return (
+      <CinematicHomePage
+        state={state}
+        featuredShow={featuredShow}
+        downloadedCountByShow={downloadedCountByShow}
+        tasteProfile={tasteProfile}
+        searchRemotes={searchRemotes}
+        onOpenLibrary={() => {
+          window.history.pushState({}, "", buildLibraryPath());
+          setActiveView("home");
+          setActiveShowSlug(null);
+          setActiveWatchEpisodeId(null);
+        }}
+        onOpenFavorites={() => {
+          setActiveView("favorites");
+          window.history.pushState({}, "", buildLibraryPath());
+          setActiveShowSlug(null);
+          setActiveWatchEpisodeId(null);
+        }}
+        onOpenExplore={() => {
+          setActiveView("explore");
+          window.history.pushState({}, "", buildLibraryPath());
+          setActiveShowSlug(null);
+          setActiveWatchEpisodeId(null);
+        }}
+        onOpenSettings={() => {
+          setActiveView("settings");
+          window.history.pushState({}, "", buildLibraryPath());
+          setActiveShowSlug(null);
+          setActiveWatchEpisodeId(null);
+        }}
+        onOpenShow={handleOpenShow}
+        onPlayShow={(show) => {
+          const episode = show.episodes[show.episodes.length - 1];
+          if (episode) {
+            handleSelectEpisode(episode);
+          } else {
+            handleOpenShow(show.slug);
+          }
+        }}
+        onImportRemote={async (platform, slug, mediaType) => {
+          await handleImport(platform, slug, mediaType);
+        }}
+        onEnsureHomepageTextArtwork={(slug) => {
+          void handleEnsureHomepageTextArtwork(slug);
+        }}
+      />
+    );
+  }
 
   return (
-    <div className="flex min-h-screen overflow-x-hidden bg-[#0c0d12] selection:bg-white/20 selection:text-white lg:h-screen lg:overflow-hidden">
-      <Sidebar
-        activeView={activeView}
-        onChangeView={(v) => {
-          setActiveView(v);
-          handleCloseShow();
-        }}
-        feedLinks={providerFeedLinks}
-        downloadJobs={downloadJobs}
-        onCancelDownload={(episodeId) => {
-          const show = state.shows.find((entry) => entry.episodes.some((episode) => episode.id === episodeId));
-          const episode = show?.episodes.find((entry) => entry.id === episodeId);
-          if (!episode) {
-            return;
-          }
-          void handleCancelFullDownload(episode);
-        }}
-        onDismissDownload={handleDismissDownloadJob}
-      />
+    <div className="flex min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white lg:h-screen lg:overflow-hidden">
+      {!isImmersivePage ? (
+        <Sidebar
+          activeView={activeView}
+          onChangeView={(v) => {
+            setActiveView(v);
+            handleCloseShow();
+          }}
+          feedLinks={providerFeedLinks}
+          downloadJobs={downloadJobs}
+          onCancelDownload={(episodeId) => {
+            const show = state.shows.find((entry) => entry.episodes.some((episode) => episode.id === episodeId));
+            const episode = show?.episodes.find((entry) => entry.id === episodeId);
+            if (!episode) {
+              return;
+            }
+            void handleCancelFullDownload(episode);
+          }}
+          onDismissDownload={handleDismissDownloadJob}
+          onOpenHomepage={() => {
+            window.history.pushState({}, "", "/");
+            setActiveView("home");
+            setActiveShowSlug(null);
+          }}
+        />
+      ) : null}
 
-      <div className="flex min-h-screen min-w-0 flex-1 flex-col pb-28 pl-0 lg:min-h-0 lg:pb-0 lg:pl-64">
+      <div className={clsx(
+        "flex min-h-screen min-w-0 flex-1 flex-col",
+        isImmersivePage ? "pb-0 pl-0 lg:min-h-0" : "pb-28 pl-0 lg:min-h-0 lg:pb-0 lg:pl-64",
+      )}>
         {showHeader ? (
           <Header
             query={headerQuery}
@@ -2612,14 +3392,31 @@ function App() {
           "min-w-0 flex-1 overflow-visible pb-8 lg:min-h-0 lg:overflow-y-auto lg:pb-10",
           showHeader ? "pt-4 lg:pt-6" : "pt-0",
         )}>
-          {activeShowSlug ? (
+          {isPlayerPage ? (
+            <PlayerModal
+              episode={selectedEpisodeWithLocal}
+              show={selectedEpisodeShow}
+              onClose={handleClosePlayer}
+              onSelectPlayer={handleSelectPlayer}
+              onSelectEpisode={handleSelectEpisode}
+              onResolvePlayer={handleResolvePlayer}
+              onResolvePlayerFailure={handlePlayerResolveFailure}
+              onPlaybackProgress={handlePlaybackProgress}
+              autoPlayToken={playerAutoPlayToken}
+            />
+          ) : activeShowSlug ? (
             <ShowDetail
               show={activeShowWithLocal}
+              relatedShows={state.shows.filter((entry) => entry.slug !== activeShowSlug).slice(0, 8)}
+              libraryState={state}
+              tasteProfile={tasteProfile}
               onBack={handleCloseShow}
+              onOpenRelatedShow={handleOpenShow}
               onSelectEpisode={handleSelectEpisode}
               onRemoveShow={() => handleRemoveShow(activeShowSlug)}
               onToggleFavorite={() => handleToggleFavorite(activeShowSlug)}
               onUpdateArtwork={(artwork) => handleUpdateShowArtwork(activeShowSlug, artwork)}
+              artworkSources={state.settings.artworkSources}
               fullDownloadJobsByEpisode={fullDownloadJobsByEpisode}
               onStartFullDownload={handleStartFullDownload}
               onCancelFullDownload={handleCancelFullDownload}
@@ -2636,11 +3433,21 @@ function App() {
                   setImportMessage(null);
                 }
               }}
+              platformFilter={importPlatformFilter}
+              onPlatformFilterChange={(value) => {
+                setImportPlatformFilter(value);
+                setImportSearchResults([]);
+                if (importMessage?.toLowerCase().includes("no matches") || importMessage?.toLowerCase().includes("no external")) {
+                  setImportMessage(null);
+                }
+              }}
               onSubmit={handleImportSubmit}
               importing={importing}
               importMessage={importMessage}
               isSearching={isSearchingImport}
-              searchResults={importSearchResults}
+              searchResults={importSearchResults
+                .map((result) => ({ ...result, platform: remoteResultPlatform(result) }))
+                .filter((result): result is RemoteSearchResult & { platform: IntegrationId } => Boolean(result.platform))}
               onPickResult={(result) => {
                 void handleImportSearchPick(result);
               }}
@@ -2676,7 +3483,12 @@ function App() {
                 void refreshVaultState();
               }}
               providerFeeds={providerFeedCatalog}
+              integrationCatalog={integrationCatalog}
+              providerRepositoryUrls={providerRepositoryUrls}
               onToggleProviderFeed={handleToggleProviderFeed}
+              onProviderRepositoriesChange={(urls) => {
+                void handleChangeProviderRepositories(urls);
+              }}
                onSettingsChange={(change) => {
                   const nextState = updateSettings(change);
                   setState(nextState);
@@ -2755,15 +3567,19 @@ function App() {
                 />
               )}
 
-              <div className="mt-4 px-4 pb-12 sm:px-6 lg:px-10">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <h2 className="text-xl font-semibold tracking-tight text-white capitalize">
+              <div className="mt-2 px-4 pb-16 sm:px-6 lg:px-10">
+                <div className="mb-7 flex flex-col gap-2 border-b border-white/[0.07] pb-5 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.3em] text-white/28">Your collection</div>
+                    <h2 className="text-2xl font-black tracking-[-0.035em] text-white capitalize sm:text-3xl">
                     {state.query ? "Local Vault" : activeView === "favorites" ? "Favorites" : "All Library"}
-                  </h2>
+                    </h2>
+                  </div>
+                  <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>
                 </div>
 
                 <div
-                  className="animate-fade-in grid grid-cols-[repeat(auto-fill,minmax(150px,182px))] justify-start gap-5 opacity-0 sm:grid-cols-[repeat(auto-fill,minmax(168px,190px))] xl:grid-cols-[repeat(auto-fill,minmax(182px,210px))]"
+                  className="animate-fade-in grid grid-cols-3 gap-2.5 opacity-0 sm:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] sm:gap-5 xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
                   style={{ animationDelay: "0.2s" }}
                 >
                   {filteredShows.map((show: ImportedShow) => (
@@ -2771,11 +3587,12 @@ function App() {
                   ))}
                   
                   {filteredShows.length === 0 && !state.query && (
-                    <div className="col-span-full py-24 flex flex-col items-center justify-center text-center">
+                    <div className="col-span-full flex flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.018] px-6 py-24 text-center">
                       <span className="text-white/20 mb-2">🎬</span>
-                      <span className="text-sm font-medium text-white/40">
+                      <span className="text-sm font-semibold text-white/42">
                          {activeView === "favorites" ? "You haven't liked any titles yet." : "No shows found."}
                       </span>
+                      <span className="mt-2 text-xs text-white/25">Your saved movies and series will appear here.</span>
                     </div>
                   )}
                 </div>
@@ -2799,7 +3616,8 @@ function App() {
                         {remotePlatformOrder.map((platformKey) => {
                           const list = remoteByPlatform[platformKey];
                           if (list.length === 0) return null;
-                          const sectionLabel = platformKey === "svetserialu" ? "Svetserialu" : "Bombuj";
+                          const sectionLabel =
+                            platformKey === "vidking" ? "VidKing" : platformKey === "svetserialu" ? "Svetserialu" : platformKey === "bombuj" ? "Bombuj" : "Unknown";
                           return (
                             <div key={platformKey} className="rounded-2xl border border-white/5 bg-white/5 p-4">
                               <div className="mb-3 flex items-center justify-between">
@@ -2810,17 +3628,19 @@ function App() {
                               </div>
                               <div className="flex gap-3 overflow-x-auto pb-2">
                                 {list.map((r) => {
-                                  const platformLabel = r.platform === "svetserialu" ? "Svetserialu." : "Bombuj";
+                                  const platform = remoteResultPlatform(r);
+                                  const platformLabel =
+                                    platform === "vidking" ? "VidKing" : platform === "svetserialu" ? "Svetserialu." : platform === "bombuj" ? "Bombuj" : "Unknown";
                                   const typeLabel =
                                     r.mediaType === "movie" ? "Movie" : r.mediaType === "serial" ? "Serial" : "Title";
                                   return (
                                     <div
-                                      key={`${r.platform}-${r.slug}`}
+                                      key={`${platform ?? "unknown"}-${r.slug}`}
                                       className="group relative w-40 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#14151b] shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
                                     >
                                       <div
                                         className="relative aspect-[2/3] w-full bg-[#0f1016] bg-cover bg-center"
-                                        style={r.posterUrl ? { backgroundImage: `url(${r.posterUrl})` } : undefined}
+                                        style={balancedBackgroundImage(r.posterUrl, "poster-card")}
                                       >
                                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
                                         <div className="absolute inset-x-2 top-2 flex items-center justify-end">
@@ -2839,10 +3659,11 @@ function App() {
                                             </span>
                                             <button
                                               onClick={() => {
+                                                if (!platform) return;
                                                 setImportSlug(r.slug);
-                                                handleImport(r.platform, r.slug, r.mediaType);
+                                                handleImport(platform, r.slug, r.mediaType);
                                               }}
-                                              disabled={importing}
+                                              disabled={importing || !platform}
                                               className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-black/90 shadow-sm transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 whitespace-nowrap"
                                               title="Import to Vault"
                                             >
@@ -2880,6 +3701,29 @@ function App() {
         </main>
       </div>
 
+      {activeShowSlug && !isPlayerPage ? (
+        <MobileDock
+          active={(activeView === "favorites" || activeView === "explore" ? activeView : "library") as MobileDockItem}
+          onHome={() => {
+            window.history.pushState({}, "", "/");
+            setActiveView("home");
+            setActiveShowSlug(null);
+          }}
+          onLibrary={() => {
+            setActiveView("home");
+            handleCloseShow();
+          }}
+          onFavorites={() => {
+            setActiveView("favorites");
+            handleCloseShow();
+          }}
+          onExplore={() => {
+            setActiveView("explore");
+            handleCloseShow();
+          }}
+        />
+      ) : null}
+
       <DownloadLanguageModal
         episode={downloadLanguageChoice?.episode ?? null}
         options={downloadLanguageChoice?.options ?? []}
@@ -2892,6 +3736,7 @@ function App() {
         preferredEngine={state.settings.downloadEngine}
         localBackendAvailable={downloadBackendAvailable !== false}
         vaultConnected={vaultStatus.connected}
+        privateNodeAvailable={Boolean(privateNodeConnection.nodeUrl && privateNodeConnection.token && privateNodeConnection.profileId)}
         onClose={() => setDownloadEngineChoice(null)}
         onSelect={handleSelectDownloadEngine}
       />
@@ -2907,12 +3752,6 @@ function App() {
         downloadedCount={pendingRemoveShow ? (downloadedCountByShow[pendingRemoveShow.slug] ?? 0) : 0}
         onCancel={() => setPendingRemoveShow(null)}
         onConfirm={handleConfirmRemoveShow}
-      />
-
-      <PlayerModal
-        episode={selectedEpisodeWithLocal}
-        onClose={handleClosePlayer}
-        onSelectPlayer={handleSelectPlayer}
       />
 
       {welcomeOpen ? (

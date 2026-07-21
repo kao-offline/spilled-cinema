@@ -3,12 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  Copy,
   DatabaseBackup,
   Download,
   FolderOpen,
   HardDrive,
-  Image as ImageIcon,
+  Image as ImageIcon, Key,
   LockKeyhole,
   Package,
   PlugZap,
@@ -21,18 +20,29 @@ import {
   X,
 } from "lucide-react";
 import { clsx } from "clsx";
-import type { DownloadEngine, LibrarySettings, ProviderFeedCatalogEntry } from "../lib/types";
+import type { DownloadEngine, IntegrationManifestV2, LibrarySettings, ProviderFeedCatalogEntry } from "../lib/types";
 import { INTEGRATIONS, type IntegrationId } from "../lib/integrations";
+import { DEFAULT_PROVIDER_REPOSITORY_URL } from "../lib/provider-feed-storage";
 import type { LocalRuntimeStatus } from "../lib/runtime-bridge";
 import { getConnectionModeLabel } from "../lib/runtime-bridge";
+import {
+  readIntegrationUserCredentials,
+  readIntegrationUserKeys,
+  writeIntegrationUserCredentials,
+  writeIntegrationUserKeys,
+} from "../lib/integration-user-config";
 import type { VaultDiagnostics, VaultStatus } from "../lib/library-folder";
 import { isFolderConnectionSupported } from "../lib/library-folder";
 import {
   clearPrivateNodeConnection,
+  completePrivateNodeSetup,
   enrollPrivateNodePasskey,
   fetchPrivateNodeAccounts,
+  findPrivateNodeCandidates,
+  fetchPrivateNodeSetupStatus,
   fetchPrivateNodeStatus,
   fetchPrivateNodeStorage,
+  loginWatcherNodePassword,
   loginPrivateNodePasskey,
   readPrivateNodeConnection,
   selectPrivateNodeProfile,
@@ -41,6 +51,7 @@ import {
   type PrivateNodeConnection,
   type PrivateNodeStorageSummary,
 } from "../lib/private-node-client";
+import { verifySvetSerialuLogin } from "../lib/svetserialu-auth-client";
 
 type SettingsViewProps = {
   settings: LibrarySettings;
@@ -63,7 +74,10 @@ type SettingsViewProps = {
   onResetVaultLink: () => Promise<void>;
   onRefreshVaultStatus: () => void | Promise<void>;
   providerFeeds: ProviderFeedCatalogEntry[];
+  integrationCatalog: IntegrationManifestV2[];
+  providerRepositoryUrls: string[];
   onToggleProviderFeed: (moduleId: string, feedId: string) => void;
+  onProviderRepositoriesChange: (urls: string[]) => void;
 };
 
 type SettingsTab = "general" | "storage" | "sources" | "private" | "advanced";
@@ -80,9 +94,9 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={clsx("rounded-2xl border border-white/8 bg-white/[0.035] p-5", className)}>
+    <section className={clsx("rounded-[1.4rem] border border-white/[0.08] bg-white/[0.025] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.16)] sm:p-6", className)}>
       <div className="mb-5 flex flex-col gap-1">
-        <h3 className="text-lg font-semibold tracking-tight text-white">{title}</h3>
+        <h3 className="text-base font-bold tracking-tight text-white">{title}</h3>
         {hint ? <p className="max-w-2xl text-sm leading-6 text-white/48">{hint}</p> : null}
       </div>
       {children}
@@ -100,12 +114,12 @@ function PreferenceRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 border-t border-white/8 py-4 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 border-t border-white/[0.07] py-4 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="text-sm font-semibold text-white">{title}</div>
         {hint ? <div className="mt-1 max-w-xl text-sm leading-6 text-white/45">{hint}</div> : null}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="min-w-0 max-w-full shrink-0">{children}</div>
     </div>
   );
 }
@@ -120,7 +134,7 @@ function StatusPill({
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.2em]",
+        "inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em]",
         tone === "good" && "bg-emerald-500/14 text-emerald-200",
         tone === "warn" && "bg-amber-500/14 text-amber-200",
         tone === "neutral" && "bg-white/8 text-white/58",
@@ -145,15 +159,16 @@ function Toggle({
       type="button"
       onClick={onToggle}
       className={clsx(
-        "relative inline-flex h-7 w-12 items-center rounded-full transition-colors",
-        checked ? "bg-orange-500" : "bg-white/12",
+        "relative inline-flex h-7 w-12 items-center rounded-full border transition",
+        checked ? "border-white bg-white" : "border-white/10 bg-white/[0.08]",
       )}
       aria-label={label}
       aria-pressed={checked}
     >
       <span
         className={clsx(
-          "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+          "inline-block h-5 w-5 rounded-full shadow-sm transition-transform",
+          checked ? "bg-black" : "bg-white/70",
           checked ? "translate-x-6" : "translate-x-1",
         )}
       />
@@ -171,14 +186,14 @@ function SegmentedChoice<T extends string | number>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="inline-flex rounded-full border border-white/8 bg-black/20 p-1">
+    <div className="inline-flex rounded-full border border-white/[0.09] bg-black/25 p-1">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
           className={clsx(
-            "rounded-full px-3 py-1.5 text-xs font-bold transition-colors",
+            "rounded-full px-3 py-1.5 text-xs font-bold transition",
             value === option.value ? "bg-white text-black" : "text-white/55 hover:text-white",
           )}
         >
@@ -206,8 +221,8 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       className={clsx(
-        "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-55",
-        variant === "primary" ? "bg-white text-black hover:bg-orange-200" : "bg-white/10 text-white hover:bg-white/18",
+        "inline-flex items-center justify-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-55",
+        variant === "primary" ? "border-white bg-white text-black hover:bg-white/88" : "border-white/[0.08] bg-white/[0.055] text-white/78 hover:border-white/15 hover:bg-white/[0.1] hover:text-white",
       )}
     >
       {children}
@@ -225,12 +240,12 @@ function SourceRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-[4.5rem] items-center justify-between gap-4 rounded-2xl border border-white/8 bg-black/18 px-4 py-3">
-      <div className="min-w-0">
+    <div className="flex min-h-[4rem] min-w-0 flex-col gap-3 rounded-2xl border border-white/[0.07] bg-black/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-white">{title}</div>
         {hint ? <div className="mt-1 line-clamp-2 text-sm leading-5 text-white/42">{hint}</div> : null}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="min-w-0 max-w-full shrink">{children}</div>
     </div>
   );
 }
@@ -256,12 +271,20 @@ export function SettingsView({
   onResetVaultLink,
   onRefreshVaultStatus,
   providerFeeds,
+  integrationCatalog,
+  providerRepositoryUrls,
   onToggleProviderFeed,
+  onProviderRepositoriesChange,
 }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [folderBusy, setFolderBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
-  const [feedModuleId, setFeedModuleId] = useState<IntegrationId | null>(null);
+  const [feedModuleId, setFeedModuleId] = useState<string | null>(null);
+  const [keyModuleId, setKeyModuleId] = useState<string | null>(null);
+  const [repositoryModalOpen, setRepositoryModalOpen] = useState(false);
+  const [artworkKeysModalOpen, setArtworkKeysModalOpen] = useState(false);
+  const [privateSetupModalOpen, setPrivateSetupModalOpen] = useState(false);
+  const [repositoryInput, setRepositoryInput] = useState("");
   const [privateNode, setPrivateNode] = useState<PrivateNodeConnection>(() => readPrivateNodeConnection());
   const [privateNodeInput, setPrivateNodeInput] = useState(() => readPrivateNodeConnection().nodeUrl);
   const [privateNodeStatus, setPrivateNodeStatus] = useState<Awaited<ReturnType<typeof fetchPrivateNodeStatus>> | null>(null);
@@ -269,6 +292,7 @@ export function SettingsView({
   const [privateAccountId, setPrivateAccountId] = useState("");
   const [privateSetupSecret, setPrivateSetupSecret] = useState("");
   const [privateStorage, setPrivateStorage] = useState<PrivateNodeStorageSummary | null>(null);
+  const [privateWatcherPassword, setPrivateWatcherPassword] = useState("");
   const [privateNodeBusy, setPrivateNodeBusy] = useState(false);
   const [privateNodeMessage, setPrivateNodeMessage] = useState<string | null>(null);
   const [showPrivateSetup, setShowPrivateSetup] = useState(false);
@@ -277,7 +301,13 @@ export function SettingsView({
   const [setupProfileNames, setSetupProfileNames] = useState("Owner");
   const [setupQuotaGb, setSetupQuotaGb] = useState(500);
   const [setupNodeName, setSetupNodeName] = useState("Home Server");
-  const [setupCommandSecret, setSetupCommandSecret] = useState("");
+  const [setupCode, setSetupCode] = useState("");
+  const [setupAllowPublicFetch, setSetupAllowPublicFetch] = useState(true);
+  const [integrationUserKeys, setIntegrationUserKeys] = useState(() => readIntegrationUserKeys());
+  const [integrationUserCredentials, setIntegrationUserCredentials] = useState(() => readIntegrationUserCredentials());
+  const [svetLoginModalOpen, setSvetLoginModalOpen] = useState(false);
+  const [svetLoginBusy, setSvetLoginBusy] = useState(false);
+  const [svetLoginMessage, setSvetLoginMessage] = useState<{ tone: "good" | "warn"; text: string } | null>(null);
 
   const tabs = [
     { id: "general" as const, label: "General", icon: SlidersHorizontal },
@@ -354,67 +384,20 @@ export function SettingsView({
     [],
   );
   const feedsByProvider = useMemo(() => {
-    const grouped = new Map<IntegrationId, ProviderFeedCatalogEntry[]>();
-    for (const integration of INTEGRATIONS) {
-      grouped.set(integration.id, []);
-    }
+    const grouped = new Map<string, ProviderFeedCatalogEntry[]>();
     for (const feed of providerFeeds) {
-      grouped.get(feed.providerId)?.push(feed);
+      grouped.set(feed.moduleId, [...(grouped.get(feed.moduleId) ?? []), feed]);
     }
     return grouped;
   }, [providerFeeds]);
-  const selectedFeedModule = feedModuleId ? INTEGRATIONS.find((integration) => integration.id === feedModuleId) : null;
-  const selectedModuleFeeds = feedModuleId ? (feedsByProvider.get(feedModuleId) ?? []) : [];
-  const privateSetupCommand = useMemo(() => {
-    const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`;
-    const normalizedAccountId = (setupAccountId.trim() || "acct_owner")
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "_")
-      .replace(/_+/g, "_");
-    const profileNames = setupProfileNames
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .slice(0, 8);
-    const profiles = (profileNames.length > 0 ? profileNames : [setupAccountName.trim() || "Owner"])
-      .map((displayName, index) => {
-        const profileId = `prof_${displayName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_") || index + 1}`;
-        return `@{ profileId = ${psQuote(profileId)}; displayName = ${psQuote(displayName)}; avatar = 'default' }`;
-      })
-      .join(", ");
-    const quotaBytes = Math.max(1, Math.round(setupQuotaGb)) * 1024 * 1024 * 1024;
-    const dashboardOrigin = typeof window === "undefined" ? "https://spilled.overload.studio" : window.location.origin;
-    return [
-      `$setupSecret = ${psQuote(setupCommandSecret || "change-this-setup-secret")}`,
-      "$setupHash = node -e \"const c=require('crypto'); process.stdout.write('sha256:'+c.createHash('sha256').update(process.argv[1]).digest('hex'))\" $setupSecret",
-      "$config = @{",
-      "  privateNode = @{",
-      "    enabled = $true",
-      `    nodeName = ${psQuote(setupNodeName.trim() || "Home Server")}`,
-      "    setupSecretHash = $setupHash",
-      "    allowPublicFetch = $true",
-      `    allowedOrigins = @(${psQuote(dashboardOrigin)})`,
-      "  }",
-      "  accounts = @(",
-      "    @{",
-      `      accountId = ${psQuote(normalizedAccountId)}`,
-      `      displayName = ${psQuote(setupAccountName.trim() || "Owner")}`,
-      "      role = 'admin'",
-      `      quotaBytes = ${quotaBytes}`,
-      `      profiles = @(${profiles})`,
-      "      allowedOidcSubjects = @()",
-      "    }",
-      "  )",
-      "  oidcProviders = @()",
-      "  storage = @{ root = './spilled-data'; defaultAccountQuotaBytes = 214748364800 }",
-      "}",
-      "$config | ConvertTo-Json -Depth 10 | Set-Content -Path .\\spilled.private.json -Encoding utf8",
-      "$env:SPILLED_NODE_MODE = 'full'",
-      "$env:SPILLED_PRIVATE_CONFIG = (Resolve-Path .\\spilled.private.json)",
-      "npm run start:server",
-    ].join("\n");
-  }, [setupAccountId, setupAccountName, setupCommandSecret, setupNodeName, setupProfileNames, setupQuotaGb]);
 
+  const installedIntegrations = useMemo(
+    () => integrationCatalog.filter((integration) => integration.status !== "disabled"),
+    [integrationCatalog],
+  );
+  const selectedFeedModule = feedModuleId ? installedIntegrations.find((module) => module.id === feedModuleId) : null;
+  const selectedKeyModule = keyModuleId ? installedIntegrations.find((module) => module.id === keyModuleId) : null;
+  const selectedModuleFeeds = feedModuleId ? (feedsByProvider.get(feedModuleId) ?? []) : [];
   useEffect(() => {
     if (privateAccounts.length > 0 && !privateAccountId) {
       setPrivateAccountId(privateAccounts[0].accountId);
@@ -426,10 +409,11 @@ export function SettingsView({
       return;
     }
     let canceled = false;
-    void Promise.all([
-      fetchPrivateNodeStatus(privateNode.nodeUrl),
-      fetchPrivateNodeAccounts(privateNode.nodeUrl),
-    ])
+    void fetchPrivateNodeStatus(privateNode.nodeUrl)
+      .then(async (status) => {
+        const accounts = status.auth?.setupRequired && !status.auth.privateAuthEnabled ? [] : await fetchPrivateNodeAccounts(privateNode.nodeUrl);
+        return [status, accounts] as const;
+      })
       .then(([status, accounts]) => {
         if (canceled) {
           return;
@@ -437,6 +421,9 @@ export function SettingsView({
         setPrivateNodeStatus(status);
         setPrivateAccounts(accounts);
         setPrivateAccountId((current) => current || privateNode.accountId || accounts[0]?.accountId || "");
+        if (status.auth?.setupRequired) {
+          setShowPrivateSetup(false);
+        }
       })
       .catch(() => {
         if (!canceled) {
@@ -500,6 +487,74 @@ export function SettingsView({
 
   function handleSetPreferredSource(key: "preferredSeriesSource" | "preferredMovieSource", value: IntegrationId) {
     onSettingsChange({ [key]: value } as Partial<LibrarySettings>);
+  }
+
+  function addProviderRepository() {
+    const value = repositoryInput.trim().replace(/\/+$/, "");
+    if (!value || providerRepositoryUrls.includes(value)) {
+      return;
+    }
+    onProviderRepositoriesChange([...providerRepositoryUrls, value]);
+    setRepositoryInput("");
+  }
+
+  function updateIntegrationUserKey(integrationId: string, value: string) {
+    setIntegrationUserKeys((current) => {
+      const next = {
+        ...current,
+        [integrationId]: value,
+      };
+      if (!value.trim()) {
+        delete next[integrationId];
+      }
+      writeIntegrationUserKeys(next);
+      return next;
+    });
+  }
+
+  function updateIntegrationUserCredential(integrationId: string, field: "username" | "password", value: string) {
+    setIntegrationUserCredentials((current) => {
+      const existing = current[integrationId] ?? {};
+      const nextCredentials = {
+        ...existing,
+        [field]: value,
+      };
+      const next = {
+        ...current,
+        [integrationId]: nextCredentials,
+      };
+      if (!nextCredentials.username?.trim() && !nextCredentials.password) {
+        delete next[integrationId];
+      }
+      writeIntegrationUserCredentials(next);
+      return next;
+    });
+  }
+
+  function clearIntegrationUserCredentials(integrationId: string) {
+    setIntegrationUserCredentials((current) => {
+      const next = { ...current };
+      delete next[integrationId];
+      writeIntegrationUserCredentials(next);
+      return next;
+    });
+  }
+
+  async function verifyStoredSvetLogin() {
+    const credentials = integrationUserCredentials.svetserialu ?? {};
+    setSvetLoginBusy(true);
+    setSvetLoginMessage(null);
+    try {
+      await verifySvetSerialuLogin(credentials);
+      setSvetLoginMessage({ tone: "good", text: "Login verified." });
+    } catch (error) {
+      setSvetLoginMessage({
+        tone: "warn",
+        text: error instanceof Error ? error.message : "SvetSerialu login failed.",
+      });
+    } finally {
+      setSvetLoginBusy(false);
+    }
   }
 
   function renderFolderActions() {
@@ -567,10 +622,11 @@ export function SettingsView({
     setPrivateNodeBusy(true);
     setPrivateNodeMessage(null);
     try {
-      const [status, accounts] = await Promise.all([
-        fetchPrivateNodeStatus(nodeUrl),
-        fetchPrivateNodeAccounts(nodeUrl),
-      ]);
+      const status = await fetchPrivateNodeStatus(nodeUrl);
+      let accounts: PrivateNodeAccount[] = [];
+      if (!status.auth?.setupRequired || status.auth.privateAuthEnabled) {
+        accounts = await fetchPrivateNodeAccounts(nodeUrl);
+      }
       setPrivateNodeStatus(status);
       setPrivateAccounts(accounts);
       setPrivateAccountId((current) => current || accounts[0]?.accountId || "");
@@ -579,9 +635,48 @@ export function SettingsView({
         nodeUrl,
       });
       setPrivateNode(next);
-      setPrivateNodeMessage(status.auth?.privateAuthEnabled ? "Private node connected." : "Node found, but private auth is not enabled.");
+      if (status.auth?.setupRequired) {
+        setShowPrivateSetup(false);
+        setPrivateNodeMessage("Node found. Open Setup to enter the terminal verification code.");
+      } else {
+        setPrivateNodeMessage(status.auth?.privateAuthEnabled ? "Private node connected." : "Node found, but private auth is not enabled.");
+      }
     } catch (error) {
       setPrivateNodeMessage(error instanceof Error ? error.message : "Failed to connect private node.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
+  async function handleFindPrivateNode() {
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      const candidates = await findPrivateNodeCandidates(localRuntimeStatus.origin ? [localRuntimeStatus.origin] : []);
+      const candidate = candidates.find((entry) => entry.status.auth?.setupRequired)
+        ?? candidates.find((entry) => entry.status.auth?.privateAuthEnabled)
+        ?? candidates[0];
+      if (!candidate) {
+        setPrivateNodeMessage("No private node found. Start the server with npm run start:server, then try again.");
+        return;
+      }
+      let accounts: PrivateNodeAccount[] = [];
+      if (!candidate.status.auth?.setupRequired || candidate.status.auth.privateAuthEnabled) {
+        accounts = await fetchPrivateNodeAccounts(candidate.nodeUrl);
+      }
+      setPrivateNodeInput(candidate.nodeUrl);
+      setPrivateNodeStatus(candidate.status);
+      setPrivateAccounts(accounts);
+      setPrivateAccountId((current) => current || accounts[0]?.accountId || "");
+      setPrivateNode(writePrivateNodeConnection({ ...privateNode, nodeUrl: candidate.nodeUrl }));
+      if (candidate.status.auth?.setupRequired) {
+        setShowPrivateSetup(false);
+        setPrivateNodeMessage("Found a server waiting for setup. Open Setup to enter the terminal verification code.");
+      } else {
+        setPrivateNodeMessage("Private node found.");
+      }
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Failed to find private node.");
     } finally {
       setPrivateNodeBusy(false);
     }
@@ -655,6 +750,31 @@ export function SettingsView({
     }
   }
 
+  async function handleLoginPrivatePassword() {
+    if (!privateNode.nodeUrl || !privateAccountId || !privateWatcherPassword) {
+      setPrivateNodeMessage("Connect a node, choose a watcher, and enter the password.");
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
+    try {
+      persistPrivateLogin({
+        nodeUrl: privateNode.nodeUrl,
+        ...(await loginWatcherNodePassword({
+          nodeUrl: privateNode.nodeUrl,
+          watcherId: privateAccountId,
+          password: privateWatcherPassword,
+          profileId: privateNode.profileId,
+        })),
+      });
+      setPrivateWatcherPassword("");
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Password login failed.");
+    } finally {
+      setPrivateNodeBusy(false);
+    }
+  }
+
   async function handleSelectPrivateProfile(profileId: string) {
     if (!privateNode.nodeUrl || !privateNode.token) {
       return;
@@ -688,22 +808,99 @@ export function SettingsView({
     setPrivateNodeMessage("Private node disconnected.");
   }
 
-  async function handleCopyPrivateSetupCommand() {
+  async function handleCompletePrivateSetup() {
+    const nodeUrl = privateNode.nodeUrl || privateNodeInput.trim().replace(/\/+$/, "");
+    if (!nodeUrl || !setupCode.trim()) {
+      setPrivateNodeMessage("Connect the node and enter the setup code from the terminal.");
+      return;
+    }
+    if (privateNodeStatus?.auth?.privateAuthEnabled) {
+      if (!privateAccountId) {
+        setPrivateNodeMessage("Choose the account to enroll.");
+        return;
+      }
+      setPrivateNodeBusy(true);
+      setPrivateNodeMessage(null);
+      try {
+        persistPrivateLogin({
+          nodeUrl,
+          ...(await enrollPrivateNodePasskey({
+            nodeUrl,
+            accountId: privateAccountId,
+            setupSecret: setupCode,
+          })),
+        });
+        const status = await fetchPrivateNodeStatus(nodeUrl);
+        setPrivateNodeStatus(status);
+        setShowPrivateSetup(false);
+      } catch (error) {
+        setPrivateNodeMessage(error instanceof Error ? error.message : "Passkey enrollment failed.");
+      } finally {
+        setPrivateNodeBusy(false);
+      }
+      return;
+    }
+    setPrivateNodeBusy(true);
+    setPrivateNodeMessage(null);
     try {
-      await navigator.clipboard.writeText(privateSetupCommand);
-      setPrivateNodeMessage("Setup command copied.");
-    } catch {
-      setPrivateNodeMessage("Copy failed. Select the command and copy it manually.");
+      await fetchPrivateNodeSetupStatus(nodeUrl);
+      const profileNames = setupProfileNames
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      const profiles = (profileNames.length > 0 ? profileNames : [setupAccountName.trim() || "Owner"]).map((displayName, index) => ({
+        profileId: `prof_${displayName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_") || index + 1}`,
+        displayName,
+        avatar: "default",
+      }));
+      const setup = await completePrivateNodeSetup({
+        nodeUrl,
+        setupCode,
+        nodeName: setupNodeName,
+        admin: {
+          adminId: "admin",
+          displayName: "Admin",
+          password: setupCode.padEnd(10, "0"),
+        },
+        publicCapabilities: {
+          fetch: setupAllowPublicFetch,
+          search: setupAllowPublicFetch,
+          import: setupAllowPublicFetch,
+          stream: setupAllowPublicFetch,
+          download: setupAllowPublicFetch,
+          spillshare: false,
+          relay: false,
+        },
+        initialWatchers: [{
+          watcherId: setupAccountId.replace(/^acct_/, "watcher_"),
+          displayName: setupAccountName,
+          quotaBytes: Math.max(1, Math.round(setupQuotaGb)) * 1024 * 1024 * 1024,
+          profiles,
+        }],
+      });
+      const status = await fetchPrivateNodeStatus(nodeUrl);
+      setPrivateNodeStatus(status);
+      setPrivateAccounts(setup.accounts);
+      setPrivateAccountId(setup.accounts[0]?.accountId || "");
+      setPrivateSetupSecret("");
+      setPrivateNode(writePrivateNodeConnection({ ...privateNode, nodeUrl }));
+      setPrivateNodeMessage("Private node configured. Enroll your passkey with the setup code now.");
+    } catch (error) {
+      setPrivateNodeMessage(error instanceof Error ? error.message : "Private node setup failed.");
+    } finally {
+      setPrivateNodeBusy(false);
     }
   }
 
   return (
-    <div className="relative z-10 animate-fade-in px-4 py-6 pb-20 lg:px-6">
+    <div className="relative z-10 animate-fade-in px-4 pb-28 pt-4 sm:px-6 sm:py-7 sm:pb-24 lg:px-10 lg:py-10">
       <div className="mx-auto max-w-6xl">
-        <header className="mb-6 flex flex-col gap-4 border-b border-white/8 pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <header className="mb-5 flex flex-col gap-4 border-b border-white/[0.07] pb-5 sm:mb-7 sm:gap-5 sm:pb-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="text-[10px] font-black uppercase tracking-[0.28em] text-white/34">Preferences</div>
-            <h2 className="mt-2 text-3xl font-bold tracking-tight text-white">Settings</h2>
+            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30">Spilled preferences</div>
+            <h2 className="mt-1 text-2xl font-black tracking-[-0.035em] text-white sm:mt-2 sm:text-4xl">Settings</h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-white/42">Playback, storage, sources, and private infrastructure in one place.</p>
           </div>
           <nav className="flex gap-2 overflow-x-auto pb-1">
             {tabs.map((tab) => (
@@ -712,8 +909,8 @@ export function SettingsView({
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
                 className={clsx(
-                  "inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full px-4 text-sm font-semibold transition-colors",
-                  activeTab === tab.id ? "bg-white text-black" : "bg-white/8 text-white/58 hover:bg-white/12 hover:text-white",
+                  "inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition",
+                  activeTab === tab.id ? "border-white bg-white text-black" : "border-white/[0.07] bg-white/[0.035] text-white/52 hover:border-white/15 hover:bg-white/[0.07] hover:text-white",
                 )}
               >
                 <tab.icon className="h-4 w-4" />
@@ -863,74 +1060,131 @@ export function SettingsView({
         ) : null}
 
         {activeTab === "sources" ? (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-            <Panel title="Artwork" hint="Turn artwork providers on or off, then refresh existing titles when needed.">
-              {[
-                { key: "tmdb" as const, label: "TMDB", hint: "Posters and backdrops." },
-                { key: "fanart" as const, label: "Fanart.tv", hint: "Logos and alternate art." },
-                { key: "tvdb" as const, label: "TVDB", hint: "Series artwork fallback." },
-              ].map((source) => {
-                const enabled = settings.artworkSources[source.key];
-                return (
-                  <SourceRow key={source.key} title={source.label} hint={source.hint}>
-                    <Toggle
-                      label={`Toggle ${source.label}`}
-                      checked={enabled}
-                      onToggle={() =>
-                        onSettingsChange({
-                          artworkSources: {
-                            ...settings.artworkSources,
-                            [source.key]: !enabled,
-                          },
-                        })
-                      }
-                    />
-                  </SourceRow>
-                );
-              })}
-              <div className="mt-4 rounded-2xl border border-white/8 bg-black/18 px-4 py-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-white">Refresh existing artwork</div>
-                    <div className="mt-1 text-sm leading-5 text-white/42">
-                      {artworkRefreshSummary ?? "Update covers, backdrops, and logos for imported titles."}
-                    </div>
-                  </div>
-                <ActionButton
-                  variant="primary"
-                  disabled={artworkRefreshBusy}
-                  onClick={() => void onRefreshArtwork()}
-                >
-                  <ImageIcon className="h-4 w-4" />
-                  {artworkRefreshBusy ? "Refreshing" : "Refresh"}
-                </ActionButton>
+          <div className="grid gap-3">
+            <Panel title="Integrations" hint="Repository-loaded integrations. Artwork controls use shared keys unless a local key is configured.">
+              {installedIntegrations.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-black/16 px-4 py-5 text-sm leading-6 text-white/45">
+                  No integrations are installed yet. Refresh the default connector repository or add another repository below.
                 </div>
-              </div>
-            </Panel>
-
-            <Panel title="Import modules" hint="Installed modules the app can use for search, import, playback, and downloads.">
-              <div className="grid gap-3">
-                {INTEGRATIONS.map((integration) => {
+              ) : (
+                <div className="grid gap-3">
+                  {installedIntegrations.map((integration) => {
                   const feeds = feedsByProvider.get(integration.id) ?? [];
                   const enabledCount = feeds.filter((feed) => feed.enabled).length;
+                  const visibleCapabilities = integration.capabilities.filter((capability) =>
+                    ["search", "discovery", "metadata", "artwork", "import", "players", "subtitles", "downloads"].includes(capability),
+                  );
+                  const isArtworkIntegration = integration.id === "tmdb" || integration.id === "fanart" || integration.id === "tvdb";
+                  const artworkKey = isArtworkIntegration ? integration.id as "tmdb" | "fanart" | "tvdb" : null;
+                  const hasUserKey = integration.credentialRequirements?.some((requirement) => requirement.kind === "userApiKey") ?? false;
+                  const hasSiteLogin = integration.credentialRequirements?.some((requirement) => requirement.kind === "siteLogin") ?? false;
+                  const siteLogin = integrationUserCredentials[integration.id];
                   return (
-                    <SourceRow key={integration.id} title={integration.name} hint={integration.copy.notes}>
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <StatusPill tone="good">{integration.copy.shortLabel}</StatusPill>
-                        {feeds.length > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => setFeedModuleId(integration.id)}
-                            className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-white/18"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            Feeds {enabledCount > 0 ? `${enabledCount}/${feeds.length}` : feeds.length}
-                          </button>
-                        ) : null}
+                    <SourceRow
+                      key={integration.id}
+                      title={integration.displayName}
+                      hint={`${integration.id} · v${integration.version}`}
+                    >
+                      <div className="flex max-w-full flex-wrap justify-start gap-1.5 sm:justify-end">
+                          <StatusPill tone={integration.status === "stable" ? "good" : undefined}>{integration.status}</StatusPill>
+                          {visibleCapabilities.slice(0, 4).map((capability) => (
+                            <StatusPill key={capability}>{capability}</StatusPill>
+                          ))}
+                          {visibleCapabilities.length > 4 ? <StatusPill>+{visibleCapabilities.length - 4}</StatusPill> : null}
+                          {integration.credentialRequirements?.some((requirement) => requirement.kind === "sharedAppKey") ? (
+                            <StatusPill tone="good">Shared</StatusPill>
+                          ) : null}
+                          {hasUserKey || hasSiteLogin ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (hasSiteLogin) {
+                                  setSvetLoginMessage(null);
+                                  setSvetLoginModalOpen(true);
+                                } else {
+                                  setKeyModuleId(integration.id);
+                                }
+                              }}
+                              className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.08em] text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                            >
+                              {hasSiteLogin
+                                ? (siteLogin?.username?.trim() && siteLogin.password ? "Login set" : "Login")
+                                : (integrationUserKeys[integration.id]?.trim() ? "Key set" : "Key")}
+                            </button>
+                          ) : null}
+                          {feeds.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setFeedModuleId(integration.id)}
+                              className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-white transition-colors hover:bg-white/18"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Feeds {enabledCount > 0 ? `${enabledCount}/${feeds.length}` : feeds.length}
+                            </button>
+                          ) : null}
+                          {artworkKey ? (
+                            <Toggle
+                              label={`Toggle ${integration.displayName}`}
+                              checked={settings.artworkSources[artworkKey]}
+                              onToggle={() =>
+                                onSettingsChange({
+                                  artworkSources: {
+                                    ...settings.artworkSources,
+                                    [artworkKey]: !settings.artworkSources[artworkKey],
+                                  },
+                                })
+                              }
+                            />
+                          ) : null}
                       </div>
                     </SourceRow>
                   );
-                })}
+                  })}
+                  <SourceRow
+                    title="SvetSerialu login"
+                    hint="Required by svetserialu.to before Spilled can search or import from it."
+                  >
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {integrationUserCredentials.svetserialu?.username?.trim() && integrationUserCredentials.svetserialu?.password ? (
+                        <StatusPill tone="good">Saved</StatusPill>
+                      ) : (
+                        <StatusPill tone="warn">Required</StatusPill>
+                      )}
+                      <ActionButton
+                        onClick={() => {
+                          setSvetLoginMessage(null);
+                          setSvetLoginModalOpen(true);
+                        }}
+                      >
+                        <LockKeyhole className="h-4 w-4" />
+                        Login
+                      </ActionButton>
+                    </div>
+                  </SourceRow>
+                  <SourceRow title="Artwork API keys" hint="Configure TMDB, Fanart, and TVDB API keys for artwork fetching.">
+                    <ActionButton onClick={() => setArtworkKeysModalOpen(true)}>
+                      <Key className="h-4 w-4" />
+                      Keys
+                    </ActionButton>
+                  </SourceRow>
+                  <SourceRow title="Refresh existing artwork" hint={artworkRefreshSummary ?? "Update covers, backdrops, and logos for imported titles."}>
+                    <ActionButton
+                      variant="primary"
+                      disabled={artworkRefreshBusy}
+                      onClick={() => void onRefreshArtwork()}
+                    >
+                      <ImageIcon className="h-4 w-4" />
+                      {artworkRefreshBusy ? "Refreshing" : "Refresh"}
+                    </ActionButton>
+                  </SourceRow>
+                </div>
+              )}
+            </Panel>
+
+            <Panel title="Connector repositories" hint={`${providerRepositoryUrls.length} source(s), including the default repository.`}>
+              <div className="flex flex-wrap gap-2">
+                <ActionButton variant="primary" onClick={() => setRepositoryModalOpen(true)}><Plus className="h-4 w-4" />Manage</ActionButton>
+                <ActionButton onClick={() => onProviderRepositoriesChange(providerRepositoryUrls)}><RefreshCw className="h-4 w-4" />Refresh</ActionButton>
               </div>
             </Panel>
           </div>
@@ -938,8 +1192,14 @@ export function SettingsView({
 
         {activeTab === "private" ? (
           <div className="grid gap-4">
-            <Panel title="Private node" hint="Connect to your own server for private profiles, library sync, and node-side downloads.">
-              <PreferenceRow title="Node URL" hint="Use the public HTTPS URL for your private server when using the hosted dashboard.">
+            <Panel title="Private node" hint="Start the server with npm run start:server, then find it here. Setup and management open on dedicated pages.">
+              <PreferenceRow title="Find server" hint="Looks for your running node through local/native runtime and registered fetch nodes.">
+                <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleFindPrivateNode()}>
+                  <Terminal className="h-4 w-4" />
+                  {privateNodeBusy ? "Finding" : "Find server"}
+                </ActionButton>
+              </PreferenceRow>
+              <PreferenceRow title="Node URL" hint="Optional manual fallback if discovery cannot see your server.">
                 <div className="flex min-w-[min(34rem,100%)] flex-col gap-2 sm:flex-row">
                   <input
                     value={privateNodeInput}
@@ -958,10 +1218,16 @@ export function SettingsView({
                   {privateNodeStatus?.node?.mode === "full" ? <StatusPill tone="good">Private + fetch</StatusPill> : null}
                   {privateNodeStatus?.auth?.passkeysEnabled ? <StatusPill tone="good">Passkeys</StatusPill> : null}
                   {privateNodeStatus?.auth?.oidcProviders?.length ? <StatusPill>{privateNodeStatus.auth.oidcProviders.length} SSO</StatusPill> : null}
-                  <ActionButton onClick={() => setShowPrivateSetup((current) => !current)}>
-                    <Terminal className="h-4 w-4" />
-                    Setup
-                  </ActionButton>
+                  {privateNodeStatus?.auth?.setupRequired ? (
+                    <a className="rounded-full bg-white px-4 py-2 text-sm font-bold text-black" href={`/node/setup${privateNode.nodeUrl ? `?node=${encodeURIComponent(privateNode.nodeUrl)}` : ""}`}>
+                      Setup
+                    </a>
+                  ) : null}
+                  {privateNodeStatus?.auth?.privateAuthEnabled ? (
+                    <a className="rounded-full bg-white/10 px-4 py-2 text-sm font-bold text-white" href={`/node/admin${privateNode.nodeUrl ? `?node=${encodeURIComponent(privateNode.nodeUrl)}` : ""}`}>
+                      Manage server
+                    </a>
+                  ) : null}
                 </div>
               </PreferenceRow>
               {privateNodeMessage ? (
@@ -972,16 +1238,58 @@ export function SettingsView({
             </Panel>
 
             {showPrivateSetup ? (
-              <Panel title="Setup private node" hint="Create a private node config and start the server in full mode, which keeps fetch/search working while enabling private profiles and storage.">
+              <Panel title="Setup private node" hint="A new node is waiting for initial setup.">
+                <div className="flex justify-end">
+                  <ActionButton variant="primary" onClick={() => setPrivateSetupModalOpen(true)}>Begin setup</ActionButton>
+                </div>
+              </Panel>
+            ) : null}
+
+            {privateSetupModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Private Node</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">Setup</h3>
+                </div>
+                <button type="button" onClick={() => setPrivateSetupModalOpen(false)} className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <Panel title="Setup private node" hint="Enter the verification code printed by the server terminal, then create the admin account and choose public capabilities.">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <SourceRow title="Node name" hint="Shown in status and discovery.">
+                  <SourceRow title="Setup code" hint="Printed by the server terminal after it starts.">
+                    <input
+                      value={setupCode}
+                      onChange={(event) => setSetupCode(event.target.value.toUpperCase())}
+                      placeholder="ABC123"
+                      className="h-10 w-36 rounded-full border border-white/10 bg-black/30 px-4 text-sm font-bold uppercase tracking-[0.18em] text-white outline-none placeholder:text-white/28"
+                    />
+                  </SourceRow>
+                  {privateNodeStatus?.auth?.privateAuthEnabled && privateAccounts.length > 0 ? (
+                    <SourceRow title="Account" hint="Choose where to enroll the first passkey.">
+                      <select
+                        value={privateAccountId}
+                        onChange={(event) => setPrivateAccountId(event.target.value)}
+                        className="h-10 rounded-full border border-white/10 bg-black/40 px-4 text-sm text-white outline-none"
+                      >
+                        {privateAccounts.map((account) => (
+                          <option key={account.accountId} value={account.accountId}>
+                            {account.displayName}
+                          </option>
+                        ))}
+                      </select>
+                    </SourceRow>
+                  ) : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Node name" hint="Shown in status and discovery.">
                     <input
                       value={setupNodeName}
                       onChange={(event) => setSetupNodeName(event.target.value)}
                       className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Admin account" hint="The local account configured on your server.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Admin account" hint="The local account configured on your server.">
                     <input
                       value={setupAccountName}
                       onChange={(event) => {
@@ -992,22 +1300,22 @@ export function SettingsView({
                       }}
                       className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Account id" hint="Stable id stored in the private config.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Account id" hint="Stable id stored in the private config.">
                     <input
                       value={setupAccountId}
                       onChange={(event) => setSetupAccountId(event.target.value)}
                       className="h-10 w-48 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Profiles" hint="Comma-separated profile names.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Profiles" hint="Comma-separated profile names.">
                     <input
                       value={setupProfileNames}
                       onChange={(event) => setSetupProfileNames(event.target.value)}
                       className="h-10 w-56 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Quota" hint="Shared account storage in GB.">
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Quota" hint="Shared account storage in GB.">
                     <input
                       type="number"
                       min={1}
@@ -1015,35 +1323,28 @@ export function SettingsView({
                       onChange={(event) => setSetupQuotaGb(Math.max(1, Number.parseInt(event.target.value, 10) || 1))}
                       className="h-10 w-32 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none"
                     />
-                  </SourceRow>
-                  <SourceRow title="Setup secret" hint="Used once to enroll your first passkey.">
-                    <input
-                      type="password"
-                      value={setupCommandSecret}
-                      onChange={(event) => setSetupCommandSecret(event.target.value)}
-                      placeholder="change-this-secret"
-                      className="h-10 w-56 rounded-full border border-white/10 bg-black/30 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  </SourceRow> : null}
+                  {!privateNodeStatus?.auth?.privateAuthEnabled ? <SourceRow title="Public fetch" hint="Let this server help with search, imports, streams, and downloads for browser users.">
+                    <Toggle
+                      label="Toggle public fetch capabilities"
+                      checked={setupAllowPublicFetch}
+                      onToggle={() => setSetupAllowPublicFetch((current) => !current)}
                     />
-                  </SourceRow>
+                  </SourceRow> : null}
                 </div>
-                <div className="mt-4 rounded-2xl border border-white/8 bg-black/30">
-                  <div className="flex items-center justify-between gap-3 border-b border-white/8 px-4 py-3">
-                    <div className="text-sm font-semibold text-white">PowerShell command</div>
-                    <ActionButton onClick={() => void handleCopyPrivateSetupCommand()}>
-                      <Copy className="h-4 w-4" />
-                      Copy
-                    </ActionButton>
-                  </div>
-                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap p-4 text-xs leading-5 text-white/70">
-                    {privateSetupCommand}
-                  </pre>
+                <div className="mt-4 flex justify-end">
+                  <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleCompletePrivateSetup()}>
+                    {privateNodeStatus?.auth?.privateAuthEnabled ? "Enroll passkey" : "Setup node"}
+                  </ActionButton>
                 </div>
               </Panel>
+              </div>
+            </div>
             ) : null}
 
-            {privateAccounts.length > 0 && !privateNode.token ? (
-              <Panel title="Sign in">
-                <PreferenceRow title="Account" hint="Accounts and profiles are configured on the private server, not created here.">
+            {privateAccounts.length > 0 && !privateNode.token && !privateNodeStatus?.auth?.setupRequired ? (
+              <Panel title="Watcher sign in" hint="Watcher accounts are for profiles, library state, and private downloads. Admin management is separate.">
+                <PreferenceRow title="Watcher" hint="Choose the account that owns your profiles.">
                   <select
                     value={privateAccountId}
                     onChange={(event) => setPrivateAccountId(event.target.value)}
@@ -1056,9 +1357,23 @@ export function SettingsView({
                     ))}
                   </select>
                 </PreferenceRow>
+                <PreferenceRow title="Password" hint="Use the watcher password set during setup or in the Admin page.">
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="password"
+                      value={privateWatcherPassword}
+                      onChange={(event) => setPrivateWatcherPassword(event.target.value)}
+                      placeholder="Watcher password"
+                      className="h-10 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                    />
+                    <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePassword()}>
+                      Sign in
+                    </ActionButton>
+                  </div>
+                </PreferenceRow>
                 <PreferenceRow title="Passkey login" hint="Use an enrolled passkey for this account.">
                   <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePasskey()}>
-                    Sign in
+                    Sign in with passkey
                   </ActionButton>
                 </PreferenceRow>
                 <PreferenceRow title="Enroll passkey" hint="Requires the setup secret from the private server config. The app never stores it.">
@@ -1127,7 +1442,7 @@ export function SettingsView({
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Module feeds</div>
-                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedFeedModule.name}</h3>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedFeedModule.displayName}</h3>
                 </div>
                 <button
                   type="button"
@@ -1161,6 +1476,266 @@ export function SettingsView({
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        ) : null}
+
+        {artworkKeysModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Artwork</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">API Keys</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/45">
+                    Configure your API keys for artwork providers. Leave empty to use shared keys if available.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setArtworkKeysModalOpen(false)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="grid gap-3">
+                <input
+                  value={integrationUserKeys["tmdb"] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey("tmdb", event.target.value)}
+                  placeholder="TMDB API Key"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <input
+                  value={integrationUserKeys["fanart"] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey("fanart", event.target.value)}
+                  placeholder="Fanart API Key"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <input
+                  value={integrationUserKeys["tvdb"] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey("tvdb", event.target.value)}
+                  placeholder="TVDB API Key"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <ActionButton variant="primary" onClick={() => setArtworkKeysModalOpen(false)}>Done</ActionButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {svetLoginModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Site login</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">SvetSerialu</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/45">
+                    Stored locally in this browser and sent only to the fetch runtime for SvetSerialu requests.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSvetLoginModalOpen(false)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close SvetSerialu login"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="grid gap-3">
+                <input
+                  value={integrationUserCredentials.svetserialu?.username ?? ""}
+                  onChange={(event) => {
+                    updateIntegrationUserCredential("svetserialu", "username", event.target.value);
+                    setSvetLoginMessage(null);
+                  }}
+                  placeholder="Username or email"
+                  type="text"
+                  autoComplete="username"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <input
+                  value={integrationUserCredentials.svetserialu?.password ?? ""}
+                  onChange={(event) => {
+                    updateIntegrationUserCredential("svetserialu", "password", event.target.value);
+                    setSvetLoginMessage(null);
+                  }}
+                  placeholder="Password"
+                  type="password"
+                  autoComplete="current-password"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+              </div>
+
+              {svetLoginMessage ? (
+                <div
+                  className={clsx(
+                    "mt-4 rounded-2xl border px-4 py-3 text-sm",
+                    svetLoginMessage.tone === "good"
+                      ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
+                      : "border-orange-300/20 bg-orange-300/10 text-orange-100",
+                  )}
+                >
+                  {svetLoginMessage.text}
+                </div>
+              ) : null}
+
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <ActionButton
+                  onClick={() => {
+                    clearIntegrationUserCredentials("svetserialu");
+                    setSvetLoginMessage(null);
+                  }}
+                >
+                  Clear
+                </ActionButton>
+                <ActionButton
+                  disabled={svetLoginBusy}
+                  onClick={() => void verifyStoredSvetLogin()}
+                >
+                  {svetLoginBusy ? "Verifying" : "Verify"}
+                </ActionButton>
+                <ActionButton variant="primary" onClick={() => setSvetLoginModalOpen(false)}>Done</ActionButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {selectedKeyModule ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">
+                    {selectedKeyModule.id === "svetserialu" ? "Site login" : "User API key"}
+                  </div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">{selectedKeyModule.displayName}</h3>
+                  <p className="mt-2 text-sm leading-6 text-white/45">
+                    {selectedKeyModule.id === "svetserialu"
+                      ? "Stored locally in this browser and sent only to the local fetch runtime."
+                      : "Stored locally in this browser. Leave empty to use shared app keys when available."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setKeyModuleId(null)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close API key settings"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {selectedKeyModule.id === "svetserialu" ? (
+                <div className="grid gap-3">
+                  <input
+                    value={integrationUserCredentials.svetserialu?.username ?? ""}
+                    onChange={(event) => updateIntegrationUserCredential("svetserialu", "username", event.target.value)}
+                    placeholder="Username or email"
+                    type="text"
+                    autoComplete="username"
+                    className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  />
+                  <input
+                    value={integrationUserCredentials.svetserialu?.password ?? ""}
+                    onChange={(event) => updateIntegrationUserCredential("svetserialu", "password", event.target.value)}
+                    placeholder="Password"
+                    type="password"
+                    autoComplete="current-password"
+                    className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                  />
+                </div>
+              ) : (
+                <input
+                  value={integrationUserKeys[selectedKeyModule.id] ?? ""}
+                  onChange={(event) => updateIntegrationUserKey(selectedKeyModule.id, event.target.value)}
+                  placeholder={`${selectedKeyModule.displayName} API key`}
+                  type="password"
+                  autoComplete="off"
+                  className="h-11 w-full rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+              )}
+              <div className="mt-4 flex justify-end gap-2">
+                <ActionButton
+                  onClick={() => {
+                    if (selectedKeyModule.id === "svetserialu") {
+                      clearIntegrationUserCredentials("svetserialu");
+                    } else {
+                      updateIntegrationUserKey(selectedKeyModule.id, "");
+                    }
+                  }}
+                >
+                  Clear
+                </ActionButton>
+                <ActionButton variant="primary" onClick={() => setKeyModuleId(null)}>Done</ActionButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {repositoryModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-[#141519] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/34">Connector repositories</div>
+                  <h3 className="mt-1 text-xl font-bold tracking-tight text-white">Manage repositories</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRepositoryModalOpen(false)}
+                  className="rounded-full bg-white/10 p-2 text-white/70 transition-colors hover:bg-white/18 hover:text-white"
+                  aria-label="Close repositories"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  value={repositoryInput}
+                  onChange={(event) => setRepositoryInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      addProviderRepository();
+                    }
+                  }}
+                  placeholder="https://github.com/owner/spilled-connectors"
+                  className="h-10 min-w-0 flex-1 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
+                />
+                <ActionButton variant="primary" onClick={addProviderRepository}><Plus className="h-4 w-4" />Add</ActionButton>
+                <ActionButton onClick={() => onProviderRepositoriesChange(providerRepositoryUrls)}><RefreshCw className="h-4 w-4" />Refresh</ActionButton>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {providerRepositoryUrls.map((url) => (
+                  <SourceRow
+                    key={url}
+                    title={url}
+                    hint={url === DEFAULT_PROVIDER_REPOSITORY_URL ? "Default connector repository" : "Custom connector repository"}
+                  >
+                    {url === DEFAULT_PROVIDER_REPOSITORY_URL ? (
+                      <StatusPill tone="good">Default</StatusPill>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onProviderRepositoriesChange(providerRepositoryUrls.filter((entry) => entry !== url))}
+                        className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/18"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </SourceRow>
+                ))}
+              </div>
             </div>
           </div>
         ) : null}

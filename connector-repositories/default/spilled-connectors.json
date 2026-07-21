@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "repositoryId": "spilled-default-connectors",
+  "repositoryName": "SpilledCinema Default Connectors",
+  "updatedAt": "2026-06-05T00:00:00.000Z",
+  "integrations": [
+    {
+      "id": "vidking",
+      "displayName": "VidKing",
+      "version": "2.0.0",
+      "homepage": "https://www.vidking.net",
+      "status": "stable",
+      "capabilities": ["search", "metadata", "import", "players", "noCredentials"],
+      "credentialRequirements": [{ "kind": "none", "label": "No credentials required" }],
+      "networkPermissions": ["https://www.vidking.net", "https://api.themoviedb.org", "https://image.tmdb.org"]
+    },
+    {
+      "id": "svetserialu",
+      "displayName": "SvetSerialu",
+      "version": "2.0.0",
+      "homepage": "https://svetserialu.to",
+      "status": "stable",
+      "runtime": {
+        "apiVersion": 2,
+        "entry": "connectors/svetserialu.js"
+      },
+      "capabilities": ["search", "discovery", "metadata", "import", "players", "subtitles", "downloads", "siteLogin"],
+      "credentialRequirements": [{ "kind": "siteLogin", "label": "SvetSerialu login" }],
+      "networkPermissions": ["https://svetserialu.to"]
+    },
+    {
+      "id": "bombuj",
+      "displayName": "Bombuj",
+      "version": "2.0.0",
+      "homepage": "https://www.bombuj.si",
+      "status": "stable",
+      "runtime": {
+        "apiVersion": 2,
+        "entry": "connectors/bombuj.js"
+      },
+      "capabilities": ["search", "discovery", "metadata", "import", "players", "subtitles", "downloads", "noCredentials"],
+      "credentialRequirements": [{ "kind": "none", "label": "No credentials required" }],
+      "networkPermissions": ["https://www.bombuj.si", "https://serialy.bombuj.si"]
+    },
+    {
+      "id": "tmdb",
+      "displayName": "TMDB",
+      "version": "2.0.0",
+      "homepage": "https://www.themoviedb.org",
+      "status": "stable",
+      "capabilities": ["metadata", "artwork", "sharedAppKey", "userApiKey"],
+      "credentialRequirements": [
+        { "kind": "sharedAppKey", "secretName": "apiKey", "label": "Spilled shared TMDB key" },
+        { "kind": "userApiKey", "secretName": "apiKey", "label": "Personal TMDB API key", "optional": true }
+      ],
+      "networkPermissions": ["https://api.themoviedb.org", "https://image.tmdb.org"]
+    },
+    {
+      "id": "tvdb",
+      "displayName": "TVDB",
+      "version": "2.0.0",
+      "homepage": "https://thetvdb.com",
+      "status": "stable",
+      "capabilities": ["metadata", "artwork", "sharedAppKey", "userApiKey"],
+      "credentialRequirements": [
+        { "kind": "sharedAppKey", "secretName": "apiKey", "label": "Spilled shared TVDB key" },
+        { "kind": "userApiKey", "secretName": "apiKey", "label": "Personal TVDB API key", "optional": true }
+      ],
+      "networkPermissions": ["https://api4.thetvdb.com"]
+    },
+    {
+      "id": "fanart",
+      "displayName": "Fanart.tv",
+      "version": "2.0.0",
+      "homepage": "https://fanart.tv",
+      "status": "stable",
+      "capabilities": ["artwork", "sharedAppKey", "userApiKey"],
+      "credentialRequirements": [
+        { "kind": "sharedAppKey", "secretName": "apiKey", "label": "Spilled shared Fanart.tv key" },
+        { "kind": "userApiKey", "secretName": "apiKey", "label": "Personal Fanart.tv API key", "optional": true }
+      ],
+      "networkPermissions": ["https://webservice.fanart.tv"]
+    }
+  ]
+}

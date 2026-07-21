@@ -164,6 +164,11 @@ export type NodeCompatibilityStatus = {
   auth: {
     privateAuthEnabled: boolean;
     passkeysEnabled: boolean;
+    setupRequired?: boolean;
+    setupReason?: "missing-config" | "missing-admin" | "missing-admin-login" | "complete";
+    adminPasswordEnabled?: boolean;
+    watcherPasswordEnabled?: boolean;
+    enrolledPasskeyCount?: number;
     oidcProviders: Array<{
       providerId: string;
       displayName: string;

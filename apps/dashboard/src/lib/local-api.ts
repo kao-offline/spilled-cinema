@@ -19,14 +19,29 @@ function canUseHostedSameOriginApi() {
   return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 }
 
-function isHostedSameOriginApiPath(path: string) {
-  return path === "/api/artwork/search" || path === "/api/artwork/refresh";
+export function isHostedSameOriginApiPath(path: string) {
+  return (
+    path === "/api/artwork/search" ||
+    path === "/api/artwork/refresh" ||
+    path === "/api/artwork/cast" ||
+    path === "/api/artwork/title-metadata" ||
+    path === "/api/artwork/person-credits" ||
+    path === "/api/artwork/homepage-banner"
+  );
 }
 
 function getRuntimeTimeoutMs(path: string) {
   if (
     path.startsWith("/api/import-") ||
-    path.startsWith("/api/artwork/refresh")
+    path.startsWith("/api/provider-import") ||
+    path.startsWith("/api/integrations/refresh") ||
+    path.startsWith("/api/title/") ||
+    path.startsWith("/api/artwork/refresh") ||
+    path.startsWith("/api/artwork/search") ||
+    path.startsWith("/api/artwork/cast") ||
+    path.startsWith("/api/artwork/title-metadata") ||
+    path.startsWith("/api/artwork/person-credits") ||
+    path.startsWith("/api/artwork/homepage-banner")
   ) {
     return LONG_RUNTIME_TIMEOUT_MS;
   }
@@ -234,46 +249,99 @@ function canUseFetchServerEndpoint(endpoint: { protocol?: string; url?: string }
   }
 }
 
-async function fetchFetchServerCandidates() {
-  const response = await fetchWithTimeout("/api/server/discovery/nodes?capability=fetch&limit=8", {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    return [];
+function getFetchServerCapabilityForPath(path: string) {
+  if (path.startsWith("/api/download-full/browser-start") || path.startsWith("/api/download-full/browser-file")) {
+    return "download";
+  }
+  if (path.startsWith("/api/player/resolve") || path.startsWith("/api/player/clean-resolve") || path.startsWith("/api/player/playback-resolve") || path.startsWith("/api/player/frame")) {
+    return "stream";
+  }
+  return "fetch";
+}
+
+function shouldProxyFetchServerOrigin(origin: string) {
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    return hostname === "loca.lt" || hostname.endsWith(".loca.lt") || hostname === "trycloudflare.com" || hostname.endsWith(".trycloudflare.com");
+  } catch {
+    return false;
+  }
+}
+
+function buildFetchServerRequestUrl(origin: string, path: string) {
+  if (!shouldProxyFetchServerOrigin(origin)) {
+    return `${origin}${path}`;
   }
 
-  const payload = await readJsonSafe<{ candidates?: FetchServerCandidate[] }>(response);
-  return (payload?.candidates ?? [])
-    .flatMap((candidate) => candidate.record?.endpoints ?? [])
-    .filter(canUseFetchServerEndpoint)
-    .map((endpoint) => endpoint.url!.replace(/\/$/, ""));
+  const url = new URL("/api/node-proxy", window.location.origin);
+  url.searchParams.set("node", origin);
+  url.searchParams.set("path", path);
+  return url.toString();
+}
+
+async function fetchFetchServerCandidates(path: string) {
+  const capability = getFetchServerCapabilityForPath(path);
+  const capabilities = capability === "fetch" ? ["fetch"] : [capability, "fetch"];
+  const origins: string[] = [];
+
+  for (const candidateCapability of capabilities) {
+    const response = await fetchWithTimeout(`/api/server?path=discovery%2Fnodes&capability=${encodeURIComponent(candidateCapability)}&limit=12`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      continue;
+    }
+
+    const payload = await readJsonSafe<{ candidates?: FetchServerCandidate[] }>(response);
+    origins.push(...(payload?.candidates ?? [])
+      .flatMap((candidate) => candidate.record?.endpoints ?? [])
+      .filter(canUseFetchServerEndpoint)
+      .map((endpoint) => endpoint.url!.replace(/\/$/, "")));
+  }
+
+  return Array.from(new Set(origins));
 }
 
 async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
   let origins: string[] = [];
+  let lastFailure: RuntimeApiResult<T> | null = null;
   try {
-    origins = Array.from(new Set(await fetchFetchServerCandidates()));
+    origins = Array.from(new Set(await fetchFetchServerCandidates(path)));
   } catch {
     return null;
   }
 
   for (const origin of origins) {
     try {
-      const response = await fetchWithTimeout(`${origin}${path}`, {
+      const body = init.body === undefined ? undefined : JSON.stringify(init.body);
+      const requestUrl = buildFetchServerRequestUrl(origin, path);
+      const proxied = requestUrl.startsWith(`${window.location.origin}/api/node-proxy`);
+      const response = await fetchWithTimeout(requestUrl, {
         method: init.method ?? "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "bypass-tunnel-reminder": "true",
-          ...(init.headers ?? {}),
-        },
-        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        headers: body === undefined
+          ? {
+              ...(init.headers ?? {}),
+            }
+          : {
+              "Content-Type": "text/plain;charset=UTF-8",
+              ...(init.headers ?? {}),
+            },
+        body,
       }, getRuntimeTimeoutMs(path));
-      const data = (await readJsonSafe<T>(response)) as T;
+      const data = (await readJsonSafe<T>(response)) as T & { downloadUrl?: string };
+      if (proxied && data && typeof data.downloadUrl === "string" && data.downloadUrl.startsWith("/api/node-proxy")) {
+        data.downloadUrl = `${window.location.origin}${data.downloadUrl}`;
+      }
 
-      if (!response.ok && response.status >= 500) {
-        // A public fetch node can be stale, restarting, or missing optional env.
-        // Try the next advertised node before surfacing the error.
+      if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 409 || response.status === 422)) {
+        lastFailure = {
+          ok: response.ok,
+          status: response.status,
+          data,
+          origin,
+          transport: "fetch-server",
+        };
         continue;
       }
 
@@ -281,7 +349,7 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
         ok: response.ok,
         status: response.status,
         data,
-        origin,
+        origin: proxied ? window.location.origin : origin,
         transport: "fetch-server",
       };
     } catch {
@@ -289,7 +357,22 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
     }
   }
 
-  return null;
+  return lastFailure;
+}
+
+function shouldTryNextRuntime<T>(result: RuntimeApiResult<T>) {
+  if (result.ok) {
+    return false;
+  }
+  if (result.status === 404 || result.status === 408 || result.status === 409 || result.status === 422 || result.status >= 500) {
+    return (
+      result.transport === "native" ||
+      result.transport === "node" ||
+      result.transport === "direct" ||
+      result.transport === "extension"
+    );
+  }
+  return false;
 }
 
 
@@ -305,42 +388,41 @@ export function buildRuntimeUrl(path: string) {
     return `${window.spilledNative.serverUrl}${path}`;
   }
 
-  return `http://127.0.0.1:8787${path}`;
+  return `${window.location.origin}${path}`;
+}
+
+function returnIfUsable<T>(result: RuntimeApiResult<T> | null) {
+  if (!result || shouldTryNextRuntime(result)) {
+    return null;
+  }
+  return result;
 }
 
 export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit = {}): Promise<RuntimeApiResult<T>> {
   try {
-    const native = await fetchNative<T>(path, init);
-    if (native) {
-      return native;
-    }
+    const native = returnIfUsable(await fetchNative<T>(path, init));
+    if (native) return native;
   } catch {
     // Fall through to hosted/local/extension/direct/remote.
   }
 
   try {
-    const sameOrigin = await fetchSameOriginLocalNode<T>(path, init);
-    if (sameOrigin) {
-      return sameOrigin;
-    }
+    const sameOrigin = returnIfUsable(await fetchSameOriginLocalNode<T>(path, init));
+    if (sameOrigin) return sameOrigin;
   } catch {
     // Fall through to extension/direct/remote.
   }
 
   try {
-    const extension = await fetchExtension<T>(path, init);
-    if (extension) {
-      return extension;
-    }
+    const extension = returnIfUsable(await fetchExtension<T>(path, init));
+    if (extension) return extension;
   } catch {
     // Fall through to direct/remote.
   }
 
   try {
-    const direct = await fetchDirect<T>(path, init);
-    if (direct) {
-      return direct;
-    }
+    const direct = returnIfUsable(await fetchDirect<T>(path, init));
+    if (direct) return direct;
   } catch {
     // Fall through to discovered fetch servers.
   }

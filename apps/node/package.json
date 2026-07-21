@@ -1,5 +1,9 @@
 {
   "name": "@spilledcinema/node",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@simplewebauthn/server": "^13.3.0",
+    "openid-client": "^6.8.4"
+  }
 }

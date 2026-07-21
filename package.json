@@ -26,6 +26,7 @@
     "control-plane": "powershell -ExecutionPolicy Bypass -File scripts/control-plane.ps1",
     "convex:codegen": "npx convex codegen",
     "convex:deploy": "powershell -ExecutionPolicy Bypass -Command \"$env:CONVEX_DEPLOYMENT='prod:cheerful-lynx-4'; npx convex deploy\"",
+    "vault:update": "node scripts/update-vault-metadata.mjs",
     "dev": "concurrently \"npm run dev:extractor\" \"npm run dev:dashboard\""
   }
 }

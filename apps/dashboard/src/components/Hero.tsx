@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Heart, Play } from "lucide-react";
 import type { ImportedShow } from "../lib/types";
 import { getCachedHeroLogoAspect, preloadHeroImage } from "../lib/hero-assets";
+import { balanceImageResolution, balancedBackgroundImage } from "../lib/image-resolution";
+import { getOverlayBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 
 type HeroProps = {
   featuredShow: ImportedShow | null;
@@ -19,7 +21,7 @@ type HeroSlideState = {
 };
 
 function getWallpaper(show: ImportedShow | null) {
-  return show?.backdropUrl ?? null;
+  return getOverlayBannerArtwork(show).bannerUrl;
 }
 
 function getLogoLayout(logoAspect: number) {
@@ -62,11 +64,11 @@ function HeroArtworkLayer({
         <>
           <div
             className="absolute inset-0 bg-cover bg-center"
-            style={{ backgroundImage: `url(${wallpaper})` }}
+            style={balancedBackgroundImage(wallpaper, "backdrop-hero")}
           />
           <div
             className="absolute inset-0 scale-[1.03] bg-cover bg-center opacity-18 blur-2xl"
-            style={{ backgroundImage: `url(${wallpaper})` }}
+            style={balancedBackgroundImage(wallpaper, "backdrop-thumb")}
           />
         </>
       ) : (
@@ -195,6 +197,8 @@ export function Hero({
   }, [isTransitioning]);
 
   const currentShow = activeSlide?.show ?? featuredShow;
+  const titleMetadata = getTitleMetadataParts(currentShow);
+  const titleDescription = getTitleDescription(currentShow);
   const currentLogoAspect = currentShow?.clearLogoUrl ? (logoAspectByUrl[currentShow.clearLogoUrl] ?? 2.7) : 2.7;
   const currentLogoLayout = getLogoLayout(currentLogoAspect);
   const outgoingLogoAspect = outgoingSlide?.show.clearLogoUrl ? (logoAspectByUrl[outgoingSlide.show.clearLogoUrl] ?? 2.7) : 2.7;
@@ -241,7 +245,7 @@ export function Hero({
             }}
           >
             <img
-              src={outgoingSlide.show.clearLogoUrl}
+              src={balanceImageResolution(outgoingSlide.show.clearLogoUrl, "logo") ?? outgoingSlide.show.clearLogoUrl}
               alt={`${outgoingSlide.show.title} logo`}
               className="h-auto max-h-full w-full object-contain object-left transition-opacity duration-700 ease-out"
               loading="eager"
@@ -262,7 +266,7 @@ export function Hero({
             }}
           >
             <img
-              src={currentShow.clearLogoUrl}
+              src={balanceImageResolution(currentShow.clearLogoUrl, "logo") ?? currentShow.clearLogoUrl}
               alt={`${currentShow.title} logo`}
               className={`h-auto max-h-full w-full object-contain object-left transition-all duration-700 ease-out ${isTransitioning ? "animate-hero-logo-in" : ""}`}
               loading="eager"
@@ -276,6 +280,21 @@ export function Hero({
             <h1 className="mb-6 max-w-2xl text-4xl font-bold tracking-tight text-white drop-shadow-lg transition-opacity duration-500 sm:text-5xl lg:text-7xl">
               {currentShow.title}
             </h1>
+          ) : null}
+
+          {titleMetadata.length > 0 ? (
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs font-bold text-white/84 sm:text-sm">
+              {titleMetadata.map((part, index) => (
+                <span key={`${part.kind}:${part.label}`} className="inline-flex items-center gap-2">
+                  {index > 0 ? <span className="h-1 w-1 rounded-full bg-white/34" /> : null}
+                  {part.kind === "rating" ? <img src="/rating-icon.png" alt="" className="h-4 w-4 shrink-0" /> : null}
+                  {part.label}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {titleDescription ? (
+            <p className="mb-4 line-clamp-2 max-w-xl text-sm leading-5 text-white/68">{titleDescription}</p>
           ) : null}
 
           <div className="flex flex-wrap items-center gap-3">
