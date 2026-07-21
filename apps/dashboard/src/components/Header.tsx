@@ -90,7 +90,7 @@ export function Header({
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder={searchPlaceholder}
-            className="flex-1 bg-transparent py-1 text-sm text-white placeholder-white/30 outline-none"
+            className="flex-1 bg-transparent py-1 text-base text-white placeholder-white/30 outline-none lg:text-sm"
           />
         </div>
       </div>

@@ -135,11 +135,11 @@ export function DiscoveryRail({ title, subtitle, countLabel, children }: Discove
   }, [emblaApi, queueScrollStateSync, syncRailGeometry]);
 
   function scrollPrev() {
-    emblaApi?.scrollPrev();
+    emblaApi?.scrollPrev(true);
   }
 
   function scrollNext() {
-    emblaApi?.scrollNext();
+    emblaApi?.scrollNext(true);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -228,7 +228,7 @@ export function DiscoveryRail({ title, subtitle, countLabel, children }: Discove
         </div>
       </section>
 
-      {viewportRect && hasOverflow
+      {viewportRect && hasOverflow && (typeof window === "undefined" || window.innerWidth >= 1024)
         ? createPortal([renderArrow("prev"), renderArrow("next")], document.body)
         : null}
     </>

@@ -515,6 +515,42 @@ body {
   animation-name: route-vt-new;
 }
 
+@media (max-width: 1023px) {
+  html {
+    scroll-behavior: auto;
+    overscroll-behavior-x: none;
+  }
+
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  button,
+  a,
+  [role="button"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .animate-route-open,
+  .animate-player-open,
+  .animate-detail-hero-open,
+  .animate-detail-content-open,
+  .animate-detail-content-open-late {
+    animation-duration: 180ms;
+    animation-delay: 0ms;
+    filter: none;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-home-hero-bg,
   .animate-home-hero-copy,

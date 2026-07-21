@@ -137,7 +137,7 @@ type ViewTransitionDocument = Document & {
 
 function runRouteTransition(update: () => void) {
   const transitionDocument = document as ViewTransitionDocument;
-  if (!transitionDocument.startViewTransition) {
+  if (!transitionDocument.startViewTransition || window.matchMedia("(max-width: 1023px)").matches) {
     update();
     return;
   }
@@ -521,6 +521,7 @@ function AppContent() {
   const [activeWatchEpisodeId, setActiveWatchEpisodeId] = useState<string | null>(null);
   const [playerAutoPlayToken, setPlayerAutoPlayToken] = useState<number | null>(null);
   const [activeView, setActiveView] = useState<ViewState>("home");
+  const [routePath, setRoutePath] = useState(() => window.location.pathname);
   const [mediaFilter, setMediaFilter] = useState<"all" | "movies" | "series">("all");
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => !hasDismissedWelcome());
   const [downloadedEpisodeIds, setDownloadedEpisodeIds] = useState<Set<string>>(new Set());
@@ -592,6 +593,11 @@ function AppContent() {
   const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
   const activeWatchEpisodeIdRef = useRef(activeWatchEpisodeId);
   const deferredExploreQuery = useDeferredValue(discoveryState.exploreQuery);
+
+  function pushRoute(path: string) {
+    window.history.pushState({}, "", path);
+    setRoutePath(path);
+  }
 
   useEffect(() => {
     stateRef.current = state;
@@ -1214,6 +1220,7 @@ function AppContent() {
 
   useEffect(() => {
     const syncFromPath = () => {
+      setRoutePath(window.location.pathname);
       const parsed = parseLibraryPath(window.location.pathname);
       if (parsed.kind === "watch") {
         const episodeId = parsed.episodeId;
@@ -2486,7 +2493,7 @@ function AppContent() {
       playerReturnPathRef.current = window.location.pathname === watchPath
         ? buildLibraryShowPath(episode.showSlug)
         : `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      window.history.pushState({}, "", watchPath);
+      pushRoute(watchPath);
       setActiveWatchEpisodeId(episode.id);
       setActiveShowSlug(null);
       const show = state.shows.find((entry) => entry.episodes.some((entryEpisode) => entryEpisode.id === episode.id));
@@ -2511,7 +2518,7 @@ function AppContent() {
   function handleOpenShow(slug: string) {
     const nextPath = buildLibraryShowPath(slug);
     const openShow = () => {
-      window.history.pushState({}, "", nextPath);
+      pushRoute(nextPath);
       setActiveWatchEpisodeId(null);
       setActiveShowSlug(slug);
       const show = state.shows.find((entry) => entry.slug === slug);
@@ -2528,7 +2535,7 @@ function AppContent() {
 
   function handleCloseShow() {
     runRouteTransition(() => {
-      window.history.pushState({}, "", buildLibraryPath());
+      pushRoute(buildLibraryPath());
       setActiveShowSlug(null);
     });
   }
@@ -2565,7 +2572,7 @@ function AppContent() {
       setState(nextState);
       setActiveWatchEpisodeId(null);
       const returnPath = playerReturnPathRef.current || buildLibraryPath();
-      window.history.pushState({}, "", returnPath.startsWith(`${buildLibraryPath()}/watch/`) ? buildLibraryPath() : returnPath);
+      pushRoute(returnPath.startsWith(`${buildLibraryPath()}/watch/`) ? buildLibraryPath() : returnPath);
       const parsed = parseLibraryPath(window.location.pathname);
       setActiveShowSlug(parsed.kind === "show" ? parsed.slug : null);
     });
@@ -3282,7 +3289,7 @@ function AppContent() {
   const isPlayerPage = Boolean(activeWatchEpisodeId && selectedEpisodeWithLocal);
   const isImmersivePage = Boolean(isPlayerPage || activeShowSlug);
   const showHeader = !isImmersivePage;
-  const currentRoute = parseLibraryPath(typeof window !== "undefined" ? window.location.pathname : "/");
+  const currentRoute = parseLibraryPath(routePath);
   const isHomeRoute = currentRoute.kind === "home";
 
   if (isHomeRoute) {
@@ -3294,26 +3301,26 @@ function AppContent() {
         tasteProfile={tasteProfile}
         searchRemotes={searchRemotes}
         onOpenLibrary={() => {
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveView("home");
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
         }}
         onOpenFavorites={() => {
           setActiveView("favorites");
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
         }}
         onOpenExplore={() => {
           setActiveView("explore");
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
         }}
         onOpenSettings={() => {
           setActiveView("settings");
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
         }}
@@ -3357,7 +3364,7 @@ function AppContent() {
           }}
           onDismissDownload={handleDismissDownloadJob}
           onOpenHomepage={() => {
-            window.history.pushState({}, "", "/");
+            pushRoute("/");
             setActiveView("home");
             setActiveShowSlug(null);
           }}
@@ -3705,7 +3712,7 @@ function AppContent() {
         <MobileDock
           active={(activeView === "favorites" || activeView === "explore" ? activeView : "library") as MobileDockItem}
           onHome={() => {
-            window.history.pushState({}, "", "/");
+            pushRoute("/");
             setActiveView("home");
             setActiveShowSlug(null);
           }}

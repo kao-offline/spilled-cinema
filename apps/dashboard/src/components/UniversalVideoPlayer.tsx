@@ -143,6 +143,7 @@ export function UniversalVideoPlayer({
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
   const [qualityLevel, setQualityLevel] = useState(-1);
   const [captionsEnabled, setCaptionsEnabled] = useState(subtitleTracks.some((track) => track.default));
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const sourceType = useMemo(() => getSourceType(src), [src]);
   const subtitleTrackSignature = useMemo(
     () => subtitleTracks
@@ -181,10 +182,14 @@ export function UniversalVideoPlayer({
     host.replaceChildren();
     playbackErrorSentRef.current = false;
     playbackStartedRef.current = false;
+    setAutoplayBlocked(false);
+    setWaiting(true);
     const videoElement = document.createElement("video");
     videoElement.className = "h-full w-full object-contain";
     videoElement.playsInline = true;
-    videoElement.preload = "metadata";
+    videoElement.setAttribute("playsinline", "");
+    videoElement.setAttribute("webkit-playsinline", "");
+    videoElement.preload = "auto";
     videoElement.playbackRate = playbackRate;
     if (poster) videoElement.poster = poster;
 
@@ -243,6 +248,7 @@ export function UniversalVideoPlayer({
         const startupLoadFailed = /manifest|level/i.test(details) && data.type === Hls.ErrorTypes.NETWORK_ERROR;
         const beforePlayback = !playbackStartedRef.current && (videoElement.currentTime || 0) < 3;
         if (beforePlayback && (data.fatal || networkBlocked || startupLoadFailed) && !playbackErrorSentRef.current) {
+          setWaiting(false);
           playbackErrorSentRef.current = true;
           onErrorRef.current?.(`HLS playback failed${responseCode ? ` (${responseCode})` : ""}: ${data.details || data.type}`);
         }
@@ -298,9 +304,11 @@ export function UniversalVideoPlayer({
     };
     const markPlaying = () => {
       playbackStartedRef.current = true;
+      setAutoplayBlocked(false);
       markReady();
     };
     const markError = () => {
+      setWaiting(false);
       if (playbackStartedRef.current || (videoElement.currentTime || 0) >= 3) return;
       if (playbackErrorSentRef.current) return;
       playbackErrorSentRef.current = true;
@@ -368,7 +376,15 @@ export function UniversalVideoPlayer({
     lastAutoPlayTokenRef.current = autoPlayToken;
     const play = () => {
       if (canceled) return;
-      void video.play().catch(() => undefined);
+      void video.play()
+        .then(() => setAutoplayBlocked(false))
+        .catch((error: unknown) => {
+          if (canceled) return;
+          if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) {
+            setWaiting(false);
+            setAutoplayBlocked(true);
+          }
+        });
     };
 
     play();
@@ -388,7 +404,14 @@ export function UniversalVideoPlayer({
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) void video.play();
+    if (video.paused) {
+      void video.play()
+        .then(() => setAutoplayBlocked(false))
+        .catch(() => {
+          setWaiting(false);
+          setAutoplayBlocked(true);
+        });
+    }
     else video.pause();
   }
 
@@ -558,16 +581,27 @@ export function UniversalVideoPlayer({
         </div>
       ) : null}
 
+      {paused && !waiting ? (
+        <button
+          type="button"
+          onClick={togglePlay}
+          className="absolute left-1/2 top-1/2 z-20 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/54 text-white shadow-[0_18px_50px_rgba(0,0,0,.48)] backdrop-blur-md transition active:scale-95 lg:hidden"
+          aria-label={autoplayBlocked ? "Tap to start playback" : "Play"}
+        >
+          <Play className="ml-1 h-7 w-7 fill-white" strokeWidth={0} />
+        </button>
+      ) : null}
+
       <div
         data-player-control
         className={clsx(
-          "absolute inset-x-0 bottom-0 z-30 px-4 pb-4 pt-8 transition-opacity duration-200 sm:px-7",
+          "absolute inset-x-0 bottom-0 z-30 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8 transition-opacity duration-200 sm:px-7",
           "bg-[linear-gradient(0deg,rgba(0,0,0,0.34),rgba(0,0,0,0.16)_56%,rgba(0,0,0,0))]",
           controlsVisible || paused ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
-        <div className="mb-3 flex items-center gap-3 text-xs font-semibold text-white/70">
-          <span>{sourceLabel}</span>
+        <div className="mb-2 flex min-w-0 items-center gap-3 text-[11px] font-semibold text-white/70 sm:mb-3 sm:text-xs">
+          <span className="truncate">{autoplayBlocked ? "Tap play to start" : sourceLabel}</span>
           <span className="ml-auto tabular-nums text-white/78">{formatClock(currentTime)} / {formatClock(duration)}</span>
         </div>
 
@@ -602,7 +636,7 @@ export function UniversalVideoPlayer({
           <div className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_16px_rgba(255,255,255,0.42)] transition-transform group-hover/seek:scale-110" style={{ left: `${watchedPercent}%` }} />
         </div>
 
-        <div className="relative mt-4 flex items-center gap-3">
+        <div className="relative mt-2 flex items-center gap-1 sm:mt-4 sm:gap-3">
           <button type="button" onClick={togglePlay} className="flex h-11 w-11 items-center justify-center rounded-full text-white transition hover:bg-white/10" aria-label={paused ? "Play" : "Pause"}>
             {paused ? <Play className="h-6 w-6 fill-white" strokeWidth={0} /> : <Pause className="h-6 w-6 fill-white" strokeWidth={0} />}
           </button>
@@ -612,11 +646,11 @@ export function UniversalVideoPlayer({
           <button type="button" onClick={() => seekBy(10)} className="flex h-10 w-10 items-center justify-center rounded-full text-white/86 transition hover:bg-white/10 hover:text-white" aria-label="Forward 10 seconds">
             <RotateCw className="h-5 w-5" />
           </button>
-          <button type="button" onClick={toggleMute} className="flex h-10 w-10 items-center justify-center rounded-full text-white/86 transition hover:bg-white/10 hover:text-white" aria-label={muted ? "Unmute" : "Mute"}>
+          <button type="button" onClick={toggleMute} className="hidden h-10 w-10 items-center justify-center rounded-full text-white/86 transition hover:bg-white/10 hover:text-white sm:flex" aria-label={muted ? "Unmute" : "Mute"}>
             {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
           </button>
           <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(event) => setPlayerVolume(Number(event.target.value))} className="hidden h-1 w-24 accent-white sm:block" aria-label="Volume" />
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-0 sm:gap-2">
             <button type="button" onClick={() => setCaptionsEnabled((value) => !value)} disabled={subtitleTracks.length === 0} className={clsx("flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10", captionsEnabled ? "text-white" : "text-white/55", subtitleTracks.length === 0 && "cursor-not-allowed opacity-35")} aria-label="Captions">
               <Captions className="h-5 w-5" />
             </button>
@@ -629,7 +663,7 @@ export function UniversalVideoPlayer({
           </div>
 
           {settingsOpen ? (
-            <div className="absolute bottom-12 right-0 w-[18rem] rounded-lg border border-white/12 bg-neutral-950/88 p-3 text-sm text-white shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+            <div className="absolute bottom-12 right-0 w-[min(18rem,calc(100vw-1.5rem))] rounded-lg border border-white/12 bg-neutral-950/94 p-3 text-sm text-white shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur-xl">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-[0.18em] text-white/52">Playback</span>
                 <span className="text-xs font-semibold text-white/58">{formatClock(currentTime)}</span>

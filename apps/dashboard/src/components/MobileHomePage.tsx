@@ -80,7 +80,7 @@ export function MobileHomePage({
         </button>
 
         <div className="mt-5 flex gap-2.5">
-          <label className="flex h-14 min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-[#24262c] px-4 text-left text-[15px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] focus-within:ring-1 focus-within:ring-white/16">
+          <label className="flex h-14 min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-[#24262c] px-4 text-left text-base font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] focus-within:ring-1 focus-within:ring-white/16">
             <Search className="h-5 w-5 shrink-0 text-white/48" />
             <input
               value={searchQuery}
@@ -93,7 +93,9 @@ export function MobileHomePage({
                 setExpandedResultId(null);
               }}
               placeholder="Search any movie, series or paste a link…"
-              className="min-w-0 flex-1 bg-transparent text-[15px] text-white outline-none placeholder:text-white/34"
+              enterKeyHint="search"
+              autoCapitalize="none"
+              className="min-w-0 flex-1 bg-transparent text-base text-white outline-none placeholder:text-white/34"
             />
             {searchQuery ? (
               <button

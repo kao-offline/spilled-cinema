@@ -361,7 +361,7 @@ export function ShowDetail({
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_65%_20%,rgba(42,48,40,0.7),rgba(8,9,13,1)_62%)]" />
         )}
 
-        <div className="relative z-20 flex min-h-[100svh] flex-col px-4 pb-8 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
+        <div className="relative z-20 flex min-h-[100svh] flex-col px-4 pb-28 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between px-5 pt-6 sm:px-8 lg:px-12">
             <div className="pointer-events-auto flex items-center gap-3">
               <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to library">

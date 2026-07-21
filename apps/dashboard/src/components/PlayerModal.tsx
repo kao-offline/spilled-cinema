@@ -694,7 +694,7 @@ export function PlayerModal({
 
   return (
     <section
-      className="animate-player-open relative min-h-[100dvh] overflow-hidden bg-black text-white"
+      className="animate-player-open relative h-[100svh] min-h-[100svh] overflow-hidden bg-black text-white lg:min-h-[100dvh]"
       style={playerTransitionKey ? { viewTransitionName: `spilled-hero-${playerTransitionKey}` } : undefined}
     >
       {pageArtwork ? (
@@ -719,7 +719,7 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
-            className="min-h-[100dvh]"
+            className="min-h-[100svh] lg:min-h-[100dvh]"
             subtitleTracks={localSubtitleTracks}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
@@ -737,7 +737,7 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
-            className="min-h-[100dvh]"
+            className="min-h-[100svh] lg:min-h-[100dvh]"
             subtitleTracks={remoteSubtitleTracks}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
@@ -745,7 +745,7 @@ export function PlayerModal({
             onError={handlePlaybackError}
           />
         ) : (
-          <div className="relative flex min-h-[100dvh] items-end px-7 py-24 sm:px-10 lg:px-12">
+          <div className="relative flex min-h-[100svh] items-end px-5 pb-[max(6rem,env(safe-area-inset-bottom))] pt-24 sm:px-10 lg:min-h-[100dvh] lg:px-12 lg:py-24">
             <div className="max-w-2xl">
               <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-full border border-white/12 bg-white/8 shadow-2xl backdrop-blur-md">
                 {resolvingPlayback ? <LoaderCircle className="h-6 w-6 animate-spin text-white/85" /> : <RotateCw className="h-6 w-6 text-white/85" />}
@@ -771,10 +771,10 @@ export function PlayerModal({
           <button onClick={onClose} className="spilled-glass-icon h-10 w-10" aria-label="Back to episode detail">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <img src="/Spilled.svg" alt="Spilled" className="h-9 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)]" />
+          <img src="/Spilled.svg" alt="Spilled" className="hidden h-9 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
         </div>
 
-        <div className="pointer-events-auto absolute left-1/2 top-5 w-[min(74vw,22rem)] -translate-x-1/2">
+        <div className="pointer-events-auto absolute left-16 right-16 top-5 sm:left-1/2 sm:right-auto sm:w-[min(74vw,22rem)] sm:-translate-x-1/2">
           <button
             type="button"
             onClick={() => setEpisodeSelectorOpen((value) => !value)}
@@ -790,7 +790,7 @@ export function PlayerModal({
           </button>
 
           {episodeSelectorOpen ? (
-            <div className="spilled-episode-picker mt-3 w-[min(90vw,33rem)] p-3">
+            <div className="spilled-episode-picker absolute left-1/2 mt-3 w-[min(92vw,33rem)] -translate-x-1/2 p-3">
               <div className="grid max-h-[23rem] grid-cols-[3.75rem_minmax(0,1fr)] gap-3">
                 <div className="spilled-season-rail">
                   {selectorSeasons.map(([seasonNumber]) => (

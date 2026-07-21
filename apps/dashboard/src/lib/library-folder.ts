@@ -4,6 +4,10 @@ type BrowserWindowWithPicker = Window & {
   showDirectoryPicker?: (options?: { mode?: "read" | "readwrite" }) => Promise<FileSystemDirectoryHandle>;
 };
 
+type StorageManagerWithDirectory = StorageManager & {
+  getDirectory?: () => Promise<FileSystemDirectoryHandle>;
+};
+
 type PermissionCapableHandle = FileSystemDirectoryHandle & {
   queryPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
   requestPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>;
@@ -19,6 +23,24 @@ const HANDLE_KEY = "library-root";
 const APP_DIR_NAME = "spilled-library";
 const VAULT_DIR_NAME = "vault";
 const SNAPSHOT_FILE_NAME = "library-state.json";
+const INTERNAL_VAULT_KEY = "spilled-mobile-vault-enabled";
+
+function isInternalVaultSupported() {
+  return typeof navigator !== "undefined" && typeof (navigator.storage as StorageManagerWithDirectory | undefined)?.getDirectory === "function";
+}
+
+function isInternalVaultEnabled() {
+  return typeof localStorage !== "undefined" && localStorage.getItem(INTERNAL_VAULT_KEY) === "1";
+}
+
+async function getInternalVaultRoot() {
+  const storage = navigator.storage as StorageManagerWithDirectory;
+  return storage.getDirectory?.() ?? null;
+}
+
+function vaultFolderName(handle: FileSystemDirectoryHandle) {
+  return isInternalVaultEnabled() ? "Mobile Vault" : handle.name;
+}
 
 function isNativeVaultAvailable() {
   return typeof window !== "undefined" && window.spilledNative?.kind === "native";
@@ -212,6 +234,9 @@ function withTransaction<T>(
 }
 
 async function getStoredHandle(): Promise<FileSystemDirectoryHandle | null> {
+  if (isInternalVaultEnabled() && isInternalVaultSupported()) {
+    return getInternalVaultRoot();
+  }
   try {
     const db = await openDb();
     return await withTransaction<FileSystemDirectoryHandle | null>(db, "readonly", (store, resolve, reject) => {
@@ -273,6 +298,8 @@ export async function clearStoredFolderHandle(): Promise<void> {
     return;
   }
 
+  localStorage.removeItem(INTERNAL_VAULT_KEY);
+
   const db = await openDb();
   await withTransaction<void>(db, "readwrite", (store, resolve, reject) => {
     const request = store.delete(HANDLE_KEY);
@@ -287,7 +314,7 @@ export function isFolderConnectionSupported(): boolean {
   if (isNativeVaultAvailable()) {
     return true;
   }
-  return typeof window !== "undefined" && "showDirectoryPicker" in window && "indexedDB" in window;
+  return typeof window !== "undefined" && "indexedDB" in window && ("showDirectoryPicker" in window || isInternalVaultSupported());
 }
 
 async function queryHandlePermission(
@@ -363,7 +390,15 @@ export async function connectLibraryFolder(): Promise<{ name: string }> {
 
   const picker = (window as BrowserWindowWithPicker).showDirectoryPicker;
   if (!picker) {
-    throw new Error("Folder connection is not supported in this browser.");
+    const internalRoot = await getInternalVaultRoot();
+    if (!internalRoot) {
+      throw new Error("Vault storage is not supported in this browser.");
+    }
+    localStorage.setItem(INTERNAL_VAULT_KEY, "1");
+    await ensureHandleWritableAccess(internalRoot);
+    clearVaultErrors();
+    recordVaultInfo("connect", "Connected mobile device vault.", { folderName: "Mobile Vault" });
+    return { name: "Mobile Vault" };
   }
 
   const handle = await picker();
@@ -371,8 +406,8 @@ export async function connectLibraryFolder(): Promise<{ name: string }> {
 
   await setStoredHandle(handle);
   clearVaultErrors();
-  recordVaultInfo("connect", "Connected vault folder.", { folderName: handle.name });
-  return { name: handle.name };
+  recordVaultInfo("connect", "Connected vault folder.", { folderName: vaultFolderName(handle) });
+  return { name: vaultFolderName(handle) };
 }
 
 export async function requestStoredFolderAccess(): Promise<{ name: string }> {
@@ -397,8 +432,8 @@ export async function requestStoredFolderAccess(): Promise<{ name: string }> {
   await ensureHandleWritableAccess(handle, { requestPermission: true });
 
   clearVaultErrors();
-  recordVaultInfo("reconnect_access", "Restored access to stored vault folder.", { folderName: handle.name });
-  return { name: handle.name };
+  recordVaultInfo("reconnect_access", "Restored access to stored vault folder.", { folderName: vaultFolderName(handle) });
+  return { name: vaultFolderName(handle) };
 }
 
 export async function getConnectedLibraryFolderName(): Promise<string | null> {
@@ -416,7 +451,7 @@ export async function getConnectedLibraryFolderName(): Promise<string | null> {
     return null;
   }
 
-  return handle.name;
+  return vaultFolderName(handle);
 }
 
 export async function getVaultStatus(): Promise<VaultStatus> {
@@ -473,7 +508,7 @@ export async function getVaultStatus(): Promise<VaultStatus> {
       connected: false,
       requiresUserAction: true,
       handleStored: true,
-      folderName: handle.name,
+      folderName: vaultFolderName(handle),
       permission: access.read,
       lastError,
     };
@@ -486,7 +521,7 @@ export async function getVaultStatus(): Promise<VaultStatus> {
       connected: true,
       requiresUserAction: false,
       handleStored: true,
-      folderName: handle.name,
+      folderName: vaultFolderName(handle),
       permission: access.write === "granted" || access.read === "granted" ? "granted" : access.read,
       lastError,
     };
@@ -499,7 +534,7 @@ export async function getVaultStatus(): Promise<VaultStatus> {
       connected: true,
       requiresUserAction: false,
       handleStored: true,
-      folderName: handle.name,
+      folderName: vaultFolderName(handle),
       permission: access.write === "granted" || access.read === "granted" ? "granted" : access.read,
       lastError,
     };
@@ -511,7 +546,7 @@ export async function getVaultStatus(): Promise<VaultStatus> {
     connected: true,
     requiresUserAction: false,
     handleStored: true,
-    folderName: handle.name,
+    folderName: vaultFolderName(handle),
     permission: access.write === "granted" || access.read === "granted" ? "granted" : access.read,
     lastError,
   };
@@ -602,8 +637,8 @@ export async function requireWritableLibraryFolder(): Promise<{ name: string }> 
   }
 
   await getVaultDirectory(root);
-  recordVaultInfo("status", "Writable vault folder is ready.", { folderName: root.name });
-  return { name: root.name };
+  recordVaultInfo("status", "Writable vault folder is ready.", { folderName: vaultFolderName(root) });
+  return { name: vaultFolderName(root) };
 }
 
 export async function writeBlobToLibraryVault(fileName: string, blob: Blob): Promise<{ fileName: string; folderName: string }> {
@@ -636,9 +671,9 @@ export async function writeBlobToLibraryVault(fileName: string, blob: Blob): Pro
     await writable.close();
   }
 
-  recordVaultInfo("write_blob", "Wrote blob to vault.", { fileName: safeName, folderName: root.name });
+  recordVaultInfo("write_blob", "Wrote blob to vault.", { fileName: safeName, folderName: vaultFolderName(root) });
   recordVaultDiagnostics({ lastWriteError: null });
-  return { fileName: safeName, folderName: root.name };
+  return { fileName: safeName, folderName: vaultFolderName(root) };
 }
 
 export async function writeResponseToLibraryVault(
@@ -708,9 +743,9 @@ export async function writeResponseToLibraryVault(
   }
 
   await writable.close();
-  recordVaultInfo("write_response", "Streamed response into vault.", { fileName: safeName, folderName: root.name });
+  recordVaultInfo("write_response", "Streamed response into vault.", { fileName: safeName, folderName: vaultFolderName(root) });
   recordVaultDiagnostics({ lastWriteError: null });
-  return { fileName: safeName, folderName: root.name };
+  return { fileName: safeName, folderName: vaultFolderName(root) };
 }
 
 export async function getLibraryVaultFileObjectUrl(fileName: string): Promise<string | null> {
@@ -728,7 +763,7 @@ export async function getLibraryVaultFileObjectUrl(fileName: string): Promise<st
     const vaultDir = await getVaultDirectory(root);
     const fileHandle = await vaultDir.getFileHandle(safeName);
     const file = await fileHandle.getFile();
-    recordVaultInfo("read_file", "Created vault file object URL.", { fileName: safeName, folderName: root.name });
+    recordVaultInfo("read_file", "Created vault file object URL.", { fileName: safeName, folderName: vaultFolderName(root) });
     recordVaultDiagnostics({ lastReadError: null });
     return URL.createObjectURL(file);
   } catch (error) {
@@ -902,7 +937,7 @@ export async function listLibraryVaultArtifacts(): Promise<{ episodeIds: string[
   }
 
   recordVaultInfo("list_artifacts", "Listed vault artifacts.", {
-    folderName: root.name,
+    folderName: vaultFolderName(root),
     fileCount: fileNames.length,
     episodeCount: episodeIds.size,
   });
@@ -959,7 +994,7 @@ export async function readVaultSnapshot(): Promise<VaultSnapshot | null> {
       return null;
     }
 
-    recordVaultInfo("read_snapshot", "Read vault snapshot.", { folderName: root.name });
+    recordVaultInfo("read_snapshot", "Read vault snapshot.", { folderName: vaultFolderName(root) });
     recordVaultDiagnostics({ lastReadError: null });
     return {
       version: 1,
@@ -1006,7 +1041,7 @@ export async function writeVaultSnapshot(snapshot: VaultSnapshot): Promise<void>
     } finally {
       await writable.close();
     }
-    recordVaultInfo("write_snapshot", "Wrote vault snapshot.", { folderName: root.name });
+    recordVaultInfo("write_snapshot", "Wrote vault snapshot.", { folderName: vaultFolderName(root) });
     recordVaultDiagnostics({ lastWriteError: null });
   } catch (error) {
     recordVaultWriteError("write_snapshot", error);
