@@ -510,13 +510,26 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
   };
 
   if (["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) && !window.spilledNative?.serverUrl) {
-    const directResponse = await fetch("/api/player/playback-resolve", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    let directResponse: Response;
+    try {
+      directResponse = await fetch("/api/player/playback-resolve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error("Clean playback resolution timed out. Loading the provider player instead.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
     const data = await directResponse.json().catch(() => null) as PlaybackResolvePayload | null;
     if (!directResponse.ok) {
       const error = Object.assign(new Error(data?.error ?? "Universal playback is unavailable for this episode."), {
@@ -527,9 +540,20 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     return handlePayload(data, window.location.origin);
   }
 
-  const response = await requestRuntimeJson<PlaybackResolvePayload>("/api/player/playback-resolve", {
-    method: "POST",
-    body: payload,
+  let timeout: number | undefined;
+  const response = await Promise.race([
+    requestRuntimeJson<PlaybackResolvePayload>("/api/player/playback-resolve", {
+      method: "POST",
+      body: payload,
+    }),
+    new Promise<never>((_resolve, reject) => {
+      timeout = window.setTimeout(
+        () => reject(new Error("Clean playback resolution timed out. Loading the provider player instead.")),
+        15_000,
+      );
+    }),
+  ]).finally(() => {
+    if (timeout !== undefined) window.clearTimeout(timeout);
   });
 
   if (!response.ok) {

@@ -413,6 +413,24 @@ function uniquePlayerAlias(player: LibraryEpisode["players"][number], players: L
   return candidate;
 }
 
+function normalizeEpisodePlayerAliases(episode: LibraryEpisode): LibraryEpisode {
+  const normalizedPlayers: LibraryEpisode["players"] = [];
+  for (const player of episode.players ?? []) {
+    normalizedPlayers.push({
+      ...player,
+      alias: uniquePlayerAlias(player, normalizedPlayers) as PlayerAlias,
+    });
+  }
+
+  return {
+    ...episode,
+    players: normalizedPlayers,
+    selectedPlayerAlias: normalizedPlayers.some((player) => player.alias === episode.selectedPlayerAlias)
+      ? episode.selectedPlayerAlias
+      : normalizedPlayers[0]?.alias ?? episode.selectedPlayerAlias,
+  };
+}
+
 function mergeEpisodePlayers(existingPlayers: LibraryEpisode["players"], nextPlayers: LibraryEpisode["players"]) {
   const players = [...existingPlayers];
   const refreshedBombujAliases = new Set<string>();
@@ -573,9 +591,9 @@ function mergeDuplicateEpisodes(episodes: LibraryEpisode[]) {
   for (const episode of episodes) {
     const key = episodeMergeKey(episode);
     const existingEpisode = mergedEpisodes.get(key);
-    mergedEpisodes.set(key, existingEpisode ? mergeImportedEpisode(existingEpisode, episode) : episode);
+    mergedEpisodes.set(key, existingEpisode ? mergeImportedEpisode(existingEpisode, episode) : normalizeEpisodePlayerAliases(episode));
   }
-  return Array.from(mergedEpisodes.values()).sort((left, right) =>
+  return Array.from(mergedEpisodes.values()).map(normalizeEpisodePlayerAliases).sort((left, right) =>
     left.seasonNumber - right.seasonNumber ||
     (left.episodeNumber ?? 0) - (right.episodeNumber ?? 0) ||
     left.importedAt - right.importedAt

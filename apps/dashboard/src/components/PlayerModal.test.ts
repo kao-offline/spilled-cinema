@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("universal playback modal policy", () => {
-  it("does not render provider iframes as playback", () => {
+  it("keeps provider playback as a last resort when direct extraction fails", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
-    expect(source).not.toContain("<iframe");
+    expect(source).toContain("<iframe");
+    expect(source).toContain("activeProviderFrameUrl");
+    expect(source).toContain("providerInteractionUnlocked");
     expect(source).not.toContain('playback?.streamType === "embed"');
     expect(source).not.toContain("sandbox=");
   });
@@ -24,5 +26,11 @@ describe("universal playback modal policy", () => {
     expect(source).toContain("getLibraryVaultFileObjectUrl");
     expect(source).toContain("readCachedPlayerUrl");
     expect(source).toContain("writeCachedPlayerUrl");
+  });
+
+  it("pins the player to the mobile viewport and respects the safe-area inset", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
+    expect(source).toContain("max-lg:fixed max-lg:inset-0");
+    expect(source).toContain("env(safe-area-inset-top)");
   });
 });

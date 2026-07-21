@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "eslint .",
+    "audit:vault-playback": "node scripts/audit-vault-playback.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

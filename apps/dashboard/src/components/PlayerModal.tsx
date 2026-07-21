@@ -5,7 +5,7 @@ import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSo
 import { LanguageBadge } from "./LanguageBadge";
 import { getCanonicalLanguageKey, getCanonicalLanguageLabel, getLanguagePresentation } from "../lib/language";
 import { formatEpisodeTitle } from "../lib/episode-title";
-import { buildRuntimeUrl } from "../lib/local-api";
+import { buildRuntimeUrl, requestRuntimeJson } from "../lib/local-api";
 import { resolveUniversalPlayback, type PlaybackResolveFailure, type PlaybackResolveResult } from "../lib/full-download-client";
 import { getLibraryVaultFileObjectUrl } from "../lib/library-folder";
 import { readCachedPlayerFailure, readCachedPlayerUrl, removeCachedPlayerUrl, writeCachedPlayerFailure, writeCachedPlayerUrl } from "../lib/player-url-cache";
@@ -230,6 +230,9 @@ export function PlayerModal({
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
+  const [providerFrame, setProviderFrame] = useState<{ playerAlias: PlayerAlias; url: string } | null>(null);
+  const [providerFrameLoaded, setProviderFrameLoaded] = useState(false);
+  const [providerInteractionUnlocked, setProviderInteractionUnlocked] = useState(false);
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
   const lastProgressSaveRef = useRef(0);
@@ -326,6 +329,12 @@ export function PlayerModal({
     backgroundResolveKeysRef.current = new Set();
     lastProgressSaveRef.current = 0;
   }, [episode?.id]);
+
+  useEffect(() => {
+    setProviderFrame(null);
+    setProviderFrameLoaded(false);
+    setProviderInteractionUnlocked(false);
+  }, [activePlayer?.alias, activePlayer?.embedUrl]);
 
   useEffect(() => {
     if (!ENABLE_PLAYER_BACKGROUND_DISCOVERY) return;
@@ -506,36 +515,6 @@ export function PlayerModal({
       writeCachedPlayerFailure("playback", playbackCacheKey(selected), selectedMessage);
       setPlayerStatuses((prev) => ({ ...prev, [selected.alias]: { status: "failed", error: selectedMessage } }));
       onResolvePlayerFailure?.(targetEpisode.id, selected, selectedMessage);
-
-      const sameLanguageFallbacks = targetEpisode.players.filter((player) =>
-        player.alias !== selected.alias &&
-        !isLocalPlayer(player) &&
-        getCanonicalLanguageKey(player.language) === getCanonicalLanguageKey(selected.language)
-      );
-      const remainingFallbacks = targetEpisode.players.filter((player) =>
-        player.alias !== selected.alias &&
-        !isLocalPlayer(player) &&
-        !sameLanguageFallbacks.some((sameLanguage) => sameLanguage.alias === player.alias)
-      );
-      const fallbackPlayers = [...sameLanguageFallbacks, ...remainingFallbacks];
-      for (const player of fallbackPlayers) {
-        try {
-          const result = await resolveSinglePlayer(targetEpisode, player, background);
-          if (result) {
-            if (!background) {
-              setLocalSelectedAlias(null);
-              onSelectPlayer(targetEpisode.id, player.alias);
-            }
-            return result;
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          writeCachedPlayerFailure("playback", playbackCacheKey(player), message);
-          setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "failed", error: message } }));
-          onResolvePlayerFailure?.(targetEpisode.id, player, message);
-        }
-      }
-
       throw selectedError;
     }
   }
@@ -581,6 +560,46 @@ export function PlayerModal({
       canceled = true;
     };
   }, [effectiveEpisode?.id, activePlayer?.alias, activeIsLocal, playbackRetryNonce]);
+
+  useEffect(() => {
+    if (!playbackError || !activePlayer || activeIsLocal) {
+      setProviderFrame(null);
+      return;
+    }
+
+    let canceled = false;
+    const loadProviderFrame = async () => {
+      const signature = `${activePlayer.provider} ${activePlayer.embedUrl}`.toLowerCase();
+      const needsWrapperResolution = /(?:^|[^a-z])(2embed|multiembed|moviesclub|primewire)(?:[^a-z]|$)/i.test(signature);
+      let frameUrl = activePlayer.embedUrl;
+
+      if (needsWrapperResolution) {
+        try {
+          const result = await requestRuntimeJson<{ embedUrl?: string }>("/api/player/resolve", {
+            method: "POST",
+            body: {
+              embedUrl: activePlayer.embedUrl,
+              provider: activePlayer.provider,
+            },
+          });
+          if (result.ok && result.data?.embedUrl) {
+            frameUrl = result.data.embedUrl;
+          }
+        } catch {
+          // Keep the original URL when a wrapper cannot be resolved.
+        }
+      }
+
+      if (!canceled) {
+        setProviderFrame({ playerAlias: activePlayer.alias, url: frameUrl });
+      }
+    };
+
+    void loadProviderFrame();
+    return () => {
+      canceled = true;
+    };
+  }, [activeIsLocal, activePlayer, playbackError]);
 
   useEffect(() => {
     if (!effectiveEpisode) return;
@@ -691,10 +710,11 @@ export function PlayerModal({
   const activeSelectorEpisodes = selectorSeasons.find(([season]) => season === activeSelectorSeason)?.[1] ?? selectorEpisodes;
 
   const playerTransitionKey = show?.slug ?? effectiveEpisode.showSlug ?? null;
+  const activeProviderFrameUrl = providerFrame?.playerAlias === activePlayer.alias ? providerFrame.url : null;
 
   return (
     <section
-      className="animate-player-open relative h-[100svh] min-h-[100svh] overflow-hidden bg-black text-white lg:min-h-[100dvh]"
+      className="animate-player-open relative h-[100svh] min-h-[100svh] overflow-hidden bg-black text-white max-lg:fixed max-lg:inset-0 max-lg:z-[120] lg:min-h-[100dvh]"
       style={playerTransitionKey ? { viewTransitionName: `spilled-hero-${playerTransitionKey}` } : undefined}
     >
       {pageArtwork ? (
@@ -744,6 +764,40 @@ export function PlayerModal({
             onProgress={handlePlayerProgress}
             onError={handlePlaybackError}
           />
+        ) : activeProviderFrameUrl ? (
+          <div className="relative h-[100svh] min-h-[100svh] w-full bg-black lg:h-[100dvh] lg:min-h-[100dvh]">
+            <iframe
+              key={`${activePlayer.alias}:${activeProviderFrameUrl}`}
+              title={`${pageTitle} provider player`}
+              src={activeProviderFrameUrl}
+              className={clsx("h-full w-full border-0", !providerInteractionUnlocked && "pointer-events-none")}
+              allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+              allowFullScreen
+              referrerPolicy="no-referrer"
+              onLoad={() => setProviderFrameLoaded(true)}
+            />
+            {!providerFrameLoaded ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/72 backdrop-blur-sm">
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <LoaderCircle className="h-7 w-7 animate-spin text-white/85" />
+                  <div className="text-sm font-black text-white">Loading provider fallback…</div>
+                </div>
+              </div>
+            ) : !providerInteractionUnlocked ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/38 px-5 backdrop-blur-[2px]">
+                <button
+                  type="button"
+                  onClick={() => setProviderInteractionUnlocked(true)}
+                  className="rounded-full border border-white/14 bg-white px-6 py-3.5 text-sm font-black text-black shadow-2xl transition active:scale-[0.98] sm:hover:bg-orange-200"
+                >
+                  Start provider player
+                </button>
+              </div>
+            ) : null}
+            <div className="pointer-events-none absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-black/72 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-white/58 backdrop-blur-xl">
+              Provider fallback · {activePlayer.label}
+            </div>
+          </div>
         ) : (
           <div className="relative flex min-h-[100svh] items-end px-5 pb-[max(6rem,env(safe-area-inset-bottom))] pt-24 sm:px-10 lg:min-h-[100dvh] lg:px-12 lg:py-24">
             <div className="max-w-2xl">
@@ -766,7 +820,7 @@ export function PlayerModal({
         )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between px-4 pt-5 sm:px-7 lg:px-10">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between px-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-7 lg:px-10 lg:pt-5">
         <div className="pointer-events-auto flex items-center gap-2.5">
           <button onClick={onClose} className="spilled-glass-icon h-10 w-10" aria-label="Back to episode detail">
             <ArrowLeft className="h-4 w-4" />
@@ -774,7 +828,7 @@ export function PlayerModal({
           <img src="/Spilled.svg" alt="Spilled" className="hidden h-9 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
         </div>
 
-        <div className="pointer-events-auto absolute left-16 right-16 top-5 sm:left-1/2 sm:right-auto sm:w-[min(74vw,22rem)] sm:-translate-x-1/2">
+        <div className="pointer-events-auto absolute left-16 right-16 top-[max(1.25rem,env(safe-area-inset-top))] sm:left-1/2 sm:right-auto sm:w-[min(74vw,22rem)] sm:-translate-x-1/2 lg:top-5">
           <button
             type="button"
             onClick={() => setEpisodeSelectorOpen((value) => !value)}

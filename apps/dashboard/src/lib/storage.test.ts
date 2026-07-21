@@ -195,6 +195,24 @@ describe("library storage imports", () => {
     expect(players.find((player) => player.provider === "vidsrc")?.alias).not.toBe("bombuj-6");
   });
 
+  it("repairs duplicate legacy player aliases without dropping sources", () => {
+    const show = showFixture({ slug: "legacy-aliases" });
+    show.episodes[0].players = [
+      { ...show.episodes[0].players[0], alias: "file", provider: "filemoon", embedUrl: "https://filemoon.example/one" },
+      { ...show.episodes[0].players[0], alias: "file", provider: "vidmoly", embedUrl: "https://vidmoly.example/two" },
+      { ...show.episodes[0].players[0], alias: "file", provider: "mixdrop", embedUrl: "https://mixdrop.example/three" },
+    ];
+    show.episodes[0].selectedPlayerAlias = "file";
+
+    upsertImportedShow(show);
+
+    const episode = readLibraryState().shows[0].episodes[0];
+    expect(episode.players).toHaveLength(3);
+    expect(new Set(episode.players.map((player) => player.alias)).size).toBe(3);
+    expect(episode.players.map((player) => player.alias)).toEqual(["file", "file-vidmoly", "file-mixdrop"]);
+    expect(episode.selectedPlayerAlias).toBe("file");
+  });
+
   it("replaces stale failed resolution when the same Bombuj slot gets a fresh URL", () => {
     const oldShow = showFixture({ slug: "bombuj-avatar", title: "Avatar", years: "2009" });
     oldShow.episodes[0].players[0] = {
