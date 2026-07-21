@@ -375,14 +375,23 @@ export async function getExploreFeed(input: {
     input.filters.personQuery?.trim() ? searchBombujPeople(input.filters.personQuery) : Promise.resolve([]),
   ]);
 
-  let items = dedupeAndMerge([
-    ...bombMovies.items,
-    ...bombSeries.items,
-    ...svetSections.items,
-    ...bombujPeople,
-  ]);
+  const sourceItems = input.filters.personQuery?.trim()
+    ? [
+        ...bombujPeople,
+        ...bombMovies.items,
+        ...bombSeries.items,
+        ...svetSections.items,
+      ]
+    : [
+        ...bombMovies.items,
+        ...bombSeries.items,
+        ...svetSections.items,
+        ...bombujPeople,
+      ];
 
-  items = await hydrateItems(items.slice(0, 180));
+  let items = dedupeAndMerge(sourceItems);
+
+  items = await hydrateItems(items.slice(0, input.filters.personQuery?.trim() ? 360 : 180));
   items = attachVaultState(items, input.librarySnapshot);
   items = items.filter((item) => !isLowQualityExploreItem(item));
 

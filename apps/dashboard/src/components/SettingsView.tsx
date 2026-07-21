@@ -94,9 +94,9 @@ function Panel({
   className?: string;
 }) {
   return (
-    <section className={clsx("rounded-2xl border border-white/8 bg-white/[0.035] p-4", className)}>
-      <div className="mb-3 flex flex-col gap-1">
-        <h3 className="text-base font-semibold tracking-tight text-white">{title}</h3>
+    <section className={clsx("rounded-[1.4rem] border border-white/[0.08] bg-white/[0.025] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.16)] sm:p-6", className)}>
+      <div className="mb-5 flex flex-col gap-1">
+        <h3 className="text-base font-bold tracking-tight text-white">{title}</h3>
         {hint ? <p className="max-w-2xl text-sm leading-6 text-white/48">{hint}</p> : null}
       </div>
       {children}
@@ -114,7 +114,7 @@ function PreferenceRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 border-t border-white/8 py-3 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 border-t border-white/[0.07] py-4 first:border-t-0 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="text-sm font-semibold text-white">{title}</div>
         {hint ? <div className="mt-1 max-w-xl text-sm leading-6 text-white/45">{hint}</div> : null}
@@ -159,15 +159,16 @@ function Toggle({
       type="button"
       onClick={onToggle}
       className={clsx(
-        "relative inline-flex h-7 w-12 items-center rounded-full transition-colors",
-        checked ? "bg-orange-500" : "bg-white/12",
+        "relative inline-flex h-7 w-12 items-center rounded-full border transition",
+        checked ? "border-white bg-white" : "border-white/10 bg-white/[0.08]",
       )}
       aria-label={label}
       aria-pressed={checked}
     >
       <span
         className={clsx(
-          "inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+          "inline-block h-5 w-5 rounded-full shadow-sm transition-transform",
+          checked ? "bg-black" : "bg-white/70",
           checked ? "translate-x-6" : "translate-x-1",
         )}
       />
@@ -185,14 +186,14 @@ function SegmentedChoice<T extends string | number>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="inline-flex rounded-full border border-white/8 bg-black/20 p-1">
+    <div className="inline-flex rounded-full border border-white/[0.09] bg-black/25 p-1">
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           onClick={() => onChange(option.value)}
           className={clsx(
-            "rounded-full px-3 py-1.5 text-xs font-bold transition-colors",
+            "rounded-full px-3 py-1.5 text-xs font-bold transition",
             value === option.value ? "bg-white text-black" : "text-white/55 hover:text-white",
           )}
         >
@@ -220,8 +221,8 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       className={clsx(
-        "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-55",
-        variant === "primary" ? "bg-white text-black hover:bg-orange-200" : "bg-white/10 text-white hover:bg-white/18",
+        "inline-flex items-center justify-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-55",
+        variant === "primary" ? "border-white bg-white text-black hover:bg-white/88" : "border-white/[0.08] bg-white/[0.055] text-white/78 hover:border-white/15 hover:bg-white/[0.1] hover:text-white",
       )}
     >
       {children}
@@ -239,7 +240,7 @@ function SourceRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-[3.5rem] min-w-0 flex-col gap-2 rounded-2xl border border-white/8 bg-black/18 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex min-h-[4rem] min-w-0 flex-col gap-3 rounded-2xl border border-white/[0.07] bg-black/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold text-white">{title}</div>
         {hint ? <div className="mt-1 line-clamp-2 text-sm leading-5 text-white/42">{hint}</div> : null}
@@ -893,12 +894,13 @@ export function SettingsView({
   }
 
   return (
-    <div className="relative z-10 animate-fade-in px-4 py-6 pb-20 lg:px-6" style={{ zoom: 0.85 }}>
+    <div className="relative z-10 animate-fade-in px-4 pb-28 pt-4 sm:px-6 sm:py-7 sm:pb-24 lg:px-10 lg:py-10">
       <div className="mx-auto max-w-6xl">
-        <header className="mb-6 flex flex-col gap-4 border-b border-white/8 pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <header className="mb-5 flex flex-col gap-4 border-b border-white/[0.07] pb-5 sm:mb-7 sm:gap-5 sm:pb-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="text-[10px] font-black uppercase tracking-[0.28em] text-white/34">Preferences</div>
-            <h2 className="mt-2 text-3xl font-bold tracking-tight text-white">Settings</h2>
+            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30">Spilled preferences</div>
+            <h2 className="mt-1 text-2xl font-black tracking-[-0.035em] text-white sm:mt-2 sm:text-4xl">Settings</h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-white/42">Playback, storage, sources, and private infrastructure in one place.</p>
           </div>
           <nav className="flex gap-2 overflow-x-auto pb-1">
             {tabs.map((tab) => (
@@ -907,8 +909,8 @@ export function SettingsView({
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
                 className={clsx(
-                  "inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full px-4 text-sm font-semibold transition-colors",
-                  activeTab === tab.id ? "bg-white text-black" : "bg-white/8 text-white/58 hover:bg-white/12 hover:text-white",
+                  "inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition",
+                  activeTab === tab.id ? "border-white bg-white text-black" : "border-white/[0.07] bg-white/[0.035] text-white/52 hover:border-white/15 hover:bg-white/[0.07] hover:text-white",
                 )}
               >
                 <tab.icon className="h-4 w-4" />

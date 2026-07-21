@@ -1,0 +1,12 @@
+node_modules/
+data/
+*.db
+*.db-wal
+*.db-shm
+sample.html
+main.js
+search-sample.html
+test-*.mjs
+
+gcp-key.json
+.env

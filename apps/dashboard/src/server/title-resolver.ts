@@ -347,6 +347,8 @@ export async function importResolvedTitle(input: {
     posterUrl: show.posterUrl ?? resolvedTitle.artwork.posterUrl ?? null,
     backdropUrl: show.backdropUrl ?? resolvedTitle.artwork.backdropUrl ?? null,
     clearLogoUrl: show.clearLogoUrl ?? resolvedTitle.artwork.clearLogoUrl ?? null,
+    canonicalIdentity: resolvedTitle.identity,
+    providerMatches: resolvedTitle.providerMatches,
   };
 
   return {

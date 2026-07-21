@@ -23,9 +23,12 @@ import {
   importTitleItem,
   listDownloads,
   loadIntegrationCatalog,
+  checkVidkingAvailabilityItems,
   refreshArtwork,
   resolveTitleItem,
   resolveBrowserDownloadViaNode,
+  resolveCleanPlaybackViaNode,
+  resolvePlaybackViaNode,
   searchArtwork,
   searchNode,
   searchProviderModuleItems,
@@ -33,13 +36,12 @@ import {
   startDownload,
   verifySvetSerialuCredentials,
 } from "../../../packages/node-client/src/index";
-import type { ResolvedTitle } from "../../dashboard/src/lib/types";
+import type { ImportedShow, ResolvedTitle } from "../../dashboard/src/lib/types";
 import type { SvetSerialuCredentials } from "../../dashboard/src/server/svetserialu";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "./player-resolver";
-import { searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
+import { composeHomepageBanner, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
 import { resolveArtworkApiKeys } from "../../dashboard/src/server/shared-artwork-api-keys";
 import {
-  ensureSeekableDownloadFile,
   findEpisodeDownloadByFileNameFast,
   findEpisodeDownloadFast,
   findSubtitleFilePath,
@@ -162,6 +164,93 @@ function parseYearHint(value: string | null | undefined) {
   return match?.[0] ?? undefined;
 }
 
+type ArtworkSourcesInput = { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
+type ArtworkApiKeysInput = { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+type ArtworkMediaType = "movie" | "tv";
+type ArtworkBundle = {
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  bannerUrl?: string | null;
+  clearLogoUrl?: string | null;
+};
+
+function inferArtworkMediaType(show: ImportedShow): ArtworkMediaType {
+  return show.mediaType === "movie" || (show.episodes.length === 1 && show.episodes[0]?.episodeCode === "movie")
+    ? "movie"
+    : "tv";
+}
+
+function shouldRepairArtworkIdentity(show: ImportedShow) {
+  return show.episodes.length === 1 && show.mediaType !== "movie";
+}
+
+function alternateArtworkMediaType(mediaType: ArtworkMediaType): ArtworkMediaType {
+  return mediaType === "movie" ? "tv" : "movie";
+}
+
+function scoreArtworkBundle(artwork: ArtworkBundle, show: ImportedShow) {
+  let score = 0;
+  if (artwork.posterUrl && artwork.posterUrl !== show.posterUrl) score += 1;
+  if (artwork.backdropUrl && artwork.backdropUrl !== show.backdropUrl) score += 1;
+  if (artwork.bannerUrl && artwork.bannerUrl !== show.bannerUrl) score += 1;
+  if (artwork.clearLogoUrl && artwork.clearLogoUrl !== show.clearLogoUrl) score += 1;
+  return score;
+}
+
+async function refreshArtworkForImportedShow(input: {
+  show: ImportedShow;
+  sources?: ArtworkSourcesInput;
+  apiKeys?: ArtworkApiKeysInput;
+}) {
+  const requestArtwork = (mediaType: ArtworkMediaType) => refreshArtwork({
+    mediaType,
+    title: input.show.title,
+    altTitle: input.show.altTitle ?? null,
+    yearHint: parseYearHint(input.show.years),
+    description: input.show.description ?? null,
+    currentPosterUrl: input.show.posterUrl ?? null,
+    currentBackdropUrl: input.show.backdropUrl ?? null,
+    currentBannerUrl: input.show.bannerUrl ?? null,
+    currentClearLogoUrl: input.show.clearLogoUrl ?? null,
+    externalIds: input.show.externalIds,
+    sources: input.sources,
+    apiKeys: input.apiKeys,
+  });
+
+  const primaryMediaType = inferArtworkMediaType(input.show);
+  const primaryArtwork = await requestArtwork(primaryMediaType);
+  let artwork = primaryArtwork;
+
+  if (shouldRepairArtworkIdentity(input.show)) {
+    const alternateArtwork = await requestArtwork(alternateArtworkMediaType(primaryMediaType));
+    artwork = scoreArtworkBundle(alternateArtwork, input.show) > scoreArtworkBundle(primaryArtwork, input.show)
+      ? alternateArtwork
+      : primaryArtwork;
+  }
+
+  return {
+    ...input.show,
+    posterUrl: artwork.posterUrl ?? input.show.posterUrl ?? null,
+    backdropUrl: artwork.backdropUrl ?? input.show.backdropUrl ?? null,
+    bannerUrl: artwork.bannerUrl ?? input.show.bannerUrl ?? null,
+    clearLogoUrl: artwork.clearLogoUrl ?? input.show.clearLogoUrl ?? null,
+  };
+}
+
+async function enrichAndPersistImportedShow(input: {
+  show: ImportedShow;
+  sources?: ArtworkSourcesInput;
+  apiKeys?: ArtworkApiKeysInput;
+}) {
+  try {
+    const show = await refreshArtworkForImportedShow(input);
+    await getNodeRuntime().persistImportedShow(show.slug, show.title, show);
+    return show;
+  } catch {
+    return input.show;
+  }
+}
+
 export function resolveDownloadByteRange(fileSize: number, rangeHeader: string | undefined) {
   if (!rangeHeader) {
     return {
@@ -264,6 +353,148 @@ async function assertSafeProxyTarget(parsed: URL) {
 function getProxyMaxBytes() {
   const configured = Number.parseInt(process.env.SPILLED_PROXY_MAX_BYTES || "", 10);
   return Number.isFinite(configured) && configured > 0 ? configured : 8 * 1024 * 1024 * 1024;
+}
+
+function isHlsPlaylistResponse(url: URL, contentType: string) {
+  return /\.m3u8(?:$|[?#])/i.test(url.pathname + url.search) ||
+    /\/hls3\/[^\s"'<>]+\.txt(?:$|[?#])/i.test(url.pathname + url.search) ||
+    /(?:mpegurl|application\/vnd\.apple\.mpegurl|audio\/x-mpegurl)/i.test(contentType);
+}
+
+function isCacheableHlsAsset(url: URL, contentType: string) {
+  return isHlsPlaylistResponse(url, contentType) ||
+    /\.(?:ts|m4s|aac|vtt)(?:$|[?#])/i.test(url.pathname + url.search) ||
+    /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
+}
+
+function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string) {
+  const params = new URLSearchParams({
+    url: streamUrl,
+    name: fileName,
+  });
+  if (referer) {
+    params.set("referer", referer);
+  }
+  return `/api/download-full/browser-file?${params.toString()}`;
+}
+
+function rewriteHlsTagUris(line: string, playlistUrl: URL, fileName: string, referer?: string) {
+  return line.replace(/\bURI=(["'])([^"']+)\1/gi, (match, quote: string, rawUrl: string) => {
+    try {
+      const absolute = new URL(rawUrl, playlistUrl).toString();
+      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString())}${quote}`;
+    } catch {
+      return match;
+    }
+  });
+}
+
+function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: string, referer?: string) {
+  const output: string[] = [];
+  const pendingSegmentTags: string[] = [];
+  const preserveImageNamedSegments = Boolean(getBrowserFileOriginHeader(referer));
+  for (const line of playlist.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      output.push(line);
+      continue;
+    }
+    if (trimmed.startsWith("#EXTINF") || trimmed.startsWith("#EXT-X-BYTERANGE")) {
+      pendingSegmentTags.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer));
+      continue;
+    }
+    if (trimmed.startsWith("#")) {
+      output.push(...pendingSegmentTags.splice(0));
+      output.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer));
+      continue;
+    }
+
+    try {
+      const absolute = new URL(trimmed, playlistUrl).toString();
+      const isKnownAd = /ad-site|\.image(?:[?#]|$)/i.test(absolute);
+      const isImageNamed = /\.(?:png|jpe?g|webp|gif)(?:[?#]|$)/i.test(absolute);
+      if (isKnownAd || (isImageNamed && !preserveImageNamedSegments)) {
+        pendingSegmentTags.length = 0;
+        continue;
+      }
+      output.push(...pendingSegmentTags.splice(0));
+      output.push(buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString()));
+    } catch {
+      output.push(...pendingSegmentTags.splice(0));
+      output.push(line);
+    }
+  }
+  output.push(...pendingSegmentTags);
+  return output.join("\n");
+}
+
+function normalizeSubtitleText(body: string) {
+  const trimmed = body.replace(/^\uFEFF/, "").trimStart();
+  if (/^WEBVTT\b/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const converted = trimmed
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+  return `WEBVTT\n\n${converted}`;
+}
+
+function getBrowserFileOriginHeader(referer: string | undefined) {
+  if (!referer) return undefined;
+  try {
+    const parsed = new URL(referer);
+    if (/(^|\.)vidking\.net$/i.test(parsed.hostname)) {
+      return parsed.origin;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function rewriteFrameHtml(html: string, sourceUrl: URL) {
+  const withQuery = sourceUrl.searchParams.has("play")
+    ? html.replace(/"query":\{"params":/i, '"query":{"play":"true","params":')
+    : html;
+  const withoutCommonNoise = withQuery
+    .replace(/<script\b[^>]*\bdisable-devtool-auto\b[^>]*><\/script>/gi, "")
+    .replace(/<link\b[^>]+rel=["']manifest["'][^>]*>/gi, "")
+    .replace(/\b(src|href)=["']\/\/([^"']*)["']/gi, (_match, attr, path) => `${attr}="https://${path}"`);
+
+  if (/\.2embed\.(?:cc|skin)$/i.test(sourceUrl.hostname)) {
+    return withoutCommonNoise
+      .replace(/<a\b[^>]+href=["'][^"']*\/cdn-cgi\/content[^"']*["'][^>]*>\s*<\/a>/gi, "")
+      .replace(/<script>\s*\(function\(\)\{\s*var r = document\.referrer[\s\S]*?\/refcheck\.php\?ingest=1[\s\S]*?\}\)\(\);\s*<\/script>/gi, "")
+      .replace(/<script>\s*\(function\(\)\{function c\(\)[\s\S]*?challenge-platform\/scripts\/jsd\/main\.js[\s\S]*?<\/script>/gi, "")
+      .replace(/\b(src|href)=["']\/(?!\/)([^"']*)["']/gi, (_match, attr, path) => `${attr}="${sourceUrl.origin}/${path}"`);
+  }
+
+  return withoutCommonNoise;
+}
+
+function isSupportedPlayerFrameHost(hostname: string) {
+  return [
+    "www.cineby.at",
+    "cineby.at",
+    "www.2embed.cc",
+    "2embed.cc",
+    "www.2embed.skin",
+    "2embed.skin",
+  ].includes(hostname);
+}
+
+function patchCinebyAsset(path: string, contentType: string, body: Buffer) {
+  if (!/\.js(?:$|[?#])/.test(path) && !/javascript/i.test(contentType)) {
+    return body;
+  }
+
+  const source = body.toString("utf8");
+  const patched = source
+    .replace(/r\(87737\)\(\{url:"about:blank"/g, 'false&&r(87737)({url:"about:blank"')
+    .replace(/https:\/\/api\.videasy\.to/g, "/api/cineby-api");
+  return patched === source ? body : Buffer.from(patched, "utf8");
 }
 
 async function fetchProxyTarget(input: {
@@ -406,6 +637,27 @@ export function createHttpHandlers() {
     }
   };
 
+  const vidkingAvailabilityHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        items?: Array<{ importSlug?: string; mediaType?: "movie" | "serial" }>;
+      }>(req);
+      const items = (Array.isArray(body.items) ? body.items : [])
+        .map((item) => ({
+          importSlug: item.importSlug?.trim() ?? "",
+          mediaType: item.mediaType,
+        }))
+        .filter((item) => item.importSlug.length > 0)
+        .slice(0, 24);
+      sendJson(res, 200, {
+        results: await checkVidkingAvailabilityItems(items),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to check VidKing availability." });
+    }
+  };
+
   const providerModulesHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
     try {
@@ -482,19 +734,27 @@ export function createHttpHandlers() {
         mediaType?: "movie" | "serial";
         repositoryUrls?: string[];
         svetserialuCredentials?: SvetSerialuCredentials | null;
+        artworkSources?: ArtworkSourcesInput;
+        artworkApiKeys?: ArtworkApiKeysInput;
       }>(req);
       const moduleId = body.moduleId?.trim();
       const slug = body.slug?.trim();
       if (!moduleId || !slug) {
         return sendJson(res, 400, { error: "moduleId and slug are required." });
       }
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      const show = await importProviderItem({
+        moduleId,
+        slug,
+        mediaType: body.mediaType,
+        repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
+        svetserialuCredentials: body.svetserialuCredentials,
+      });
       sendJson(res, 200, {
-        show: await importProviderItem({
-          moduleId,
-          slug,
-          mediaType: body.mediaType,
-          repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
-          svetserialuCredentials: body.svetserialuCredentials,
+        show: await enrichAndPersistImportedShow({
+          show,
+          sources: body.artworkSources,
+          apiKeys,
         }),
       });
     } catch (error) {
@@ -577,14 +837,26 @@ export function createHttpHandlers() {
       const body = await readJsonBody<{
         title?: ResolvedTitle;
         repositoryUrls?: string[];
+        artworkSources?: ArtworkSourcesInput;
+        artworkApiKeys?: ArtworkApiKeysInput;
       }>(req);
       if (!body.title) {
         return sendJson(res, 400, { error: "title is required." });
       }
-      sendJson(res, 200, await importTitleItem({
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      const result = await importTitleItem({
         title: body.title,
         repositoryUrls: getRepositoryUrlsOrDefault(body.repositoryUrls),
-      }));
+      });
+      const show = await enrichAndPersistImportedShow({
+        show: result.show,
+        sources: body.artworkSources,
+        apiKeys,
+      });
+      sendJson(res, 200, {
+        ...result,
+        show,
+      });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to import title." });
     }
@@ -607,6 +879,8 @@ export function createHttpHandlers() {
         mediaType: "movie" | "tv";
         posterUrl?: string | null;
         backdropUrl?: string | null;
+        bannerUrl?: string | null;
+        bannerWithLogoUrl?: string | null;
         clearLogoUrl?: string | null;
         externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
         artworkSources?: { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
@@ -622,6 +896,8 @@ export function createHttpHandlers() {
           description: body.description ?? null,
           currentPosterUrl: body.posterUrl ?? null,
           currentBackdropUrl: body.backdropUrl ?? null,
+          currentBannerUrl: body.bannerUrl ?? null,
+          currentBannerWithLogoUrl: body.bannerWithLogoUrl ?? null,
           currentClearLogoUrl: body.clearLogoUrl ?? null,
           externalIds: body.externalIds ?? undefined,
           sources: body.artworkSources,
@@ -645,6 +921,8 @@ export function createHttpHandlers() {
         mediaType: "movie" | "tv";
         posterUrl?: string | null;
         backdropUrl?: string | null;
+        bannerUrl?: string | null;
+        bannerWithLogoUrl?: string | null;
         clearLogoUrl?: string | null;
         externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
         artworkSources?: { tmdb?: boolean; fanart?: boolean; tvdb?: boolean };
@@ -660,6 +938,8 @@ export function createHttpHandlers() {
           description: body.description ?? null,
           currentPosterUrl: body.posterUrl ?? null,
           currentBackdropUrl: body.backdropUrl ?? null,
+          currentBannerUrl: body.bannerUrl ?? null,
+          currentBannerWithLogoUrl: body.bannerWithLogoUrl ?? null,
           currentClearLogoUrl: body.clearLogoUrl ?? null,
           externalIds: body.externalIds ?? undefined,
           sources: body.artworkSources,
@@ -668,6 +948,110 @@ export function createHttpHandlers() {
       });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to search artwork." });
+    }
+  };
+
+  const castArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title: string;
+        altTitle?: string | null;
+        yearHint?: string | null;
+        description?: string | null;
+        mediaType: "movie" | "tv";
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+      }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      sendJson(res, 200, {
+        actors: await fetchTmdbCast({
+          mediaType: body.mediaType,
+          title: body.title,
+          altTitle: body.altTitle ?? null,
+          yearHint: body.yearHint ?? undefined,
+          description: body.description ?? null,
+          externalIds: body.externalIds ?? undefined,
+          apiKeys,
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch cast." });
+    }
+  };
+
+  const titleMetadataArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title: string;
+        altTitle?: string | null;
+        yearHint?: string | null;
+        description?: string | null;
+        mediaType: "movie" | "tv";
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
+        seasonNumber?: number | null;
+        episodeNumber?: number | null;
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+      }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      sendJson(res, 200, {
+        metadata: await fetchTmdbTitleMetadata({
+          mediaType: body.mediaType,
+          title: body.title,
+          altTitle: body.altTitle ?? null,
+          yearHint: body.yearHint ?? undefined,
+          description: body.description ?? null,
+          externalIds: body.externalIds ?? undefined,
+          seasonNumber: body.seasonNumber ?? null,
+          episodeNumber: body.episodeNumber ?? null,
+          apiKeys,
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch title metadata." });
+    }
+  };
+
+  const personCreditsArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        name: string;
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+      }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      sendJson(res, 200, {
+        credits: await fetchTmdbPersonCredits({
+          name: body.name,
+          apiKeys,
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch person credits." });
+    }
+  };
+
+  const composeHomepageBannerHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        backdropUrl?: string | null;
+        logoUrl?: string | null;
+        title?: string | null;
+      }>(req);
+      if (!body.backdropUrl || !body.title?.trim()) {
+        return sendJson(res, 400, { error: "backdropUrl and title are required." });
+      }
+      sendJson(res, 200, {
+        bannerUrl: await composeHomepageBanner({
+          backdropUrl: body.backdropUrl,
+          logoUrl: body.logoUrl ?? null,
+          title: body.title,
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to compose homepage banner." });
     }
   };
 
@@ -755,6 +1139,156 @@ export function createHttpHandlers() {
     }
   };
 
+  const playerFrameHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const params = getQueryParams(req.url);
+      const rawUrl = params.get("url");
+      if (!rawUrl) return sendJson(res, 400, { error: "Missing url." });
+
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return sendJson(res, 400, { error: "Unsupported frame URL protocol." });
+      }
+      if (!isSupportedPlayerFrameHost(parsed.hostname)) {
+        return sendJson(res, 400, { error: "Unsupported frame host." });
+      }
+
+      const upstream = await fetchProxyTarget({
+        url: parsed,
+        method: req.method ?? "GET",
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: parsed.origin,
+        },
+      });
+
+      res.statusCode = upstream.status;
+      res.setHeader("Content-Type", upstream.headers.get("content-type") || "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Referrer-Policy", "no-referrer");
+
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+
+      const html = await upstream.text();
+      res.end(rewriteFrameHtml(html, parsed));
+    } catch (error) {
+      return sendJson(res, 422, {
+        error: error instanceof Error ? error.message : "Failed to load player frame.",
+      });
+    }
+  };
+
+  const cinebyAssetHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const path = req.url?.split("?")[0] || "";
+      if (!path.startsWith("/_next/static/") && !path.startsWith("/scripts/")) {
+        return sendJson(res, 404, { error: "Not found." });
+      }
+
+      const upstreamUrl = new URL(req.url || path, "https://www.cineby.at");
+      const upstream = await fetchProxyTarget({
+        url: upstreamUrl,
+        method: req.method ?? "GET",
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "*/*",
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: "https://www.cineby.at/",
+        },
+      });
+
+      res.statusCode = upstream.status;
+      res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      const body = patchCinebyAsset(
+        path,
+        upstream.headers.get("content-type") || "",
+        Buffer.from(await upstream.arrayBuffer()),
+      );
+      res.end(body as unknown as string);
+    } catch (error) {
+      return sendJson(res, 502, {
+        error: error instanceof Error ? error.message : "Failed to load Cineby asset.",
+      });
+    }
+  };
+
+  const cinebyApiHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET" && req.method !== "POST" && req.method !== "HEAD") {
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+    try {
+      const incoming = new URL(req.url || "/api/cineby-api", "http://spilled.local");
+      const upstreamPath = incoming.pathname.replace(/^\/api\/cineby-api/, "") || "/";
+      const upstreamUrl = new URL(`${upstreamPath}${incoming.search}`, "https://api.videasy.to");
+      const upstream = await fetchProxyTarget({
+        url: upstreamUrl,
+        method: req.method ?? "GET",
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "*/*",
+          "Accept-Language": "en-US,en;q=0.9",
+          Referer: "https://www.cineby.at/",
+        },
+      });
+
+      res.statusCode = upstream.status;
+      res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      const body = Buffer.from(await upstream.arrayBuffer());
+      res.end(body as unknown as string);
+    } catch (error) {
+      return sendJson(res, 502, {
+        error: error instanceof Error ? error.message : "Failed to load Cineby API.",
+      });
+    }
+  };
+
+  const quietBeaconHandler = async (_req: RequestLike, res: JsonResponse) => {
+    res.statusCode = 204;
+    res.setHeader("Cache-Control", "no-store");
+    res.end();
+  };
+
+  const cleanPlayerResolveHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, await resolveCleanPlaybackViaNode(await readJsonBody(req)));
+    } catch (error) {
+      sendJson(res, 422, { error: error instanceof Error ? error.message : "Failed to resolve clean playback." });
+    }
+  };
+
+  const playbackResolveHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      sendJson(res, 200, await resolvePlaybackViaNode(await readJsonBody(req)));
+    } catch (error) {
+      const failures = error && typeof error === "object" && "failures" in error ? (error as { failures?: unknown }).failures : undefined;
+      sendJson(res, 422, {
+        error: error instanceof Error ? error.message : "Failed to resolve playback.",
+        failures: Array.isArray(failures) ? failures : [],
+      });
+    }
+  };
+
   const browserFileHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "GET" && req.method !== "HEAD") return sendJson(res, 405, { error: "Method not allowed." });
     try {
@@ -768,6 +1302,7 @@ export function createHttpHandlers() {
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         return sendJson(res, 400, { error: "Unsupported stream URL protocol." });
       }
+      const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
 
       const upstream = await fetchProxyTarget({
         url: parsed,
@@ -789,10 +1324,19 @@ export function createHttpHandlers() {
       }
 
       res.statusCode = upstream.status;
-      res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+      const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
+      const contentType = isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname) ? "video/mp2t" : upstreamContentType;
+      res.setHeader("Content-Type", contentType);
       res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges") || "bytes");
-      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
       res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {
+        const playlist = await upstream.text();
+        const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer);
+        res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+        res.setHeader("Content-Length", Buffer.byteLength(rewritten).toString());
+        return res.end(rewritten);
+      }
       const contentLength = upstream.headers.get("content-length");
       const contentRange = upstream.headers.get("content-range");
       if (contentLength) res.setHeader("Content-Length", contentLength);
@@ -871,11 +1415,7 @@ export function createHttpHandlers() {
       const isHead = req.method === "HEAD";
       const rangeHeader = typeof req.headers?.range === "string" ? req.headers.range : undefined;
       
-      // We always want to ensure it's seekable (faststart) for browser playback.
-      // ensureSeekableDownloadFile now handles concurrency and is fast if already repaired.
-      const seekablePath = await ensureSeekableDownloadFile(episodeId, filePath);
-      
-      const fileInfo = await stat(seekablePath);
+      const fileInfo = await stat(filePath);
       const fileSize = fileInfo.size;
 
       res.setHeader("Accept-Ranges", "bytes");
@@ -894,14 +1434,14 @@ export function createHttpHandlers() {
         res.setHeader("Content-Range", resolvedRange.contentRange ?? "");
         res.setHeader("Content-Length", String(resolvedRange.contentLength));
         if (isHead) return res.end();
-        createReadStream(seekablePath, { start: resolvedRange.start, end: resolvedRange.end }).pipe(res as never);
+        createReadStream(filePath, { start: resolvedRange.start, end: resolvedRange.end }).pipe(res as never);
         return;
       }
 
       res.statusCode = 200;
       res.setHeader("Content-Length", String(resolvedRange.contentLength));
       if (isHead) return res.end();
-      createReadStream(seekablePath).pipe(res as never);
+      createReadStream(filePath).pipe(res as never);
     } catch (error) {
       console.error("[SERVE] Failed to serve download:", error);
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to serve download." });
@@ -927,7 +1467,8 @@ export function createHttpHandlers() {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/vtt; charset=utf-8");
       res.setHeader("Cache-Control", "no-store");
-      res.end(await readFile(filePath, "utf8"));
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.end(normalizeSubtitleText(await readFile(filePath, "utf8")));
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to serve subtitle." });
     }
@@ -952,11 +1493,12 @@ export function createHttpHandlers() {
       if (!response.ok) return sendJson(res, response.status, { error: "Failed to fetch subtitle file." });
 
       const body = await response.text();
-      const contentType = response.headers.get("content-type") || "text/vtt; charset=utf-8";
+      const normalized = normalizeSubtitleText(body);
       res.statusCode = 200;
-      res.setHeader("Content-Type", contentType.includes("text") ? contentType : "text/vtt; charset=utf-8");
+      res.setHeader("Content-Type", "text/vtt; charset=utf-8");
       res.setHeader("Cache-Control", "no-store");
-      res.end(body);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.end(normalized);
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Subtitle proxy failed." });
     }
@@ -1513,6 +2055,7 @@ export function createHttpHandlers() {
     svetSerialuAuthVerifyHandler,
     importBombujHandler,
     searchHandler,
+    vidkingAvailabilityHandler,
     providerModulesHandler,
     providerFeedHandler,
     providerSearchHandler,
@@ -1525,12 +2068,22 @@ export function createHttpHandlers() {
     integrationsConfigHandler,
     refreshArtworkHandler,
     searchArtworkHandler,
+    titleMetadataArtworkHandler,
+    castArtworkHandler,
+    personCreditsArtworkHandler,
+    composeHomepageBannerHandler,
     exploreFeedHandler,
     explorePeopleHandler,
     trendingFeedHandler,
     startDownloadHandler,
     browserStartHandler,
     playerResolveHandler,
+    playerFrameHandler,
+    cinebyAssetHandler,
+    cinebyApiHandler,
+    quietBeaconHandler,
+    cleanPlayerResolveHandler,
+    playbackResolveHandler,
     browserFileHandler,
     downloadStatusHandler,
     downloadCheckHandler,

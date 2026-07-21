@@ -10,6 +10,7 @@ import {
   getMediaToolStatus,
   listDownloadedEpisodeIds,
   resolveBrowserDownload,
+  resolvePlaybackStream,
 } from "../../../apps/dashboard/src/server/full-download";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -17,11 +18,12 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { enrichArtwork, searchArtworkAssets } from "../../../apps/dashboard/src/server/artwork";
 import {
-  compareSearchScores,
   keepHighConfidenceSearchResults,
   scoreSearchCandidate,
+  sortUnifiedSearchResults,
 } from "../../../apps/dashboard/src/lib/search-ranking";
 import { fetchBombujMovie, searchBombuj } from "../../../apps/dashboard/src/server/bombuj";
+import { checkVidkingAvailabilityBatch, searchVidking } from "../../../apps/dashboard/src/server/vidking";
 import { getExploreFeed } from "../../../apps/dashboard/src/server/explore-feed";
 import { loadProviderFeed } from "../../../apps/dashboard/src/server/provider-feed";
 import { importProviderModuleItem } from "../../../apps/dashboard/src/server/provider-import";
@@ -80,14 +82,72 @@ export async function getNodeStatus() {
 }
 
 export async function searchNode(query: string, options: { svetserialuCredentials?: SvetSerialuCredentials | null } = {}) {
-  const [svet, bomb] = await Promise.allSettled([
-    searchSvetSerialu(query, options.svetserialuCredentials),
-    searchBombuj(query),
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length < 2) {
+    return [];
+  }
+
+  const cacheKey = `${normalizeBridgeText(normalizedQuery)}:${options.svetserialuCredentials ? "authenticated" : "public"}`;
+  const cached = remoteSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.results;
+  }
+  const pending = remoteSearchInflight.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+
+  const search = runParallelProviderSearch(normalizedQuery, options)
+    .then((results) => {
+      remoteSearchCache.set(cacheKey, { expiresAt: Date.now() + REMOTE_SEARCH_CACHE_TTL_MS, results });
+      if (remoteSearchCache.size > REMOTE_SEARCH_CACHE_MAX) {
+        const oldestKey = remoteSearchCache.keys().next().value as string | undefined;
+        if (oldestKey) remoteSearchCache.delete(oldestKey);
+      }
+      return results;
+    })
+    .finally(() => remoteSearchInflight.delete(cacheKey));
+  remoteSearchInflight.set(cacheKey, search);
+  return search;
+}
+
+const REMOTE_SEARCH_CACHE_TTL_MS = 45_000;
+const REMOTE_SEARCH_CACHE_MAX = 200;
+const remoteSearchCache = new Map<string, { expiresAt: number; results: RemoteSearchItem[] }>();
+const remoteSearchInflight = new Map<string, Promise<RemoteSearchItem[]>>();
+
+async function runParallelProviderSearch(
+  query: string,
+  options: { svetserialuCredentials?: SvetSerialuCredentials | null },
+) {
+  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "850", 10);
+  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "2200", 10);
+  const withSearchBudget = async <T>(search: Promise<T[]>, budgetMs = timeoutMs) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        search,
+        new Promise<T[]>((resolve) => {
+          timeout = setTimeout(() => resolve([]), Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : 850);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  };
+
+  // Start every provider immediately. Search used to await VidKing before even
+  // starting the other providers, turning one deadline into two sequential waits.
+  const [vidking, svet, bomb] = await Promise.allSettled([
+    withSearchBudget(searchVidking(query)),
+    withSearchBudget(searchSvetSerialu(query, options.svetserialuCredentials)),
+    withSearchBudget(searchBombuj(query), bombujTimeoutMs),
   ]);
   const merged = [
+    ...(vidking.status === "fulfilled" ? vidking.value : []),
     ...(svet.status === "fulfilled" ? svet.value : []),
     ...(bomb.status === "fulfilled" ? bomb.value : []),
-  ].map((item, index) => ({
+  ].map<RemoteSearchItem>((item, index) => ({
     ...item,
     matchScore: Math.max(
       typeof item.matchScore === "number" ? item.matchScore : 0,
@@ -95,7 +155,54 @@ export async function searchNode(query: string, options: { svetserialuCredential
     ),
   }));
 
-  return keepHighConfidenceSearchResults(merged.sort(compareSearchScores));
+  // Apply confidence pruning inside each provider. A perfect match from one
+  // catalog must not erase a valid, playable match from another catalog.
+  const byProvider = new Map<string, RemoteSearchItem[]>();
+  for (const item of merged) {
+    const provider = item.provider ?? item.platform ?? "unknown";
+    const group = byProvider.get(provider) ?? [];
+    group.push(item);
+    byProvider.set(provider, group);
+  }
+
+  const unique = new Map<string, RemoteSearchItem>();
+  for (const [provider, items] of byProvider) {
+    for (const item of keepHighConfidenceSearchResults(items).slice(0, 12)) {
+      const key = `${provider}:${item.importSlug ?? item.slug}`;
+      if (!unique.has(key)) unique.set(key, item);
+    }
+  }
+  return sortUnifiedSearchResults(query, [...unique.values()]).slice(0, 30);
+}
+
+type RemoteSearchItem = {
+  title: string;
+  slug: string;
+  importSlug?: string;
+  provider?: string;
+  platform?: string;
+  mediaType?: "movie" | "serial";
+  year?: string | null;
+  yearLabel?: string | null;
+  alternateTitles?: string[];
+  matchScore?: number;
+  searchSignals?: {
+    popularity?: number | null;
+    voteCount?: number | null;
+    voteAverage?: number | null;
+    releaseDate?: string | null;
+    originalLanguage?: string | null;
+  };
+};
+
+function normalizeBridgeText(value: string | null | undefined) {
+  return String(value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 export async function verifySvetSerialuCredentials(credentials?: SvetSerialuCredentials | null) {
@@ -155,6 +262,10 @@ export async function loadIntegrationCatalog(input: Parameters<typeof listIntegr
 
 export async function searchTitleItems(input: Parameters<typeof searchTitles>[0]) {
   return searchTitles(input);
+}
+
+export async function checkVidkingAvailabilityItems(input: Parameters<typeof checkVidkingAvailabilityBatch>[0]) {
+  return checkVidkingAvailabilityBatch(input);
 }
 
 export async function resolveTitleItem(input: Parameters<typeof resolveTitle>[0]) {
@@ -273,6 +384,14 @@ export async function checkDownload(episodeId: string) {
 
 export async function resolveBrowserDownloadViaNode(input: Parameters<typeof resolveBrowserDownload>[0]) {
   return resolveBrowserDownload(input);
+}
+
+export async function resolveCleanPlaybackViaNode(input: Parameters<typeof resolveBrowserDownload>[0]) {
+  return resolveBrowserDownload(input);
+}
+
+export async function resolvePlaybackViaNode(input: Parameters<typeof resolvePlaybackStream>[0]) {
+  return resolvePlaybackStream(input);
 }
 
 export async function getDownloadedSubtitleList(episodeId: string) {

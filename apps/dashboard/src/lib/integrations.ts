@@ -1,4 +1,4 @@
-export type IntegrationId = "svetserialu" | "bombuj" | "synova";
+export type IntegrationId = "vidking" | "cineby" | "svetserialu" | "bombuj";
 
 export type IntegrationKind = "series" | "movies" | "mixed";
 
@@ -36,6 +36,26 @@ export type IntegrationDefinition = {
 };
 
 export const INTEGRATIONS: IntegrationDefinition[] = [
+  {
+    id: "vidking",
+    name: "VidKing",
+    domain: "vidking.net",
+    status: "active",
+    kind: "mixed",
+    description: "TMDB-backed VidKing iframe provider for movie and TV playback without legacy site scraping.",
+    capabilities: {
+      import: true,
+      remoteSearch: true,
+      streaming: true,
+      downloads: false,
+      subtitles: false,
+    },
+    copy: {
+      shortLabel: "Movies + TV",
+      supportBadge: "TMDB module",
+      notes: "Uses VidKing embed routes from TMDB movie and episode IDs.",
+    },
+  },
   {
     id: "svetserialu",
     name: "SvetSerialu",
@@ -76,26 +96,6 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       notes: "Use when you want movie imports to prefer Bombuj before mixed sources.",
     },
   },
-  {
-    id: "synova",
-    name: "Synova",
-    domain: "cinenova.store",
-    status: "beta",
-    kind: "mixed",
-    description: "Catalog connector for Cinenova/Synova movie and TV discovery feeds.",
-    capabilities: {
-      import: true,
-      remoteSearch: true,
-      streaming: true,
-      downloads: false,
-      subtitles: false,
-    },
-    copy: {
-      shortLabel: "Movies + TV",
-      supportBadge: "Repo module",
-      notes: "Catalog and source-page discovery from cinenova.store.",
-    },
-  },
 ];
 
 export const INTEGRATION_CAPABILITY_LABELS: Record<IntegrationCapabilityKey, string> = {
@@ -115,6 +115,15 @@ export function getIntegrationsForKind(kind: "series" | "movies") {
 }
 
 export const DISCOVERY_PROVIDER_CAPABILITIES = {
+  vidking: {
+    supportsGenres: true,
+    supportsNetworks: false,
+    supportsAudioBuckets: ["all"] as const,
+    supportsPeopleSearch: false,
+    supportsActorSearch: false,
+    supportsDirectorSearch: false,
+    supportsSections: ["popular", "newest"] as const,
+  },
   svetserialu: {
     supportsGenres: true,
     supportsNetworks: true,
@@ -132,14 +141,5 @@ export const DISCOVERY_PROVIDER_CAPABILITIES = {
     supportsActorSearch: true,
     supportsDirectorSearch: true,
     supportsSections: ["newest", "popular", "latestEpisodes", "topOverall", "topToday", "novinky", "genreBrowse"] as const,
-  },
-  synova: {
-    supportsGenres: true,
-    supportsNetworks: false,
-    supportsAudioBuckets: ["all"] as const,
-    supportsPeopleSearch: false,
-    supportsActorSearch: false,
-    supportsDirectorSearch: false,
-    supportsSections: ["popular", "newest", "topOverall"] as const,
   },
 };

@@ -10,6 +10,8 @@ type RequestBody = {
   description?: unknown;
   posterUrl?: unknown;
   backdropUrl?: unknown;
+  bannerUrl?: unknown;
+  bannerWithLogoUrl?: unknown;
   clearLogoUrl?: unknown;
   externalIds?: unknown;
   artworkSources?: unknown;
@@ -54,6 +56,8 @@ export default async function handler(
       description: typeof body.description === "string" ? body.description : null,
       currentPosterUrl: typeof body.posterUrl === "string" ? body.posterUrl : null,
       currentBackdropUrl: typeof body.backdropUrl === "string" ? body.backdropUrl : null,
+      currentBannerUrl: typeof body.bannerUrl === "string" ? body.bannerUrl : null,
+      currentBannerWithLogoUrl: typeof body.bannerWithLogoUrl === "string" ? body.bannerWithLogoUrl : null,
       currentClearLogoUrl: typeof body.clearLogoUrl === "string" ? body.clearLogoUrl : null,
       externalIds: typeof body.externalIds === "object" && body.externalIds ? body.externalIds as ArtworkExternalIds : undefined,
       sources: (body.artworkSources as ArtworkSourceSettings | undefined) ?? undefined,

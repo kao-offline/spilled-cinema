@@ -1,0 +1,22 @@
+{
+  "name": "svetserialu-catalog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone scraper and searchable database for svetserialu.to catalog",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js watch",
+    "fetch": "node index.js fetch",
+    "refresh": "node index.js refresh",
+    "refresh:watch": "node index.js watch",
+    "search": "node index.js search",
+    "list": "node index.js list",
+    "stats": "node index.js stats"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^8.3.1",
+    "algoliasearch": "^5.55.0",
+    "better-sqlite3": "^11.0.0",
+    "node-csfd-api": "^5.10.2"
+  }
+}

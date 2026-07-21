@@ -8,7 +8,7 @@ import {
   searchSvetSerialu,
   type SvetSerialuCredentials,
 } from "./svetserialu";
-import { fetchSynovaTitle, loadSynovaFeed, searchSynova } from "./synova";
+import { fetchVidkingTitle, searchVidking } from "./vidking";
 import type { IntegrationId } from "../lib/integrations";
 import {
   DEFAULT_PROVIDER_MODULES,
@@ -233,6 +233,16 @@ async function loadBombujFeed(feedId: string, cursor?: string | null, limit = 24
 }
 
 const providerAdapters: Record<string, ProviderModuleAdapter> = {
+  vidking: {
+    moduleId: "vidking",
+    providerId: "vidking",
+    async search(query) {
+      return await searchVidking(query);
+    },
+    async import(slug, mediaType) {
+      return await fetchVidkingTitle(slug, mediaType);
+    },
+  },
   svetserialu: {
     moduleId: "svetserialu",
     providerId: "svetserialu",
@@ -265,19 +275,6 @@ const providerAdapters: Record<string, ProviderModuleAdapter> = {
     },
     async import(slug, mediaType) {
       return await fetchBombujMovie(slug, mediaType);
-    },
-  },
-  synova: {
-    moduleId: "synova",
-    providerId: "synova",
-    async getFeed(feedId, args) {
-      return await loadSynovaFeed(feedId, args);
-    },
-    async search(query) {
-      return await searchSynova(query);
-    },
-    async import(slug) {
-      return await fetchSynovaTitle(slug);
     },
   },
 };

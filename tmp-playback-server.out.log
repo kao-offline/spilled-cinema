@@ -1,0 +1,68 @@
+[INIT] Server initialized. Vault path: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[spilledcinema-server] listening on http://127.0.0.1:8787
+[spilledcinema-server] public fetch server https://spilled-node-2b0b5a6ed7482.loca.lt
+[control-plane] register acknowledged by https://spilled.overload.studio/api/server: node_2b0b5a6ed74823b3a92ccb8f, expires 2026-06-21T13:45:23.605Z
+[control-plane] heartbeat acknowledged by https://spilled.overload.studio/api/server: node_2b0b5a6ed74823b3a92ccb8f, expires 2026-06-21T13:45:53.578Z
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[SERVE] Serving episode murdoch-mysteries:s01e01 (file: any)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Searching in folder: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Found 2 files in folder.
+[LOOKUP] Looking for tag: [murdoch-mysteries_s01e01] (original id: murdoch-mysteries:s01e01)
+[LOOKUP] Found match: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Serving episode murdoch-mysteries:s01e01 (file: any)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Searching in folder: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Found 2 files in folder.
+[LOOKUP] Looking for tag: [murdoch-mysteries_s01e01] (original id: murdoch-mysteries:s01e01)
+[LOOKUP] Found match: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[SERVE] Serving episode murdoch-mysteries:s01e01 (file: any)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Searching in folder: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Found 2 files in folder.
+[LOOKUP] Looking for tag: [murdoch-mysteries_s01e01] (original id: murdoch-mysteries:s01e01)
+[LOOKUP] Found match: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Serving episode murdoch-mysteries:s01e01 (file: any)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Searching in folder: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Found 2 files in folder.
+[LOOKUP] Looking for tag: [murdoch-mysteries_s01e01] (original id: murdoch-mysteries:s01e01)
+[LOOKUP] Found match: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[SERVE] Serving episode murdoch-mysteries:s01e01 (file: any)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Searching in folder: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Found 2 files in folder.
+[LOOKUP] Looking for tag: [murdoch-mysteries_s01e01] (original id: murdoch-mysteries:s01e01)
+[LOOKUP] Found match: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Serving episode murdoch-mysteries:s01e01 (file: any)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Searching in folder: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[LOOKUP] Found 2 files in folder.
+[LOOKUP] Looking for tag: [murdoch-mysteries_s01e01] (original id: murdoch-mysteries:s01e01)
+[LOOKUP] Found match: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Murdoch Mysteries - S01E01 - Power [murdoch-mysteries_s01e01].mp4
+[spilledcinema-server] public fetch server https://long-birds-arrive.loca.lt
+[spilledcinema-server] public fetch server https://spilled-node-2b0b5a6ed7482.loca.lt
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[SERVE] Serving episode silo:s01e02 (file: Silo - S01E02 - Holston's Pick [silo_s01e02].mp4)
+[VAULT] Using SPILLED_VAULT_PATH: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault
+[SERVE] Found file: C:\Users\hrdyk\Documents\movie_vault\spilled-library\vault\Silo - S01E02 - Holston's Pick [silo_s01e02].mp4
+[spilledcinema-server] public fetch server https://strong-dog-68.loca.lt
+[spilledcinema-server] public fetch server https://spilled-node-2b0b5a6ed7482.loca.lt

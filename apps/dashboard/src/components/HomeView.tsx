@@ -2,6 +2,7 @@ import { Hero } from "./Hero";
 import { ShowCard } from "./ShowCard";
 import type { ImportedShow } from "../lib/types";
 import type { IntegrationId } from "../lib/integrations";
+import { balancedBackgroundImage } from "../lib/image-resolution";
 
 type RemoteSearchResult = {
   title: string;
@@ -130,7 +131,7 @@ export function HomeView({
                             >
                               <div
                                 className="relative aspect-[2/3] w-full bg-[#0f1016] bg-cover bg-center"
-                                style={result.posterUrl ? { backgroundImage: `url(${result.posterUrl})` } : undefined}
+                                style={balancedBackgroundImage(result.posterUrl, "poster-card")}
                               >
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
                                 <div className="absolute inset-x-2 top-2 flex items-center justify-end">

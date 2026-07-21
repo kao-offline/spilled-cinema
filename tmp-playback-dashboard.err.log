@@ -1,0 +1,14 @@
+[31merror when starting dev server:
+Error: Port 5173 is already in use
+    at httpServerStart (file:///C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema/node_modules/vite/dist/node/chunks/node.js:10662:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async startServer (file:///C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema/node_modules/vite/dist/node/chunks/node.js:26333:30)
+    at async Object.listen (file:///C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema/node_modules/vite/dist/node/chunks/node.js:26152:4)
+    at async CAC.<anonymous> (file:///C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema/node_modules/vite/dist/node/cli.js:722:3)[39m
+npm error Lifecycle script `dev` failed with error:
+npm error code 1
+npm error path C:\Users\hrdyk\Documents\PROJEKTY-MOJE\SpilledCinema\apps\dashboard
+npm error workspace @spilledcinema/dashboard@0.0.0
+npm error location C:\Users\hrdyk\Documents\PROJEKTY-MOJE\SpilledCinema\apps\dashboard
+npm error command failed
+npm error command C:\Windows\system32\cmd.exe /d /s /c vite --host 127.0.0.1 --port 5173

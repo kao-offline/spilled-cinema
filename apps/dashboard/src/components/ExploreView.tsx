@@ -5,6 +5,7 @@ import { clsx } from "clsx";
 import { DiscoveryItemCard } from "./DiscoveryItemCard";
 import { DiscoveryRail } from "./DiscoveryRail";
 import { fetchExplorePeopleSuggestions, type ExplorePersonSuggestion } from "../lib/discovery-client";
+import { balancedBackgroundImage } from "../lib/image-resolution";
 import type {
   ExploreAudioBucket,
   ExploreFeedResponse,
@@ -926,7 +927,12 @@ function ExploreItemModal({
 
         <div className="grid lg:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)]">
           <div className="relative min-h-[18rem] overflow-hidden bg-[#10131a] lg:min-h-[33rem]">
-            {artwork ? <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${artwork})` }} /> : null}
+            {artwork ? (
+              <div
+                className="absolute inset-0 bg-cover bg-center"
+                style={balancedBackgroundImage(artwork, item.backdropUrl ? "backdrop-thumb" : "poster-detail")}
+              />
+            ) : null}
             <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(7,9,12,0.16),rgba(7,9,12,0.26)_34%,rgba(7,9,12,0.78)_100%)]" />
           </div>
 
@@ -1155,7 +1161,7 @@ export function ExploreView(props: ExploreViewProps) {
 
   return (
     <>
-      <div className="min-w-0 px-4 pb-12 pt-2 sm:px-6 lg:px-10">
+      <div className="min-w-0 px-4 pb-28 pt-2 sm:px-6 sm:pb-12 lg:px-10">
         <div className="mb-6">
           <div className="flex flex-wrap items-center gap-2">
             <QuickChip

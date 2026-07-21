@@ -3,13 +3,21 @@ import { createHttpHandlers, type JsonResponse, type RequestLike } from "../../.
 
 export function createDashboardApiPlugin(): Plugin {
   const handlers = createHttpHandlers();
-  const attach = (server: { middlewares: { use: (path: string, handler: (req: RequestLike, res: JsonResponse) => void | Promise<void>) => void } }) => {
+  type Middleware = (req: RequestLike, res: JsonResponse, next: () => void) => void | Promise<void>;
+  type MiddlewareStack = {
+    use: {
+      (path: string, handler: (req: RequestLike, res: JsonResponse) => void | Promise<void>): void;
+      (handler: Middleware): void;
+    };
+  };
+  const attach = (server: { middlewares: MiddlewareStack }) => {
     server.middlewares.use("/api/status", handlers.statusHandler);
     server.middlewares.use("/api/server", handlers.controlPlaneProxyHandler);
     server.middlewares.use("/api/import-svetserialu", handlers.importSvetSerialuHandler);
     server.middlewares.use("/api/svetserialu/auth/verify", handlers.svetSerialuAuthVerifyHandler);
     server.middlewares.use("/api/import-bombuj", handlers.importBombujHandler);
     server.middlewares.use("/api/search", handlers.searchHandler);
+    server.middlewares.use("/api/vidking/availability", handlers.vidkingAvailabilityHandler);
     server.middlewares.use("/api/provider-modules", handlers.providerModulesHandler);
     server.middlewares.use("/api/provider-feed", handlers.providerFeedHandler);
     server.middlewares.use("/api/provider-search", handlers.providerSearchHandler);
@@ -25,9 +33,29 @@ export function createDashboardApiPlugin(): Plugin {
     server.middlewares.use("/api/trending/feed", handlers.trendingFeedHandler);
     server.middlewares.use("/api/artwork/refresh", handlers.refreshArtworkHandler);
     server.middlewares.use("/api/artwork/search", handlers.searchArtworkHandler);
+    server.middlewares.use("/api/artwork/cast", handlers.castArtworkHandler);
+    server.middlewares.use("/api/artwork/title-metadata", handlers.titleMetadataArtworkHandler);
+    server.middlewares.use("/api/artwork/person-credits", handlers.personCreditsArtworkHandler);
+    server.middlewares.use("/api/artwork/homepage-banner", handlers.composeHomepageBannerHandler);
     server.middlewares.use("/api/download-full/start", handlers.startDownloadHandler);
     server.middlewares.use("/api/download-full/browser-start", handlers.browserStartHandler);
     server.middlewares.use("/api/player/resolve", handlers.playerResolveHandler);
+    server.middlewares.use("/api/player/frame", handlers.playerFrameHandler);
+    server.middlewares.use("/api/player/clean-resolve", handlers.cleanPlayerResolveHandler);
+    server.middlewares.use("/api/player/playback-resolve", handlers.playbackResolveHandler);
+    server.middlewares.use("/cdn-cgi/rum", handlers.quietBeaconHandler);
+    server.middlewares.use((req, res, next) => {
+      const path = req.url?.split("?")[0] || "";
+      if (path.startsWith("/_next/static/") || path.startsWith("/scripts/")) {
+        void handlers.cinebyAssetHandler(req, res);
+        return;
+      }
+      if (path.startsWith("/api/cineby-api/")) {
+        void handlers.cinebyApiHandler(req, res);
+        return;
+      }
+      next();
+    });
     server.middlewares.use("/api/download-full/browser-file", handlers.browserFileHandler);
     server.middlewares.use("/api/download-full/status", handlers.downloadStatusHandler);
     server.middlewares.use("/api/download-full/check", handlers.downloadCheckHandler);

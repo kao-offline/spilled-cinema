@@ -5,6 +5,16 @@
   "updatedAt": "2026-06-05T00:00:00.000Z",
   "integrations": [
     {
+      "id": "vidking",
+      "displayName": "VidKing",
+      "version": "2.0.0",
+      "homepage": "https://www.vidking.net",
+      "status": "stable",
+      "capabilities": ["search", "metadata", "import", "players", "noCredentials"],
+      "credentialRequirements": [{ "kind": "none", "label": "No credentials required" }],
+      "networkPermissions": ["https://www.vidking.net", "https://api.themoviedb.org", "https://image.tmdb.org"]
+    },
+    {
       "id": "svetserialu",
       "displayName": "SvetSerialu",
       "version": "2.0.0",
@@ -31,20 +41,6 @@
       "capabilities": ["search", "discovery", "metadata", "import", "players", "subtitles", "downloads", "noCredentials"],
       "credentialRequirements": [{ "kind": "none", "label": "No credentials required" }],
       "networkPermissions": ["https://www.bombuj.si", "https://serialy.bombuj.si"]
-    },
-    {
-      "id": "synova",
-      "displayName": "Synova",
-      "version": "2.0.0",
-      "homepage": "https://cinenova.store",
-      "status": "stable",
-      "runtime": {
-        "apiVersion": 2,
-        "entry": "connectors/synova.js"
-      },
-      "capabilities": ["search", "discovery", "metadata", "import", "players", "noCredentials"],
-      "credentialRequirements": [{ "kind": "none", "label": "No credentials required" }],
-      "networkPermissions": ["https://cinenova.store"]
     },
     {
       "id": "tmdb",

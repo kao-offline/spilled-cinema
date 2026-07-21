@@ -9,6 +9,11 @@ export type ExternalTitleCandidate = {
   posterUrl?: string | null;
   source: "alias" | "imdb" | "tmdb" | "tvmaze" | "wikidata";
   matchScore: number;
+  popularity?: number | null;
+  voteCount?: number | null;
+  voteAverage?: number | null;
+  releaseDate?: string | null;
+  originalLanguage?: string | null;
 };
 
 type ImdbSuggestionEntry = {
@@ -31,6 +36,9 @@ type TmdbSearchResult = {
   first_air_date?: string;
   poster_path?: string | null;
   popularity?: number;
+  vote_count?: number;
+  vote_average?: number;
+  original_language?: string;
 };
 
 type TvMazeSearchResult = {
@@ -62,6 +70,9 @@ const WIKIDATA_API_BASE = "https://www.wikidata.org/w/api.php";
 const WIKIDATA_SPARQL_BASE = "https://query.wikidata.org/sparql";
 const CATALOG_TIMEOUT_MS = 3500;
 const CURRENT_YEAR = new Date().getFullYear();
+const TMDB_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const TMDB_SEARCH_CACHE_MAX = 200;
+const tmdbSearchCache = new Map<string, { expiresAt: number; results: ExternalTitleCandidate[] }>();
 
 const JAMES_BOND_ALIAS_TITLES: Array<{ title: string; originalTitle?: string; year: string }> = [
   { title: "Casino Royale", year: "2006" },
@@ -93,6 +104,10 @@ const JAMES_BOND_ALIAS_TITLES: Array<{ title: string; originalTitle?: string; ye
 
 function getTmdbReadToken() {
   return process.env.TMDB_API_READ_TOKEN?.trim() || "";
+}
+
+function getTmdbApiKey() {
+  return process.env.TMDB_API_KEY?.trim() || "";
 }
 
 function parseYear(value: string | number | null | undefined) {
@@ -319,14 +334,20 @@ async function searchImdbSuggestions(query: string): Promise<ExternalTitleCandid
         source: "imdb" as const,
         matchScore: baseScore + Math.max(0, 180 - index * 12),
       };
-    })
-    .filter((entry) => scoreSearchCandidate(query, [entry.title, entry.year]) > 0);
+    });
 }
 
 async function searchTmdb(query: string): Promise<ExternalTitleCandidate[]> {
   const token = getTmdbReadToken();
-  if (!token) {
+  const apiKey = getTmdbApiKey();
+  if (!token && !apiKey) {
     return [];
+  }
+
+  const cacheKey = normalizeSearchText(query);
+  const cached = tmdbSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.results;
   }
 
   const url = new URL(`${TMDB_API_BASE}/search/multi`);
@@ -334,13 +355,20 @@ async function searchTmdb(query: string): Promise<ExternalTitleCandidate[]> {
   url.searchParams.set("include_adult", "false");
   url.searchParams.set("language", "cs-CZ");
   url.searchParams.set("page", "1");
+  if (!token && apiKey) {
+    url.searchParams.set("api_key", apiKey);
+  }
 
-  const payload = await fetchJson<{ results?: TmdbSearchResult[] }>(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+  let payload = await fetchJson<{ results?: TmdbSearchResult[] }>(url.toString(), {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
+  if (!payload && token && apiKey) {
+    url.searchParams.set("api_key", apiKey);
+    payload = await fetchJson<{ results?: TmdbSearchResult[] }>(url.toString());
+  }
   const results = Array.isArray(payload?.results) ? payload.results : [];
 
-  return results
+  const candidates = results
     .filter((entry) => entry.id && (entry.media_type === "movie" || entry.media_type === "tv"))
     .map((entry, index) => {
       const mediaType: "movie" | "serial" = entry.media_type === "tv" ? "serial" : "movie";
@@ -358,9 +386,27 @@ async function searchTmdb(query: string): Promise<ExternalTitleCandidate[]> {
         posterUrl: entry.poster_path ? `${TMDB_POSTER_BASE}${entry.poster_path}` : null,
         source: "tmdb" as const,
         matchScore: baseScore + 130 + popularityBoost,
+        popularity: entry.popularity ?? null,
+        voteCount: entry.vote_count ?? null,
+        voteAverage: entry.vote_average ?? null,
+        releaseDate: entry.release_date ?? entry.first_air_date ?? null,
+        originalLanguage: entry.original_language ?? null,
       };
     })
     .filter((entry) => entry.title && scoreSearchCandidate(query, [entry.title, entry.originalTitle, entry.year]) > 0);
+
+  tmdbSearchCache.set(cacheKey, {
+    expiresAt: Date.now() + TMDB_SEARCH_CACHE_TTL_MS,
+    results: candidates,
+  });
+  if (tmdbSearchCache.size > TMDB_SEARCH_CACHE_MAX) {
+    const oldestKey = tmdbSearchCache.keys().next().value as string | undefined;
+    if (oldestKey) {
+      tmdbSearchCache.delete(oldestKey);
+    }
+  }
+
+  return candidates;
 }
 
 async function searchTvMaze(query: string): Promise<ExternalTitleCandidate[]> {
@@ -417,6 +463,16 @@ export async function searchExternalTitles(query: string, limit = 12): Promise<E
   }
 
   return [...unique.values()]
+    .sort(compareSearchScores)
+    .slice(0, limit);
+}
+
+export async function searchTmdbTitleCandidates(query: string, limit = 12): Promise<ExternalTitleCandidate[]> {
+  if (!normalizeSearchText(query)) {
+    return [];
+  }
+
+  return (await searchTmdb(query))
     .sort(compareSearchScores)
     .slice(0, limit);
 }

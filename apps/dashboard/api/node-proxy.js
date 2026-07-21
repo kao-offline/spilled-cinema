@@ -21,6 +21,7 @@ export function isAllowedNodePath(path) {
   return (
     path === "/api/status" ||
     path === "/api/search" ||
+    path === "/api/vidking/availability" ||
     path === "/api/import-svetserialu" ||
     path === "/api/svetserialu/auth/verify" ||
     path === "/api/import-bombuj" ||
@@ -38,6 +39,12 @@ export function isAllowedNodePath(path) {
     path === "/api/explore/people" ||
     path === "/api/trending/feed" ||
     path === "/api/player/resolve" ||
+    path === "/api/player/clean-resolve" ||
+    path === "/api/player/playback-resolve" ||
+    path === "/api/artwork/cast" ||
+    path === "/api/artwork/title-metadata" ||
+    path === "/api/artwork/person-credits" ||
+    path.startsWith("/api/player/frame?") ||
     path === "/api/download-full/browser-start" ||
     path.startsWith("/api/download-full/browser-file?")
   );
@@ -106,6 +113,9 @@ export default async function handler(req, res) {
       const payload = await response.json();
       if (payload && typeof payload.downloadUrl === "string" && payload.downloadUrl.startsWith("/")) {
         payload.downloadUrl = buildProxyDownloadUrl(req, nodeOrigin, payload.downloadUrl);
+      }
+      if (payload && typeof payload.playbackUrl === "string" && payload.playbackUrl.startsWith("/")) {
+        payload.playbackUrl = buildProxyDownloadUrl(req, nodeOrigin, payload.playbackUrl);
       }
       res.status(response.status).json(payload);
       return;

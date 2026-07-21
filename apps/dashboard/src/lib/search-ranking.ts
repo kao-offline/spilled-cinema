@@ -241,3 +241,79 @@ export function keepHighConfidenceSearchResults<T extends { matchScore?: number 
   const threshold = Math.max(1800, Math.round(topScore * 0.45));
   return sorted.filter((result) => (result.matchScore ?? 0) >= threshold);
 }
+
+type UnifiedSearchRankingItem = {
+  title: string;
+  alternateTitles?: string[];
+  mediaType?: "movie" | "serial";
+  year?: string | null;
+  matchScore?: number;
+  searchSignals?: {
+    popularity?: number | null;
+    voteCount?: number | null;
+    voteAverage?: number | null;
+    releaseDate?: string | null;
+    originalLanguage?: string | null;
+  };
+};
+
+const SEARCH_NOISE_PATTERN = /\b(?:bts|behind the scenes|making of|featurette|interview|conversation|im gesprach|gesprach|fan film|parody|trailer)\b/i;
+
+function parseSearchYear(value: string | null | undefined) {
+  const match = value?.match(/\b(19|20)\d{2}\b/);
+  return match ? Number.parseInt(match[0], 10) : null;
+}
+
+export function unifiedSearchResultScore(query: string, item: UnifiedSearchRankingItem, index = 0) {
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedTitle = normalizeSearchText(item.title);
+  const normalizedAliases = (item.alternateTitles ?? []).map(normalizeSearchText).filter(Boolean);
+  const displayExact = normalizedTitle === normalizedQuery;
+  const aliasExact = normalizedAliases.includes(normalizedQuery);
+  const canonicalExact = displayExact || aliasExact;
+  const displayPrefix = normalizedTitle.startsWith(`${normalizedQuery} `) || normalizedTitle.startsWith(`${normalizedQuery}:`);
+  const aliasPrefix = normalizedAliases.some((alias) => alias.startsWith(`${normalizedQuery} `) || alias.startsWith(`${normalizedQuery}:`));
+
+  let score = scoreSearchCandidate(query, [item.title, ...(item.alternateTitles ?? []), item.year], index);
+  if (displayExact) score += 50_000;
+  else if (aliasExact) score += 48_000;
+  else if (displayPrefix) score += 24_000;
+  else if (aliasPrefix) score += 22_000;
+  else if (hasRequiredSearchTokenCoverage(query, [item.title, ...(item.alternateTitles ?? [])])) score += 12_000;
+
+  const queryRequestsNoise = SEARCH_NOISE_PATTERN.test(normalizedQuery);
+  if (!canonicalExact && !queryRequestsNoise && SEARCH_NOISE_PATTERN.test(normalizedTitle)) {
+    score -= 18_000;
+  }
+
+  const signals = item.searchSignals;
+  const popularity = Math.max(0, signals?.popularity ?? 0);
+  const voteCount = Math.max(0, signals?.voteCount ?? 0);
+  score += Math.min(4_000, Math.round(popularity * 12));
+  score += Math.min(4_000, Math.round(Math.log10(voteCount + 1) * 1_200));
+
+  const year = parseSearchYear(signals?.releaseDate ?? item.year);
+  const currentYear = new Date().getFullYear();
+  if (canonicalExact && year !== null) {
+    score += Math.max(0, Math.min(currentYear + 2, year) - 1900) * 10;
+  }
+  if (canonicalExact && item.mediaType === "movie" && (voteCount >= 100 || popularity >= 20)) {
+    score += 3_500;
+  }
+  if (canonicalExact && item.mediaType === "movie" && year !== null && year >= currentYear - 1 && year <= currentYear + 2) {
+    score += 6_000;
+  }
+
+  // Provider-specific scores use different scales, so retain only a bounded
+  // tiebreak contribution after canonical metadata has determined relevance.
+  score += Math.min(1_000, Math.max(0, Math.round((item.matchScore ?? 0) / 8)));
+  return score;
+}
+
+export function sortUnifiedSearchResults<T extends UnifiedSearchRankingItem>(query: string, results: T[]) {
+  return [...results].sort((left, right) => {
+    const scoreDelta = unifiedSearchResultScore(query, right) - unifiedSearchResultScore(query, left);
+    if (scoreDelta !== 0) return scoreDelta;
+    return compareSearchScores(left, right);
+  });
+}

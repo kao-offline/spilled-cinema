@@ -10,7 +10,7 @@ The default repository currently publishes these integration ids:
 
 - `svetserialu`
 - `bombuj`
-- `synova`
+- `vidking`
 - `tmdb`
 - `tvdb`
 - `fanart`

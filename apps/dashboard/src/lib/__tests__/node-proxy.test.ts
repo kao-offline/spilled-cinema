@@ -16,6 +16,8 @@ describe("node proxy allowlist", () => {
     expect(isAllowedNodePath("/api/provider-feed")).toBe(true);
     expect(isAllowedNodePath("/api/import-svetserialu")).toBe(true);
     expect(isAllowedNodePath("/api/player/resolve")).toBe(true);
+    expect(isAllowedNodePath("/api/player/clean-resolve")).toBe(true);
+    expect(isAllowedNodePath("/api/player/playback-resolve")).toBe(true);
   });
 
   it("rejects private node routes", () => {

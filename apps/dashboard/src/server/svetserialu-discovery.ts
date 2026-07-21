@@ -170,10 +170,12 @@ export async function hydrateSvetItem(item: ExploreItem) {
     let artwork: {
       posterUrl: string | null;
       backdropUrl: string | null;
+      bannerUrl: string | null;
       clearLogoUrl: string | null;
     } = {
       posterUrl: detail.posterUrl ?? item.posterUrl ?? null,
       backdropUrl: item.backdropUrl ?? null,
+      bannerUrl: (item as typeof item & { bannerUrl?: string | null }).bannerUrl ?? null,
       clearLogoUrl: null,
     };
 
@@ -190,6 +192,7 @@ export async function hydrateSvetItem(item: ExploreItem) {
       artwork = {
         posterUrl: enrichedArtwork.posterUrl ?? detail.posterUrl ?? item.posterUrl ?? null,
         backdropUrl: enrichedArtwork.backdropUrl ?? item.backdropUrl ?? null,
+        bannerUrl: enrichedArtwork.bannerUrl ?? (item as typeof item & { bannerUrl?: string | null }).bannerUrl ?? null,
         clearLogoUrl: enrichedArtwork.clearLogoUrl ?? null,
       };
     } catch {
@@ -201,6 +204,7 @@ export async function hydrateSvetItem(item: ExploreItem) {
       title: detail.title || item.title,
       posterUrl: artwork.posterUrl ?? detail.posterUrl ?? item.posterUrl ?? null,
       backdropUrl: artwork.backdropUrl ?? item.backdropUrl ?? null,
+      bannerUrl: artwork.bannerUrl ?? (item as typeof item & { bannerUrl?: string | null }).bannerUrl ?? null,
       description: detail.description,
       year: detail.year ?? item.year ?? null,
       yearLabel: detail.year ?? item.yearLabel ?? null,

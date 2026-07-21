@@ -17,13 +17,13 @@ describe("provider repository manifests", () => {
         updatedAt: "2026-06-05T00:00:00.000Z",
         integrations: [
           {
-            id: "synova",
-            displayName: "Synova",
+            id: "cineby",
+            displayName: "Cineby",
             version: "2.0.0",
             status: "stable",
             runtime: {
               apiVersion: 2,
-              entry: "connectors/synova.js",
+              entry: "connectors/cineby.js",
             },
             capabilities: ["search", "discovery", "metadata", "import", "players", "noCredentials"],
           },
@@ -34,15 +34,15 @@ describe("provider repository manifests", () => {
     const integrations = getRepositoryIntegrations(loaded);
     expect(integrations).toHaveLength(1);
     expect(integrations[0]).toMatchObject({
-      id: "synova",
+      id: "cineby",
       repositoryUrl: loaded.repositoryUrl,
       capabilities: expect.arrayContaining(["search", "players", "noCredentials"]),
     });
 
     const module = integrationToProviderModuleManifest(integrations[0]);
     expect(module).toMatchObject({
-      moduleId: "synova",
-      displayName: "Synova",
+      moduleId: "cineby",
+      displayName: "Cineby",
       status: "active",
       capabilities: {
         import: true,

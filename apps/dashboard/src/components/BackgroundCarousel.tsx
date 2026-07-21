@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { balancedBackgroundImage } from '../lib/image-resolution';
 
 const images = [
   'https://images.unsplash.com/photo-1534067783941-51c9c23ecefd?q=80&w=2000&auto=format&fit=crop',
@@ -26,7 +27,7 @@ export function BackgroundCarousel() {
             i === current ? 'opacity-40 scale-100' : 'opacity-0 scale-110'
           }`}
           style={{
-            backgroundImage: `url(${url})`,
+            ...balancedBackgroundImage(url, 'backdrop-hero'),
             backgroundSize: 'cover',
             backgroundPosition: 'center',
             transform: i === current ? 'scale(1)' : 'scale(1.1)',

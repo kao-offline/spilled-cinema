@@ -113,6 +113,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/svetserialu/auth/verify", handler: handlers.svetSerialuAuthVerifyHandler },
   { path: "/api/import-bombuj", handler: handlers.importBombujHandler },
   { path: "/api/search", handler: handlers.searchHandler },
+  { path: "/api/vidking/availability", handler: handlers.vidkingAvailabilityHandler },
   { path: "/api/provider-modules", handler: handlers.providerModulesHandler },
   { path: "/api/provider-feed", handler: handlers.providerFeedHandler },
   { path: "/api/provider-search", handler: handlers.providerSearchHandler },
@@ -128,9 +129,19 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/trending/feed", handler: handlers.trendingFeedHandler },
   { path: "/api/artwork/refresh", handler: handlers.refreshArtworkHandler },
   { path: "/api/artwork/search", handler: handlers.searchArtworkHandler },
+  { path: "/api/artwork/title-metadata", handler: handlers.titleMetadataArtworkHandler },
+  { path: "/api/artwork/cast", handler: handlers.castArtworkHandler },
+  { path: "/api/artwork/person-credits", handler: handlers.personCreditsArtworkHandler },
   { path: "/api/download-full/start", handler: handlers.startDownloadHandler },
   { path: "/api/download-full/browser-start", handler: handlers.browserStartHandler },
   { path: "/api/player/resolve", handler: handlers.playerResolveHandler },
+  { path: "/api/player/frame", handler: handlers.playerFrameHandler },
+  { path: "/api/player/clean-resolve", handler: handlers.cleanPlayerResolveHandler },
+  { path: "/api/player/playback-resolve", handler: handlers.playbackResolveHandler },
+  { path: "/cdn-cgi/rum", handler: handlers.quietBeaconHandler },
+  { path: "/_next/static", handler: handlers.cinebyAssetHandler },
+  { path: "/scripts", handler: handlers.cinebyAssetHandler },
+  { path: "/api/cineby-api", handler: handlers.cinebyApiHandler },
   { path: "/api/download-full/browser-file", handler: handlers.browserFileHandler },
   { path: "/api/download-full/status", handler: handlers.downloadStatusHandler },
   { path: "/api/download-full/check", handler: handlers.downloadCheckHandler },
@@ -196,7 +207,9 @@ function notFound(res: ServerResponse) {
 
 function findHandler(url = "") {
   const pathname = url.split("?")[0] || "/";
-  return routes.find((route) => route.path === pathname)?.handler;
+  return routes.find((route) => route.path === pathname || (
+    (route.path === "/_next/static" || route.path === "/scripts" || route.path === "/api/cineby-api") && pathname.startsWith(`${route.path}/`)
+  ))?.handler;
 }
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {

@@ -10,6 +10,13 @@ export type EpisodePlayer = {
   sourcePageUrl: string;
   embedUrl: string;
   subtitlesUrl?: string;
+  streamUrl?: string;
+  streamType?: "hls" | "mp4" | "dash" | "embed" | "unknown";
+  streamRefererUrl?: string;
+  resolvedAt?: number;
+  resolutionHash?: string;
+  resolutionStatus?: "unresolved" | "resolving" | "resolved" | "failed";
+  resolutionError?: string;
 };
 
 export type LibraryEpisode = {
@@ -24,7 +31,29 @@ export type LibraryEpisode = {
   episodeUrl: string;
   players: EpisodePlayer[];
   selectedPlayerAlias: PlayerAlias;
+  durationSeconds?: number;
+  playbackPositionSeconds?: number;
+  playbackDurationSeconds?: number;
+  playbackUpdatedAt?: number;
   importedAt: number;
+};
+
+export type CastMember = {
+  name: string;
+  role?: string | null;
+  profileUrl?: string | null;
+};
+
+export type PersonCredit = {
+  id: string;
+  tmdbId: number;
+  title: string;
+  mediaType: ExploreMediaType;
+  role?: string | null;
+  year?: string | null;
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  description?: string | null;
 };
 
 export type ImportedShow = {
@@ -41,11 +70,58 @@ export type ImportedShow = {
   };
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  bannerUrl?: string | null;
+  homepagePosterUrl?: string | null;
+  homepageBannerUrl?: string | null;
+  homepageArtworkVersion?: number | null;
   clearLogoUrl?: string | null;
+  artwork?: LibraryArtworkSet;
+  metadata?: LibraryTitleMetadata;
+  canonicalIdentity?: TitleIdentity;
+  providerMatches?: ProviderMatch[];
+  actors?: CastMember[];
+  directors?: CastMember[];
   availableSeasons: number[];
   importedAt: number;
   episodes: LibraryEpisode[];
   isFavorite?: boolean;
+};
+
+export type LibraryRating = {
+  source: "csfd" | "tmdb" | "imdb" | "user" | "provider";
+  value: number;
+  scale: 5 | 10 | 100;
+  label?: string | null;
+};
+
+export type LibraryArtworkSet = {
+  posterUrl?: string | null;
+  /** Clean, wide artwork used behind a separate HD logo. */
+  bannerUrl?: string | null;
+  /** Transparent title treatment layered over a clean banner. */
+  clearLogoUrl?: string | null;
+  /** Self-contained wide artwork with the title/logo baked in. */
+  bannerWithLogoUrl?: string | null;
+  /** @deprecated Legacy alias for a clean banner. */
+  backdropUrl?: string | null;
+};
+
+export type LibraryTitleMetadata = {
+  title: string;
+  originalTitle?: string | null;
+  description?: string | null;
+  year?: number | null;
+  years?: string | null;
+  mediaType?: ExploreMediaType;
+  runtimeMinutes?: number | null;
+  seasonCount: number;
+  episodeCount: number;
+  genres: string[];
+  ratings: LibraryRating[];
+  actors: CastMember[];
+  directors: CastMember[];
+  updatedAt: number;
+  enrichmentVersion?: number;
 };
 
 export type ArtworkSourceSettings = {
@@ -119,8 +195,10 @@ export type ExploreItem = {
   detailUrl: string;
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  bannerUrl?: string | null;
   year?: string | null;
   yearLabel?: string | null;
+  alternateTitles?: string[];
   description?: string | null;
   genres: string[];
   audioBuckets: ExploreAudioBucket[];
@@ -131,7 +209,17 @@ export type ExploreItem = {
   sectionKeys: ExploreSectionKey[];
   inVault: boolean;
   availableNow: boolean;
+  availability?: "available" | "checking" | "unavailable" | "unknown";
+  availabilityReason?: string | null;
   matchScore?: number;
+  searchSignals?: {
+    source?: "tmdb" | "imdb" | "tvmaze" | "wikidata" | "provider";
+    popularity?: number | null;
+    voteCount?: number | null;
+    voteAverage?: number | null;
+    releaseDate?: string | null;
+    originalLanguage?: string | null;
+  };
   discoveryScore?: number;
   recommendationReasons?: RecommendationReason[];
   importedAt?: number;
@@ -413,6 +501,7 @@ export type CanonicalMetadata = {
 export type ArtworkSet = {
   posterUrl?: string | null;
   backdropUrl?: string | null;
+  bannerUrl?: string | null;
   clearLogoUrl?: string | null;
 };
 

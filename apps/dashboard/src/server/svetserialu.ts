@@ -7,8 +7,11 @@ import {
   hasRequiredSearchTokenCoverage,
   hasSignificantSearchTokenMatch,
   keepHighConfidenceSearchResults,
+  normalizeSearchText,
   scoreSearchCandidate,
 } from "../lib/search-ranking";
+import { searchSvetSerialuCatalog } from "./svetserialu-catalog";
+import { searchSvetSerialuAlgolia } from "./svetserialu-algolia";
 
 const BASE_URLS: string[] = ["https://svetserialu.to", "https://svetserialu.io", "https://svetserialov.to"];
 const BASE_URL = BASE_URLS[0];
@@ -70,6 +73,16 @@ function absoluteUrl(value: string, base = BASE_URL) {
     return new URL(value, base).toString();
   } catch {
     return value;
+  }
+}
+
+function isSvetSerialuInternalSourceUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return BASE_URLS.some((baseUrl) => parsed.hostname === new URL(baseUrl).hostname) &&
+      parsed.pathname.includes("/sources/");
+  } catch {
+    return false;
   }
 }
 
@@ -448,15 +461,20 @@ function detectLanguage(rawHints: string) {
   const hasDub = /\b(?:dab|dabing|dubbing|dubbed)\b/i.test(normalized);
   const hasSubs = /\b(?:tit|titul|titulky|sub|subs|subtitle|subtitles)\b/i.test(normalized);
 
-  if (hasCzech && hasDub) return "Czech (Dubbed)";
-  if (hasCzech && hasSubs) return "Czech (Subtitles)";
-  if (hasSlovak && hasDub) return "Slovak (Dubbed)";
-  if (hasSlovak && hasSubs) return "Slovak (Subtitles)";
-  if (hasEnglish && hasDub) return "English (Dubbed)";
-  if (hasEnglish && hasSubs) return "English (Subtitles)";
-  if (hasCzech) return "Czech";
-  if (hasSlovak) return "Slovak";
-  if (hasEnglish) return "English";
+  if (hasCzech && hasSlovak && hasEnglish && hasSubs) return "English audio + CZ/SK subtitles";
+  if (hasCzech && hasSlovak && hasDub) return "Czech/Slovak audio";
+  if (hasCzech && hasSlovak && hasSubs) return "CZ/SK subtitles";
+  if (hasCzech && hasDub) return "Czech audio";
+  if (hasCzech && hasSubs) return "Czech subtitles";
+  if (hasSlovak && hasDub) return "Slovak audio";
+  if (hasSlovak && hasSubs) return "Slovak subtitles";
+  if (hasEnglish && hasCzech && hasSubs) return "English audio + Czech subtitles";
+  if (hasEnglish && hasSlovak && hasSubs) return "English audio + Slovak subtitles";
+  if (hasEnglish && hasDub) return "English audio";
+  if (hasEnglish && hasSubs) return "English subtitles";
+  if (hasCzech) return "Czech audio";
+  if (hasSlovak) return "Slovak audio";
+  if (hasEnglish) return "English audio";
   if (hasDub) return "Dubbed";
   if (hasSubs) return "Subtitles";
 
@@ -472,25 +490,29 @@ function normalizeSourceLanguageLabel(rawLabel: string) {
   const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
 
   if (/^cz\s*\/\s*sk\s*\+\s*en(?:\s+titulky)?$/i.test(normalized)) {
-    return "EN + CZ/SK TIT";
+    return "English audio + CZ/SK subtitles";
+  }
+
+  if (/^cz\s*\/\s*sk(?:\s+dabing|\s+dubbed)?$/i.test(normalized)) {
+    return "Czech/Slovak audio";
   }
 
   if (/^cz(?:\s+dabing|\s+dubbed)?$/i.test(normalized)) {
-    return "CZ DUBBED";
+    return "Czech audio";
   }
 
   if (/^sk(?:\s+dabing|\s+dubbed)?$/i.test(normalized)) {
-    return "SK DUBBED";
+    return "Slovak audio";
   }
 
   if (/^en(?:\s+titulky|\s+subs?|\s+subtitles?)?$/i.test(normalized)) {
-    return "EN SUBS";
+    return normalized === "en" ? "English audio" : "English subtitles";
   }
 
   return detectLanguage(value) ?? value;
 }
 
-async function extractPlayers(episodeHtml: string, episodeUrl: string) {
+async function extractPlayers(episodeHtml: string, episodeUrl: string, credentials?: SvetSerialuCredentials | null) {
   const players: { provider: string; sourcePageUrl: string; language?: string }[] = [];
   const linkPattern = /<a([^>]*\bclass="[^"]*\bsource_link\b[^"]*"[^>]*)>([\s\S]*?)<\/a>/gi;
 
@@ -545,7 +567,7 @@ async function extractPlayers(episodeHtml: string, episodeUrl: string) {
     const before = players.length;
     if (dataIframeUrl) {
       try {
-        const loadedList = await fetchText(absoluteUrl(dataIframeUrl, episodeUrl), episodeUrl);
+        const loadedList = await fetchText(absoluteUrl(dataIframeUrl, episodeUrl), episodeUrl, credentials);
         extractFromBlock(loadedList, language);
       } catch {
         // fall through to any inline content if the AJAX list cannot be loaded
@@ -568,7 +590,7 @@ function resolvePlayerHtml(playerHtml: string, sourcePageUrl: string) {
   if (iframeSrc) {
     const embedUrl = absoluteUrl(iframeSrc, sourcePageUrl);
     // Don't allow svetserialu internal URLs as embed sources
-    if (!embedUrl.includes("svetserialu.to/sources/")) {
+    if (!isSvetSerialuInternalSourceUrl(embedUrl)) {
       let subtitlesUrl: string | undefined;
 
       try {
@@ -592,7 +614,7 @@ function resolvePlayerHtml(playerHtml: string, sourcePageUrl: string) {
 
   const embedUrl = absoluteUrl(redirectUrl, sourcePageUrl);
   // Don't allow svetserialu internal URLs as embed sources
-  if (embedUrl.includes("svetserialu.to/sources/")) {
+  if (isSvetSerialuInternalSourceUrl(embedUrl)) {
     return null;
   }
 
@@ -602,10 +624,14 @@ function resolvePlayerHtml(playerHtml: string, sourcePageUrl: string) {
   };
 }
 
-async function resolvePlayers(players: { provider: string; sourcePageUrl: string; language?: string }[], episodeUrl: string) {
+async function resolvePlayers(
+  players: { provider: string; sourcePageUrl: string; language?: string }[],
+  episodeUrl: string,
+  credentials?: SvetSerialuCredentials | null,
+) {
   const resolved = await mapWithConcurrency(players, 4, async (player) => {
     try {
-      const html = await fetchText(player.sourcePageUrl, episodeUrl);
+      const html = await fetchText(player.sourcePageUrl, episodeUrl, credentials);
       const result = resolvePlayerHtml(html, player.sourcePageUrl);
       if (!result?.embedUrl) {
         return null;
@@ -645,6 +671,39 @@ void resolvePlayers;
 
 function createEpisodeId(showSlug: string, episode: ParsedEpisode) {
   return `${showSlug}:${episode.episodeCode ?? `s${episode.seasonNumber}e${episode.episodeNumber ?? "x"}`}`;
+}
+
+function buildSvetSerialuFallbackPlayer(episodeUrl: string) {
+  const defaultAlias = "embed-default" as PlayerAlias;
+  return {
+    alias: defaultAlias,
+    label: "SvetSerialu",
+    provider: "svetserialu",
+    language: "cs",
+    sourcePageUrl: episodeUrl,
+    embedUrl: episodeUrl,
+    subtitlesUrl: undefined,
+    resolutionStatus: "failed" as const,
+    resolutionError: "No external SvetSerialu player links could be extracted for this episode.",
+  };
+}
+
+function toEpisodePlayers(players: ParsedPlayer[]) {
+  return players.map((player, index) => {
+    const known = PLAYER_ALIASES[player.provider];
+    const baseAlias = known?.alias ?? player.provider.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const label = known?.label ?? player.provider;
+    return {
+      alias: `${baseAlias}-${index + 1}` as PlayerAlias,
+      label,
+      provider: player.provider,
+      language: player.language,
+      sourcePageUrl: player.sourcePageUrl,
+      embedUrl: player.embedUrl,
+      subtitlesUrl: player.subtitlesUrl,
+      resolutionStatus: "unresolved" as const,
+    };
+  });
 }
 
 function parseYearHint(value: string | null | undefined) {
@@ -726,9 +785,28 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     throw new Error(`No episodes found for show "${slug}".`);
   }
 
+  const episodeHtmlCache = new Map<string, string>([[firstEpisodeUrl, firstEpisodeHtml]]);
   const importedAt = Date.now();
-  const resolvedEpisodes = parsedEpisodes.map((episode) => {
-    const defaultAlias = "embed-default" as PlayerAlias;
+  const resolvedEpisodes = await mapWithConcurrency(parsedEpisodes, 3, async (episode) => {
+    let episodePlayers: LibraryEpisode["players"] = [];
+    try {
+      const episodeHtml = episodeHtmlCache.get(episode.episodeUrl) ??
+        await fetchText(episode.episodeUrl, showUrl, credentials);
+      episodeHtmlCache.set(episode.episodeUrl, episodeHtml);
+      const sourcePlayers = await extractPlayers(episodeHtml, episode.episodeUrl, credentials);
+      const resolvedPlayers = await resolvePlayers(sourcePlayers, episode.episodeUrl, credentials);
+      episodePlayers = toEpisodePlayers(resolvedPlayers);
+    } catch (error) {
+      console.warn("[svetserialu] failed to resolve episode players", {
+        episodeUrl: episode.episodeUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const players = episodePlayers.length > 0
+      ? episodePlayers
+      : [buildSvetSerialuFallbackPlayer(episode.episodeUrl)];
+
     return {
       id: createEpisodeId(slug, episode),
       showSlug: slug,
@@ -739,18 +817,8 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
       episodeCode: episode.episodeCode,
       episodeTitle: buildEpisodeTitle(title, episode),
       episodeUrl: episode.episodeUrl,
-      players: [
-        {
-          alias: defaultAlias,
-          label: "SvetSerialu",
-          provider: "svetserialu",
-          language: "cs",
-          sourcePageUrl: episode.episodeUrl,
-          embedUrl: episode.episodeUrl,
-          subtitlesUrl: undefined,
-        },
-      ],
-      selectedPlayerAlias: defaultAlias,
+      players,
+      selectedPlayerAlias: players[0].alias,
       importedAt,
     } satisfies LibraryEpisode;
   });
@@ -781,6 +849,7 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     years: years || null,
     posterUrl: artwork.posterUrl ?? (posterPath ? absoluteUrl(posterPath, BASE_URL) : null),
     backdropUrl: artwork.backdropUrl ?? null,
+    bannerUrl: artwork.bannerUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
     availableSeasons: [...availableSeasons].sort((a, b) => a - b),
     importedAt,
@@ -806,6 +875,13 @@ export type SvetSerialuSearchResult = {
   posterUrl?: string | null;
   mediaType?: "serial";
   year?: string | null;
+  alternateTitles?: string[];
+  description?: string | null;
+  genres?: string[];
+  csfdRating?: string | number | null;
+  actors?: string[];
+  directors?: string[];
+  detailUrl?: string | null;
   matchScore?: number;
 };
 
@@ -880,7 +956,27 @@ function scoreSvetProviderMatchForCatalog(query: string, result: SvetSerialuSear
   return Math.max(titleScore, originalScore) + queryScore + yearBonus + yearPenalty + Math.round(catalog.matchScore / 2);
 }
 
-export async function searchSvetSerialu(query: string, credentials?: SvetSerialuCredentials | null): Promise<SvetSerialuSearchResult[]> {
+async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuCredentials | null): Promise<SvetSerialuSearchResult[]> {
+  const catalogResults = (await searchSvetSerialuCatalog(query, 8)).map((item) => ({
+    title: item.title,
+    slug: item.importSlug || item.slug,
+    platform: "svetserialu" as const,
+    posterUrl: item.posterUrl,
+    mediaType: "serial" as const,
+    year: item.yearLabel ?? item.year,
+    alternateTitles: item.alternateTitles,
+    description: item.description,
+    genres: item.genres,
+    actors: item.actors,
+    directors: item.directors,
+    detailUrl: item.detailUrl,
+    matchScore: item.matchScore,
+  }));
+
+  if (catalogResults.length > 0) {
+    return catalogResults;
+  }
+
   const catalog = (await searchExternalTitles(query, 8)).filter((candidate) => candidate.mediaType === "serial");
   const targeted = await mapWithConcurrency(catalog, 4, async (candidate) => {
     const terms = [
@@ -913,4 +1009,83 @@ export async function searchSvetSerialu(query: string, credentials?: SvetSerialu
   }
 
   return keepHighConfidenceSearchResults([...unique.values()]).slice(0, 8);
+}
+
+type SearchSettled = {
+  status: "fulfilled";
+  value: SvetSerialuSearchResult[];
+} | {
+  status: "rejected";
+  value: SvetSerialuSearchResult[];
+};
+
+function settleSearch(promise: Promise<SvetSerialuSearchResult[]>): Promise<SearchSettled> {
+  return promise
+    .then((value): SearchSettled => ({ status: "fulfilled", value }))
+    .catch((): SearchSettled => ({ status: "rejected", value: [] }));
+}
+
+function waitForSearch(
+  promise: Promise<SearchSettled>,
+  ms: number,
+): Promise<SearchSettled | null> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), Math.max(0, ms));
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
+function mergeSvetSerialuResults(...groups: SvetSerialuSearchResult[][]) {
+  const unique = new Map<string, SvetSerialuSearchResult>();
+  for (const result of groups.flat().sort(compareSearchScores)) {
+    const key = result.slug || normalizeSearchText(result.title);
+    const existing = unique.get(key);
+    if (!existing) {
+      unique.set(key, result);
+      continue;
+    }
+
+    const stronger = (result.matchScore ?? 0) > (existing.matchScore ?? 0) ? result : existing;
+    const weaker = stronger === result ? existing : result;
+    unique.set(key, {
+      ...stronger,
+      year: stronger.year ?? weaker.year,
+      posterUrl: stronger.posterUrl ?? weaker.posterUrl,
+      description: stronger.description ?? weaker.description,
+      genres: stronger.genres?.length ? stronger.genres : weaker.genres,
+      csfdRating: stronger.csfdRating ?? weaker.csfdRating,
+      alternateTitles: stronger.alternateTitles?.length ? stronger.alternateTitles : weaker.alternateTitles,
+      actors: stronger.actors?.length ? stronger.actors : weaker.actors,
+      directors: stronger.directors?.length ? stronger.directors : weaker.directors,
+      detailUrl: stronger.detailUrl ?? weaker.detailUrl,
+    });
+  }
+  return keepHighConfidenceSearchResults([...unique.values()].sort(compareSearchScores)).slice(0, 8);
+}
+
+export async function searchSvetSerialu(query: string, credentials?: SvetSerialuCredentials | null): Promise<SvetSerialuSearchResult[]> {
+  if (query.trim().length < 2) {
+    return [];
+  }
+
+  const algoliaSearch = settleSearch(searchSvetSerialuAlgolia(query, 12));
+  const legacySearch = settleSearch(searchSvetSerialuLegacy(query, credentials));
+
+  const algoliaFast = await waitForSearch(algoliaSearch, 250);
+  const legacyFast = await waitForSearch(legacySearch, 0);
+  if (algoliaFast?.status === "fulfilled" && algoliaFast.value.length >= 4) {
+    return mergeSvetSerialuResults(algoliaFast.value, legacyFast?.value ?? []);
+  }
+
+  const [algoliaFinal, legacyFinal] = await Promise.all([
+    algoliaFast ?? waitForSearch(algoliaSearch, 500),
+    legacyFast ?? waitForSearch(legacySearch, 500),
+  ]);
+
+  return mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);
 }

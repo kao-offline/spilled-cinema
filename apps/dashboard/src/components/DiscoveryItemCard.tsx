@@ -1,6 +1,7 @@
 import { Film } from "lucide-react";
 import { clsx } from "clsx";
 import type { ExploreItem } from "../lib/types";
+import { balancedBackgroundImage } from "../lib/image-resolution";
 
 type DiscoveryItemCardProps = {
   item: ExploreItem;
@@ -25,7 +26,7 @@ export function DiscoveryItemCard({ item, onClick, className }: DiscoveryItemCar
         {artwork ? (
           <div
             className="absolute inset-0 bg-cover bg-center transition-transform duration-500 group-hover:scale-[1.04]"
-            style={{ backgroundImage: `url(${artwork})` }}
+            style={balancedBackgroundImage(artwork, item.posterUrl ? "poster-card" : "backdrop-thumb")}
           />
         ) : (
           <div className="absolute inset-0 bg-[linear-gradient(180deg,#232834,#12151c)]" />

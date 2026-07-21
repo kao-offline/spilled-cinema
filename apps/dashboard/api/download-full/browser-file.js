@@ -17,6 +17,81 @@ function getSafeName(input) {
   return /\.[a-z0-9]{2,5}$/i.test(cleaned) ? cleaned : `${cleaned}.mp4`;
 }
 
+function isHlsPlaylistResponse(url, contentType) {
+  return /\.m3u8(?:$|[?#])/i.test(url.pathname + url.search) ||
+    /\/hls3\/[^\s"'<>]+\.txt(?:$|[?#])/i.test(url.pathname + url.search) ||
+    /(?:mpegurl|application\/vnd\.apple\.mpegurl|audio\/x-mpegurl)/i.test(contentType);
+}
+
+function isCacheableHlsAsset(url, contentType) {
+  return isHlsPlaylistResponse(url, contentType) ||
+    /\.(?:ts|m4s|aac|vtt)(?:$|[?#])/i.test(url.pathname + url.search) ||
+    /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
+}
+
+function buildBrowserFileProxyPath(streamUrl, fileName, referer) {
+  const params = new URLSearchParams({
+    url: streamUrl,
+    name: fileName,
+  });
+  if (referer) {
+    params.set("referer", referer);
+  }
+  return `/api/download-full/browser-file?${params.toString()}`;
+}
+
+function rewriteHlsTagUris(line, playlistUrl, fileName, referer) {
+  return line.replace(/\bURI=(["'])([^"']+)\1/gi, (match, quote, rawUrl) => {
+    try {
+      const absolute = new URL(rawUrl, playlistUrl).toString();
+      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString())}${quote}`;
+    } catch {
+      return match;
+    }
+  });
+}
+
+function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
+  const preserveImageNamedSegments = Boolean(getBrowserFileOriginHeader(referer));
+  return playlist
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return line;
+      }
+      if (trimmed.startsWith("#")) {
+        return rewriteHlsTagUris(line, playlistUrl, fileName, referer);
+      }
+      const isKnownAd = /ad-site|\.image(?:[?#]|$)/i.test(trimmed);
+      const isImageNamed = /\.(?:png|jpe?g|webp|gif)(?:[?#]|$)/i.test(trimmed);
+      if (isKnownAd || (isImageNamed && !preserveImageNamedSegments)) {
+        return line;
+      }
+
+      try {
+        const absolute = new URL(trimmed, playlistUrl).toString();
+        return buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString());
+      } catch {
+        return line;
+      }
+    })
+    .join("\n");
+}
+
+function getBrowserFileOriginHeader(referer) {
+  if (!referer) return undefined;
+  try {
+    const parsed = new URL(referer);
+    if (/(^|\.)vidking\.net$/i.test(parsed.hostname)) {
+      return parsed.origin;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -58,6 +133,7 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
     const upstreamHeaders = {
       "user-agent": USER_AGENT,
       accept: "*/*",
@@ -79,7 +155,10 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const contentType = isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)
+      ? "video/mp2t"
+      : upstreamContentType;
     const contentLength = upstream.headers.get("content-length");
     const contentRange = upstream.headers.get("content-range");
     const acceptRanges = upstream.headers.get("accept-ranges") || "bytes";
@@ -87,8 +166,17 @@ module.exports = async function handler(req, res) {
     res.statusCode = upstream.status;
     res.setHeader("Content-Type", contentType);
     res.setHeader("Accept-Ranges", acceptRanges);
-    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+
+    if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {
+      const playlist = await upstream.text();
+      const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer);
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+      res.setHeader("Content-Length", Buffer.byteLength(rewritten).toString());
+      res.end(rewritten);
+      return;
+    }
 
     if (contentLength) {
       res.setHeader("Content-Length", contentLength);

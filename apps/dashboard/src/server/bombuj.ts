@@ -220,6 +220,23 @@ function normalizeBombujLink(rawLink: string, baseUrl: string) {
   return absoluteBombujUrl(withProtocol, baseUrl);
 }
 
+function extractSubtitleUrlFromEmbedUrl(embedUrl: string) {
+  try {
+    const parsed = new URL(embedUrl);
+    for (let index = 1; index <= 8; index += 1) {
+      const file = parsed.searchParams.get(`c${index}_file`);
+      if (!file?.trim()) continue;
+      const subtitleUrl = new URL(file, parsed).toString();
+      if (/^https?:\/\//i.test(subtitleUrl)) {
+        return subtitleUrl;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function extractIframeSrc(html: string) {
   const direct = html.match(/<iframe[^>]+src=["']([^"']+)["']/i)?.[1];
   if (direct) {
@@ -289,7 +306,7 @@ async function resolveBombujPlayerUrl(
   siteBaseUrl: string,
   headers: Record<string, string>,
   maxDepth = 3,
-): Promise<string> {
+): Promise<string | null> {
   let currentUrl = normalizeBombujLink(rawLink, siteBaseUrl);
   if (!currentUrl) {
     return rawLink;
@@ -304,6 +321,12 @@ async function resolveBombujPlayerUrl(
 
     const iframeSrc = extractIframeSrc(html);
     if (!iframeSrc) {
+      // Bombuj sometimes leaves old server rows in the movie page even though
+      // their wrapper now contains only the VIP gate. Those rows have no media
+      // behind them and must not be exposed as playable sources.
+      if (isVipGateHtml(html)) {
+        return null;
+      }
       return currentUrl;
     }
 
@@ -347,6 +370,13 @@ async function buildBombujPlayer(
   const finalEmbed = normalizedLink
     ? await resolveBombujPlayerUrl(normalizedLink, sourcePageUrl, siteBaseUrl, headers)
     : rawLink;
+  if (!finalEmbed) {
+    return null;
+  }
+  const subtitlesUrl =
+    extractSubtitleUrlFromEmbedUrl(finalEmbed) ??
+    extractSubtitleUrlFromEmbedUrl(normalizedLink || rawLink) ??
+    undefined;
 
   return {
     alias: `bombuj-${playerIndex}` as PlayerAlias,
@@ -355,6 +385,8 @@ async function buildBombujPlayer(
     language,
     sourcePageUrl,
     embedUrl: finalEmbed,
+    subtitlesUrl,
+    resolutionStatus: "unresolved" as const,
   };
 }
 
@@ -422,7 +454,7 @@ async function extractBombujPlayersFromHtml(
   headers: Record<string, string>,
   fallbackLanguage = "Unknown Lang",
 ) {
-  const players: { alias: PlayerAlias; provider: string; label: string; language?: string; sourcePageUrl: string; embedUrl: string }[] = [];
+  const players: LibraryEpisode["players"] = [];
   let playerIndex = 0;
 
   const addServer = async (rawLink: string, label: string, language: string) => {
@@ -431,7 +463,7 @@ async function extractBombujPlayersFromHtml(
       return;
     }
 
-    players.push(await buildBombujPlayer(
+    const player = await buildBombujPlayer(
       rawLink,
       providerDomain,
       language,
@@ -439,7 +471,11 @@ async function extractBombujPlayersFromHtml(
       sourcePageUrl,
       siteBaseUrl,
       headers,
-    ));
+    );
+    if (!player) {
+      return;
+    }
+    players.push(player);
     playerIndex++;
   };
 
@@ -488,6 +524,35 @@ async function extractBombujPlayersFromHtml(
   }
 
   return players.sort((a, b) => providerScore(b) - providerScore(a));
+}
+
+async function removeUnavailableBombujAggregators(
+  players: LibraryEpisode["players"],
+  sourcePageUrl: string,
+) {
+  const aggregatorPattern = /^(?:vidsrc|vidlink|primewire|vidstream|multiembed|2embed|moviesclub)$/i;
+  const checks = await Promise.all(players.map(async (player) => {
+    if (!aggregatorPattern.test(player.provider ?? "")) {
+      return true;
+    }
+
+    try {
+      const { resolvePlaybackStream } = await import("./full-download");
+      const resolution = resolvePlaybackStream({
+        episodeId: `bombuj-preflight-${player.alias}`,
+        activePlayerAlias: player.alias,
+        players: [{ ...player, sourcePageUrl }],
+      }).then(() => true, () => false);
+      return await Promise.race([
+        resolution,
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 12_000)),
+      ]);
+    } catch {
+      return false;
+    }
+  }));
+
+  return players.filter((_player, index) => checks[index]);
 }
 
 /**
@@ -540,7 +605,8 @@ export async function fetchBombujMovie(slug: string, mediaType?: "movie" | "seri
       globalLanguage = stripTags(globalLangMatch[1]).trim() || "Unknown Lang";
   }
 
-  const players = await extractBombujPlayersFromHtml(html, movieUrl, siteBaseUrl, headers, globalLanguage);
+  const extractedPlayers = await extractBombujPlayersFromHtml(html, movieUrl, siteBaseUrl, headers, globalLanguage);
+  const players = await removeUnavailableBombujAggregators(extractedPlayers, movieUrl);
 
   if (players.length === 0) {
       players.push({
@@ -548,7 +614,9 @@ export async function fetchBombujMovie(slug: string, mediaType?: "movie" | "seri
           provider: "bombuj-native",
           label: "Bombuj Native",
           sourcePageUrl: movieUrl,
-          embedUrl: movieUrl
+          embedUrl: movieUrl,
+          resolutionStatus: "failed",
+          resolutionError: "No external Bombuj player links could be extracted for this title.",
       });
   }
 
@@ -591,6 +659,7 @@ export async function fetchBombujMovie(slug: string, mediaType?: "movie" | "seri
     years: yearWithRating,
     posterUrl: artwork.posterUrl ?? posterUrl,
     backdropUrl: artwork.backdropUrl ?? null,
+    bannerUrl: artwork.bannerUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
     availableSeasons: [episodePart?.seasonNumber ?? 1],
     importedAt,
@@ -788,6 +857,18 @@ export async function searchBombuj(query: string): Promise<BombujSearchResult[]>
     return [];
   }
 
+  // Bombuj's own suggestion endpoint is both faster and more authoritative than
+  // expanding the query through the external title catalog. Exact native hits
+  // must return immediately so unified search does not discard them on timeout.
+  const direct = await searchBombujProvider(query, { limit: 8 });
+  const hasExactDirectMatch = direct.some((result) =>
+    normalizeSearch(result.title) === normalizedQuery ||
+    normalizeSearch(result.slug.replace(/-/g, " ")) === normalizedQuery
+  );
+  if (hasExactDirectMatch) {
+    return keepHighConfidenceSearchResults(direct).slice(0, 8);
+  }
+
   const catalog = await searchExternalTitles(query, 10);
   const targeted = await mapWithConcurrency(catalog, 4, async (candidate) => {
     const terms = [
@@ -810,7 +891,6 @@ export async function searchBombuj(query: string): Promise<BombujSearchResult[]>
       matchScore: scoreProviderMatchForCatalog(query, result, candidate, index),
     }));
   });
-  const direct = await searchBombujProvider(query, { limit: catalog.length > 0 ? 4 : 8 });
   const merged = [...targeted.flat(), ...direct];
   const unique = new Map<string, BombujSearchResult>();
 

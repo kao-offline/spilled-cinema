@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import { DownloadManagerPanel } from "./DownloadManagerPanel";
 import type { PersistentDownloadJob } from "../lib/download-manager";
 import type { ProviderFeedViewId } from "../lib/provider-modules-shared";
+import { MobileDock } from "./MobileDock";
 
 export type ViewState = "home" | "favorites" | "explore" | "downloaded" | "import" | "settings" | "support" | ProviderFeedViewId;
 
@@ -19,9 +20,10 @@ type SidebarProps = {
   downloadJobs: PersistentDownloadJob[];
   onCancelDownload: (episodeId: string) => void;
   onDismissDownload: (episodeId: string) => void;
+  onOpenHomepage: () => void;
 };
 
-export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onCancelDownload, onDismissDownload }: SidebarProps) {
+export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onCancelDownload, onDismissDownload, onOpenHomepage }: SidebarProps) {
   const primaryLinks: Array<{ id: ViewState; label: string; icon: LucideIcon }> = [
     { id: "home", label: "Home", icon: Home },
     { id: "favorites", label: "Favorites", icon: Heart },
@@ -36,22 +38,27 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
   ];
 
   return (
-    <aside className="fixed inset-x-0 bottom-0 z-[60] flex max-h-[calc(100dvh-4rem)] w-full flex-col border-t border-white/5 bg-[#0c0d12]/95 px-3 py-3 backdrop-blur-xl lg:inset-y-0 lg:left-0 lg:w-64 lg:border-r lg:border-t-0 lg:px-6 lg:py-8">
+    <>
+      <MobileDock
+        active={activeView === "favorites" ? "favorites" : activeView === "explore" ? "explore" : "library"}
+        onHome={onOpenHomepage}
+        onLibrary={() => onChangeView("home")}
+        onFavorites={() => onChangeView("favorites")}
+        onExplore={() => onChangeView("explore")}
+      />
+    <aside className="fixed inset-y-0 left-0 z-[60] hidden h-screen w-64 flex-col border-r border-white/[0.08] bg-[#05060a]/94 px-5 py-6 backdrop-blur-2xl lg:flex">
       {/* Brand */}
-      <div className="flex items-center justify-between gap-3 px-1 pb-2 lg:px-2">
-        <button className="flex items-center gap-3 transition-transform hover:scale-105" onClick={() => onChangeView("home")}>
+      <div className="hidden items-center justify-between gap-3 px-2 pb-2 lg:flex">
+        <button className="flex items-center gap-3 opacity-95 transition-opacity hover:opacity-100" onClick={() => onChangeView("home")}>
           <img 
             src="/Spilled.svg" 
             alt="Spilled Logo" 
-            className="h-8 w-auto brightness-0 invert opacity-95 lg:h-10" 
+            className="h-9 w-auto brightness-0 invert"
           />
         </button>
-        <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/35 lg:hidden">
-          Vault
-        </span>
       </div>
 
-      <nav className="mt-2 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden pr-0 custom-scrollbar lg:mt-12 lg:gap-8 lg:pr-1">
+      <nav className="flex min-h-0 flex-1 gap-2 overflow-x-auto overflow-y-hidden lg:mt-10 lg:flex-col lg:gap-7 lg:overflow-y-auto lg:overflow-x-hidden lg:pr-1">
         <ul className="no-scrollbar flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
           {primaryLinks.map((link) => {
             const isActive = activeView === link.id;
@@ -61,13 +68,13 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
                   data-tutorial={link.id === "favorites" ? "sidebar-favorites" : link.id === "downloaded" ? "sidebar-downloaded" : link.id === "import" ? "sidebar-import" : undefined}
                   onClick={() => onChangeView(link.id)}
                   className={clsx(
-                    "flex min-w-[7.5rem] items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all lg:w-full lg:min-w-0 lg:gap-4 lg:px-4 lg:py-3",
+                    "flex min-w-[7rem] items-center justify-center gap-2.5 rounded-full border px-3 py-2.5 text-sm font-semibold transition lg:w-full lg:min-w-0 lg:justify-start lg:rounded-xl lg:px-3.5 lg:py-3",
                     isActive
-                      ? "bg-white/10 text-white"
-                      : "text-white/40 hover:bg-white/5 hover:text-white/80"
+                      ? "border-white bg-white text-black shadow-[0_8px_28px_rgba(255,255,255,0.08)]"
+                      : "border-transparent text-white/42 hover:border-white/[0.07] hover:bg-white/[0.045] hover:text-white/82"
                   )}
                 >
-                  <link.icon className={clsx("h-5 w-5 shrink-0", isActive ? "text-white" : "text-white/40")} />
+                  <link.icon className={clsx("h-[18px] w-[18px] shrink-0", isActive ? "text-black" : "text-white/38")} />
                   <span className="whitespace-nowrap">{link.label}</span>
                 </button>
               </li>
@@ -77,7 +84,7 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
 
         {feedLinks.length > 0 ? (
           <ul className="no-scrollbar flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
-            <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-white/20 lg:mb-2 lg:px-4 lg:text-xs">Feeds</div>
+            <div className="hidden px-3 text-[10px] font-black uppercase tracking-[0.24em] text-white/24 lg:mb-2 lg:block">Feeds</div>
             {feedLinks.map((link) => {
               const isActive = activeView === link.id;
               return (
@@ -85,13 +92,13 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
                   <button
                     onClick={() => onChangeView(link.id)}
                     className={clsx(
-                      "flex min-w-[9rem] items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all lg:w-full lg:min-w-0 lg:gap-4 lg:px-4 lg:py-3",
+                      "flex min-w-[8rem] items-center justify-center gap-2.5 rounded-full border px-3 py-2.5 text-sm font-semibold transition lg:w-full lg:min-w-0 lg:justify-start lg:rounded-xl lg:px-3.5 lg:py-3",
                       isActive
-                        ? "bg-white/10 text-white"
-                        : "text-white/40 hover:bg-white/5 hover:text-white/80",
+                        ? "border-white bg-white text-black"
+                        : "border-transparent text-white/42 hover:border-white/[0.07] hover:bg-white/[0.045] hover:text-white/82",
                     )}
                   >
-                    <Compass className={clsx("h-5 w-5 shrink-0", isActive ? "text-white" : "text-white/40")} />
+                    <Compass className={clsx("h-[18px] w-[18px] shrink-0", isActive ? "text-black" : "text-white/38")} />
                     <span className="whitespace-nowrap">{link.label}</span>
                   </button>
                 </li>
@@ -101,7 +108,7 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
         ) : null}
 
         <ul className="no-scrollbar flex flex-row gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
-          <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-white/20 lg:mb-2 lg:px-4 lg:text-xs">System</div>
+          <div className="hidden px-3 text-[10px] font-black uppercase tracking-[0.24em] text-white/24 lg:mb-2 lg:block">System</div>
           {secondaryLinks.map((link) => {
              const isActive = activeView === link.id;
              return (
@@ -109,13 +116,13 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
                 <button
                   onClick={() => onChangeView(link.id)}
                   className={clsx(
-                    "flex min-w-[7.5rem] items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all lg:w-full lg:min-w-0 lg:gap-4 lg:px-4 lg:py-3",
+                    "flex min-w-[7rem] items-center justify-center gap-2.5 rounded-full border px-3 py-2.5 text-sm font-semibold transition lg:w-full lg:min-w-0 lg:justify-start lg:rounded-xl lg:px-3.5 lg:py-3",
                     isActive
-                      ? "bg-white/10 text-white"
-                      : "text-white/40 hover:bg-white/5 hover:text-white/80"
+                      ? "border-white bg-white text-black"
+                      : "border-transparent text-white/42 hover:border-white/[0.07] hover:bg-white/[0.045] hover:text-white/82"
                   )}
                 >
-                  <link.icon className={clsx("h-5 w-5 shrink-0", isActive ? "text-white" : "text-white/40")} />
+                  <link.icon className={clsx("h-[18px] w-[18px] shrink-0", isActive ? "text-black" : "text-white/38")} />
                   <span className="whitespace-nowrap">{link.label}</span>
                 </button>
               </li>
@@ -123,10 +130,11 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
           })}
         </ul>
 
-        <div className="mt-1 lg:mt-auto">
+        <div className="hidden lg:mt-auto lg:block">
           <DownloadManagerPanel items={downloadJobs} onCancel={onCancelDownload} onDismiss={onDismissDownload} />
         </div>
       </nav>
     </aside>
+    </>
   );
 }

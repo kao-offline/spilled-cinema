@@ -122,6 +122,90 @@ describe("browser download resolution", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it("prefers LookMovie same-site stream manifests over protected backing CDN manifests", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("lookmovie2.skin/e/")) {
+        return new Response(`
+          <script>
+            jwplayer("vplayer").setup({
+              sources: [
+                { file: "https://cdn.auronetworkventures.online/server/hls3/01/14416/movie/master.txt" },
+                { file: "https://blocked.premilkyway.com/hls/master.m3u8" },
+                { file: "/stream/token/kjhhiuahiuhgihdf/1781805978/72084392/master.m3u8" }
+              ]
+            });
+          </script>
+        `, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+          },
+        });
+      }
+
+      if (url.includes("auronetworkventures.online") && url.includes("master.txt")) {
+        return new Response(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=800000
+index-v1-a1.txt`, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/vnd.apple.mpegurl",
+          },
+        });
+      }
+
+      if (url.includes("auronetworkventures.online") && url.includes("index-v1-a1.txt")) {
+        return new Response("#EXTM3U\n#EXTINF:10,\nseg-1-v1-a1.woff2", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/vnd.apple.mpegurl",
+          },
+        });
+      }
+
+      if (url.includes("lookmovie2.skin/stream/")) {
+        if (url.includes("master.m3u8")) {
+          return new Response(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=100000
+https://p16-ad-site-sign-sg.tiktokcdn.com/ad-site-i18n-sg/fake.image
+#EXT-X-STREAM-INF:BANDWIDTH=800000
+index-v1-a1.m3u8`, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/vnd.apple.mpegurl",
+            },
+          });
+        }
+        return new Response("#EXTM3U\n#EXTINF:10,\nsegment.ts", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/vnd.apple.mpegurl",
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolveBrowserDownload({
+      episodeId: "cineby-movie-1339713:s1e1",
+      showTitle: "Obsession",
+      seasonNumber: 1,
+      episodeNumber: null,
+      embedUrl: "https://lookmovie2.skin/e/puf0h2b8sb1y",
+      streamCandidates: [
+        {
+          provider: "cineby",
+          embedUrl: "https://lookmovie2.skin/e/puf0h2b8sb1y",
+        },
+      ],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://cdn.auronetworkventures.online/server/hls3/01/14416/movie/index-v1-a1.txt");
+  });
+
   it("follows Cloudnestra rcp pages and normalizes versioned HLS hosts", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -174,6 +258,110 @@ describe("browser download resolution", () => {
     });
 
     expect(resolved.resolvedUrl).toBe("https://tmstr4.cloudnestra.com/pl/token/master.m3u8");
+  });
+
+  it("extracts FileMoon-style escaped source lists for clean playback", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("filemoon.sx")) {
+        expect(init?.headers).toMatchObject({
+          referer: "https://svetserialu.to/sources/filemoon/silo-first",
+        });
+        return new Response(`
+          <script>
+            player.setup({
+              sources: [{"file":"https:\\/\\/moon-cdn.example\\/silo\\/master.m3u8?token=abc\\u0026expires=1"}]
+            });
+          </script>
+        `, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+          },
+        });
+      }
+
+      if (url.includes("moon-cdn.example")) {
+        return new Response("#EXTM3U\n#EXTINF:10,\nsegment.ts", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/vnd.apple.mpegurl",
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolveBrowserDownload({
+      episodeId: "silo-episode-1",
+      showTitle: "Silo",
+      seasonNumber: 1,
+      episodeNumber: 1,
+      embedUrl: "https://filemoon.sx/e/silo-first",
+      streamCandidates: [
+        {
+          provider: "filemoon",
+          embedUrl: "https://filemoon.sx/e/silo-first",
+          sourcePageUrl: "https://svetserialu.to/sources/filemoon/silo-first",
+        },
+      ],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://moon-cdn.example/silo/master.m3u8?token=abc&expires=1");
+  });
+
+  it("normalizes protocol-relative FileMoon stream URLs from rotating hosts", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("sb1254w9megshle.org")) {
+        expect(init?.headers).toMatchObject({
+          referer: "https://svetserialu.to/sources/filemoon/silo-first",
+        });
+        return new Response(`
+          <script>
+            window.playerOptions = {
+              file: "//sb1254w9megshle.org/hls/silo/master.m3u8?sig=abc&amp;expires=1"
+            };
+          </script>
+        `, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+          },
+        });
+      }
+
+      if (url.includes("/hls/silo/master.m3u8")) {
+        return new Response("#EXTM3U\n#EXTINF:10,\nsegment.ts", {
+          status: 200,
+          headers: {
+            "Content-Type": "application/vnd.apple.mpegurl",
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolveBrowserDownload({
+      episodeId: "silo-episode-1",
+      showTitle: "Silo",
+      seasonNumber: 1,
+      episodeNumber: 1,
+      embedUrl: "https://sb1254w9megshle.org/e/silo-first",
+      streamCandidates: [
+        {
+          provider: "filemoon",
+          embedUrl: "https://sb1254w9megshle.org/e/silo-first",
+          sourcePageUrl: "https://svetserialu.to/sources/filemoon/silo-first",
+        },
+      ],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://sb1254w9megshle.org/hls/silo/master.m3u8?sig=abc&expires=1");
   });
 
   it("reports Byse download gates instead of a generic resolver failure", async () => {

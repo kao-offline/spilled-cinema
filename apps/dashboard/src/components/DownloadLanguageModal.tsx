@@ -65,27 +65,26 @@ export function DownloadLanguageModal({ episode, options, onClose, onSelect }: D
   }
 
   return (
-    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/80 px-3 py-6 backdrop-blur-xl">
-      <div className="relative w-full max-w-2xl overflow-hidden rounded-[28px] border border-white/10 bg-[#101218]/95 shadow-[0_40px_120px_rgba(0,0,0,0.65)]">
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-400 via-emerald-400 to-orange-400" />
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/82 px-3 py-6 backdrop-blur-2xl">
+      <div className="relative w-full max-w-xl overflow-hidden rounded-[1.5rem] border border-white/[0.1] bg-[#0b0c10]/96 shadow-[0_40px_120px_rgba(0,0,0,0.72)]">
 
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-white/5 text-white/50 transition hover:bg-white/10 hover:text-white"
+          className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.04] text-white/45 transition hover:border-white/15 hover:bg-white/[0.09] hover:text-white"
           aria-label="Close language chooser"
         >
           <X className="h-5 w-5" />
         </button>
 
-        <div className="p-6 sm:p-8">
-          <div className="mb-6 space-y-2">
-            <div className="text-[10px] font-black uppercase tracking-[0.45em] text-white/30">
-              Choose download language
+        <div className="p-5 sm:p-7">
+          <div className="mb-5 border-b border-white/[0.07] pb-5 pr-12">
+            <div className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30">
+              Download language
             </div>
-            <h3 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+            <h3 className="mt-2 text-2xl font-black tracking-[-0.03em] text-white">
               {episode.showTitle}
             </h3>
-            <p className="text-sm text-white/45">
+            <p className="mt-1.5 text-sm leading-6 text-white/42">
               Select the language group to use for this download.
             </p>
           </div>
@@ -101,17 +100,17 @@ export function DownloadLanguageModal({ episode, options, onClose, onSelect }: D
                   key={option.preferredAlias}
                   onClick={() => onSelect(option.preferredAlias)}
                   className={clsx(
-                    "group flex w-full items-center justify-between gap-4 rounded-[20px] border border-white/10 bg-white/5 p-4 text-left transition hover:border-white/20 hover:bg-white/10",
+                    "group flex w-full items-center justify-between gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3.5 text-left transition hover:border-white/16 hover:bg-white/[0.065]",
                   )}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-white/80 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.045] text-white/68">
                       <Download className="h-5 w-5" />
                     </span>
 
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-black uppercase tracking-[0.18em] text-white/80">
+                        <span className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.16em] text-white/82">
                           {presentation.flags.length > 0 ? (
                             <span className="flex items-center gap-1.5">
                               {presentation.flags.map((flag) => (
@@ -139,7 +138,7 @@ export function DownloadLanguageModal({ episode, options, onClose, onSelect }: D
                     </div>
                   </div>
 
-                  <div className="rounded-full bg-white px-4 py-2 text-[10px] font-black uppercase tracking-[0.28em] text-black shadow-[0_8px_24px_rgba(255,255,255,0.25)] transition group-hover:bg-cyan-300">
+                  <div className="rounded-full bg-white px-4 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-black transition group-hover:bg-white/85">
                     Download
                   </div>
                 </button>

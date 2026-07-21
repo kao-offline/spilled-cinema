@@ -22,7 +22,11 @@ function canUseHostedSameOriginApi() {
 export function isHostedSameOriginApiPath(path: string) {
   return (
     path === "/api/artwork/search" ||
-    path === "/api/artwork/refresh"
+    path === "/api/artwork/refresh" ||
+    path === "/api/artwork/cast" ||
+    path === "/api/artwork/title-metadata" ||
+    path === "/api/artwork/person-credits" ||
+    path === "/api/artwork/homepage-banner"
   );
 }
 
@@ -32,7 +36,12 @@ function getRuntimeTimeoutMs(path: string) {
     path.startsWith("/api/provider-import") ||
     path.startsWith("/api/integrations/refresh") ||
     path.startsWith("/api/title/") ||
-    path.startsWith("/api/artwork/refresh")
+    path.startsWith("/api/artwork/refresh") ||
+    path.startsWith("/api/artwork/search") ||
+    path.startsWith("/api/artwork/cast") ||
+    path.startsWith("/api/artwork/title-metadata") ||
+    path.startsWith("/api/artwork/person-credits") ||
+    path.startsWith("/api/artwork/homepage-banner")
   ) {
     return LONG_RUNTIME_TIMEOUT_MS;
   }
@@ -244,7 +253,7 @@ function getFetchServerCapabilityForPath(path: string) {
   if (path.startsWith("/api/download-full/browser-start") || path.startsWith("/api/download-full/browser-file")) {
     return "download";
   }
-  if (path.startsWith("/api/player/resolve")) {
+  if (path.startsWith("/api/player/resolve") || path.startsWith("/api/player/clean-resolve") || path.startsWith("/api/player/playback-resolve") || path.startsWith("/api/player/frame")) {
     return "stream";
   }
   return "fetch";
@@ -355,7 +364,7 @@ function shouldTryNextRuntime<T>(result: RuntimeApiResult<T>) {
   if (result.ok) {
     return false;
   }
-  if (result.status === 408 || result.status === 409 || result.status === 422 || result.status >= 500) {
+  if (result.status === 404 || result.status === 408 || result.status === 409 || result.status === 422 || result.status >= 500) {
     return (
       result.transport === "native" ||
       result.transport === "node" ||
@@ -379,7 +388,7 @@ export function buildRuntimeUrl(path: string) {
     return `${window.spilledNative.serverUrl}${path}`;
   }
 
-  return `http://127.0.0.1:8787${path}`;
+  return `${window.location.origin}${path}`;
 }
 
 function returnIfUsable<T>(result: RuntimeApiResult<T> | null) {

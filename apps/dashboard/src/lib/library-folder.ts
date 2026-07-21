@@ -40,6 +40,7 @@ export type VaultOperation =
   | "read_snapshot"
   | "write_snapshot"
   | "list_artifacts"
+  | "read_file"
   | "write_blob"
   | "write_response";
 
@@ -710,6 +711,30 @@ export async function writeResponseToLibraryVault(
   recordVaultInfo("write_response", "Streamed response into vault.", { fileName: safeName, folderName: root.name });
   recordVaultDiagnostics({ lastWriteError: null });
   return { fileName: safeName, folderName: root.name };
+}
+
+export async function getLibraryVaultFileObjectUrl(fileName: string): Promise<string | null> {
+  if (isNativeVaultAvailable()) {
+    return null;
+  }
+
+  const root = await getReadableFolder();
+  if (!root) {
+    return null;
+  }
+
+  try {
+    const safeName = sanitizeVaultFileName(fileName);
+    const vaultDir = await getVaultDirectory(root);
+    const fileHandle = await vaultDir.getFileHandle(safeName);
+    const file = await fileHandle.getFile();
+    recordVaultInfo("read_file", "Created vault file object URL.", { fileName: safeName, folderName: root.name });
+    recordVaultDiagnostics({ lastReadError: null });
+    return URL.createObjectURL(file);
+  } catch (error) {
+    recordVaultReadError("read_file", error);
+    return null;
+  }
 }
 
 export async function writeEpisodeFolderRecord(

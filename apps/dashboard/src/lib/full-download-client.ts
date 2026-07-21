@@ -25,9 +25,46 @@ export type BrowserResolvedDownload = {
   refererUrl: string;
 };
 
+export type CleanPlaybackResult = BrowserResolvedDownload;
+
+export type PlaybackResolveFailure = {
+  playerAlias: string;
+  provider: string;
+  reason: string;
+};
+
+export type PlaybackResolveResult = {
+  playerAlias: string;
+  playbackUrl: string;
+  resolvedUrl: string;
+  refererUrl: string;
+  streamType: "hls" | "mp4" | "dash" | "embed" | "unknown";
+  subtitlesUrl?: string;
+  failures?: PlaybackResolveFailure[];
+};
+
+type CleanPlaybackPayload = {
+  downloadUrl?: string;
+  resolvedUrl?: string;
+  refererUrl?: string;
+  error?: string;
+};
+
+type PlaybackResolvePayload = {
+  playerAlias?: string;
+  playbackUrl?: string;
+  resolvedUrl?: string;
+  refererUrl?: string;
+  streamType?: "hls" | "mp4" | "dash" | "embed" | "unknown";
+  subtitlesUrl?: string;
+  failures?: PlaybackResolveFailure[];
+  error?: string;
+};
+
 type BrowserStreamCandidate = {
   provider?: string;
   embedUrl: string;
+  sourcePageUrl?: string;
   subtitlesUrl?: string;
   streamUrl?: string;
   resolvedUrl?: string;
@@ -168,6 +205,7 @@ function buildBrowserStreamCandidates(players: LibraryEpisode["players"]) {
       return {
         provider: player.provider,
         embedUrl: player.embedUrl,
+        sourcePageUrl: player.sourcePageUrl,
         subtitlesUrl: player.subtitlesUrl,
         ...(directUrl ? { streamUrl: directUrl } : {}),
         ...(typeof (player as BrowserStreamCandidate).resolvedUrl === "string" ? { resolvedUrl: (player as BrowserStreamCandidate).resolvedUrl } : {}),
@@ -373,4 +411,133 @@ export async function startBrowserResolvedDownload(episode: LibraryEpisode): Pro
     resolvedUrl,
     refererUrl: localCandidate.embedUrl,
   };
+}
+
+export async function resolveCleanPlayback(episode: LibraryEpisode): Promise<CleanPlaybackResult> {
+  const activePlayer = episode.players.find((player) => player.alias === episode.selectedPlayerAlias) ?? episode.players[0];
+  if (!activePlayer) {
+    throw new Error("No player available for this episode.");
+  }
+
+  if (activePlayer.provider === "local" || activePlayer.provider === "spillsave") {
+    throw new Error("Local players do not need clean playback resolution.");
+  }
+
+  const remotePlayers = episode.players.filter((player) => player.provider !== "local" && player.provider !== "spillsave");
+  const sortedPlayers = [
+    activePlayer,
+    ...remotePlayers.filter((player) => player.alias !== activePlayer.alias),
+  ];
+
+  const body = {
+    episodeId: episode.id,
+    showTitle: episode.showTitle,
+    episodeTitle: formatEpisodeTitle(episode),
+    seasonNumber: episode.seasonNumber,
+    episodeNumber: episode.episodeNumber,
+    embedUrl: activePlayer.embedUrl,
+    subtitlesUrl: activePlayer.subtitlesUrl,
+    streamCandidates: buildBrowserStreamCandidates(sortedPlayers),
+  };
+
+  if (["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) && !window.spilledNative?.serverUrl) {
+    const directResponse = await fetch("/api/player/clean-resolve", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await directResponse.json().catch(() => null) as CleanPlaybackPayload | null;
+    if (!directResponse.ok || !data?.downloadUrl || !data.resolvedUrl || !data.refererUrl) {
+      throw new Error(data?.error ?? "Clean playback is unavailable for this player.");
+    }
+    return {
+      downloadUrl: resolveRuntimeUrl(data.downloadUrl, window.location.origin),
+      resolvedUrl: data.resolvedUrl,
+      refererUrl: data.refererUrl,
+    };
+  }
+
+  const response = await requestRuntimeJson<CleanPlaybackPayload>("/api/player/clean-resolve", {
+    method: "POST",
+    body,
+  });
+
+  if (!response.ok || !response.data?.downloadUrl || !response.data.resolvedUrl || !response.data.refererUrl) {
+    throw new Error(response.data?.error ?? "Clean playback is unavailable for this player.");
+  }
+
+  return {
+    downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, response.origin),
+    resolvedUrl: response.data.resolvedUrl,
+    refererUrl: response.data.refererUrl,
+  };
+}
+
+export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise<PlaybackResolveResult> {
+  const activePlayer = episode.players.find((player) => player.alias === episode.selectedPlayerAlias) ?? episode.players[0];
+  if (!activePlayer) {
+    throw new Error("No player available for this episode.");
+  }
+
+  const payload = {
+    episodeId: episode.id,
+    showTitle: episode.showTitle,
+    episodeTitle: formatEpisodeTitle(episode),
+    seasonNumber: episode.seasonNumber,
+    episodeNumber: episode.episodeNumber,
+    activePlayerAlias: activePlayer.alias,
+    players: episode.players,
+  };
+
+  const handlePayload = (data: PlaybackResolvePayload | null, origin: string) => {
+    if (!data?.playerAlias || !data.playbackUrl || !data.resolvedUrl || !data.refererUrl) {
+      const error = Object.assign(new Error(data?.error ?? "Universal playback is unavailable for this episode."), {
+        failures: data?.failures ?? [],
+      });
+      throw error;
+    }
+    return {
+      playerAlias: data.playerAlias,
+      playbackUrl: resolveRuntimeUrl(data.playbackUrl, origin),
+      resolvedUrl: data.resolvedUrl,
+      refererUrl: data.refererUrl,
+      streamType: data.streamType ?? "unknown",
+      subtitlesUrl: data.subtitlesUrl,
+      failures: data.failures,
+    } satisfies PlaybackResolveResult;
+  };
+
+  if (["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) && !window.spilledNative?.serverUrl) {
+    const directResponse = await fetch("/api/player/playback-resolve", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await directResponse.json().catch(() => null) as PlaybackResolvePayload | null;
+    if (!directResponse.ok) {
+      const error = Object.assign(new Error(data?.error ?? "Universal playback is unavailable for this episode."), {
+        failures: data?.failures ?? [],
+      });
+      throw error;
+    }
+    return handlePayload(data, window.location.origin);
+  }
+
+  const response = await requestRuntimeJson<PlaybackResolvePayload>("/api/player/playback-resolve", {
+    method: "POST",
+    body: payload,
+  });
+
+  if (!response.ok) {
+    const error = Object.assign(new Error(response.data?.error ?? "Universal playback is unavailable for this episode."), {
+      failures: response.data?.failures ?? [],
+    });
+    throw error;
+  }
+
+  return handlePayload(response.data ?? null, response.origin ?? window.location.origin);
 }
