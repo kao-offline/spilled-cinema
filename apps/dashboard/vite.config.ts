@@ -28,6 +28,12 @@ export default defineConfig(({ mode }) => {
     // harmless compatibility warning, which exceeds Vercel's 4 MB log limit.
     // Keep every other build warning visible.
     customLogger: createDashboardLogger(),
+    build: {
+      // The player stack is intentionally split into large, cacheable bundles.
+      // Their gzip sizes remain modest; use a threshold that reflects the
+      // shipped application instead of Vite's generic 500 kB default.
+      chunkSizeWarningLimit: 1300,
+    },
     server: {
       host: "localhost",
       port: 5173,
