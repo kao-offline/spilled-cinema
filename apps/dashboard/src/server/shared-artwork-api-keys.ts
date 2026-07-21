@@ -1,4 +1,4 @@
-import type { ArtworkApiKeys } from "./artwork";
+import type { ArtworkApiKeys } from "./artwork.js";
 
 type SharedArtworkKeysPayload = {
   keys?: ArtworkApiKeys;
