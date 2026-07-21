@@ -134,6 +134,7 @@ module.exports = async function handler(req, res) {
     }
 
     const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
+    const isXpassSegment = /play\.xpass\.top/i.test(referer || "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
     const upstreamHeaders = {
       "user-agent": USER_AGENT,
       accept: "*/*",
@@ -156,7 +157,7 @@ module.exports = async function handler(req, res) {
     }
 
     const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const contentType = isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)
+    const contentType = (isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)) || isXpassSegment
       ? "video/mp2t"
       : upstreamContentType;
     const contentLength = upstream.headers.get("content-length");

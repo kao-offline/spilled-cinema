@@ -1303,6 +1303,7 @@ export function createHttpHandlers() {
         return sendJson(res, 400, { error: "Unsupported stream URL protocol." });
       }
       const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
+      const isXpassSegment = /play\.xpass\.top/i.test(referer ?? "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
 
       const upstream = await fetchProxyTarget({
         url: parsed,
@@ -1325,7 +1326,7 @@ export function createHttpHandlers() {
 
       res.statusCode = upstream.status;
       const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
-      const contentType = isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname) ? "video/mp2t" : upstreamContentType;
+      const contentType = (isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)) || isXpassSegment ? "video/mp2t" : upstreamContentType;
       res.setHeader("Content-Type", contentType);
       res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges") || "bytes");
       res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");

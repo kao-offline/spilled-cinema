@@ -124,7 +124,7 @@ function isLocalPlayer(player: EpisodePlayer | null) {
 
 function isVolatileRemotePlayer(player: EpisodePlayer | null) {
   if (!player) return false;
-  return /vidking|svetserialu|filemoon|vidmoly|streamtape|mixdrop|miixdrop|dood|voe|hqq|sb\d+/i.test([
+  return /vidking|svetserialu|filemoon|vidmoly|streamtape|mixdrop|miixdrop|dood|voe|hqq|sb\d+|bombuj|2embed|xpass|multiembed|moviesclub|primewire|videasy|vidsrc/i.test([
     player.provider,
     player.sourcePageUrl,
     player.embedUrl,

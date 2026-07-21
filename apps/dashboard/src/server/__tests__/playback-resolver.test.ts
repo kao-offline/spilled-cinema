@@ -151,6 +151,12 @@ describe("playback resolver", () => {
   it("extracts protocol-relative Mixdrop-style MP4 assignments", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("cdn.mixdrop.example/video-720.mp4")) {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
       if (url.includes("mixdrop.example")) {
         return new Response('<script>MDCore.wurl="//cdn.mixdrop.example/video-720.mp4?token=abc";</script>', {
           status: 200,
@@ -294,16 +300,16 @@ describe("playback resolver", () => {
     const encoded = Buffer.from('sources:[{file:"https://cdn.vidmoly.example/stream/index.m3u8",type:"hls"}]', "utf8").toString("base64");
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("vidmoly.example")) {
-        return new Response(`<script>const payload = atob("${encoded}");</script>`, {
-          status: 200,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        });
-      }
       if (url.includes("cdn.vidmoly.example")) {
         return new Response("#EXTM3U\n#EXT-X-VERSION:3", {
           status: 200,
           headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+        });
+      }
+      if (url.includes("vidmoly.example")) {
+        return new Response(`<script>const payload = atob("${encoded}");</script>`, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -395,6 +401,86 @@ describe("playback resolver", () => {
     expect(resolved.resolvedUrl).toBe("https://cdn.xpass.example/variant.m3u8");
     expect(resolved.refererUrl).toBe("https://play.xpass.top/e/movie/tt0499549?autostart=true");
     expect(resolved.streamType).toBe("hls");
+  });
+
+  it("resolves a persisted direct Xpass embed through its current playlist", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("play.xpass.top/e/movie/tt8368406")) {
+        return new Response('var data={"playlist":"/mdata/vivarium/playlist.json"};', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url.includes("play.xpass.top/mdata/vivarium/playlist.json")) {
+        return new Response('{"playlist":[{"sources":[{"file":"https://cdn.xpass.example/vivarium/master.m3u8","type":"hls"}]}]}', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("cdn.xpass.example/vivarium/master.m3u8")) {
+        return new Response("#EXTM3U\n#EXT-X-VERSION:3", {
+          status: 200,
+          headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "vivarium-movie",
+      activePlayerAlias: "2embed",
+      players: [{
+        alias: "2embed",
+        provider: "2embed",
+        embedUrl: "https://play.xpass.top/e/movie/tt8368406?autostart=true",
+        streamUrl: "https://p16-sg.tiktokcdn.com/obj/tos-alisg-avt-0068/avatar-id",
+        streamType: "hls",
+      }],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://cdn.xpass.example/vivarium/master.m3u8");
+    expect(resolved.streamType).toBe("hls");
+  });
+
+  it("prefers Xpass VIP mirrors over broken TIK mirrors", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("play.xpass.top/e/movie/tt8368406")) {
+        return new Response(`var data={"playlist":"/mdata/tik/playlist.json"}; var backups=[{"url":"/vip/working/playlist.json"}];`, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url.includes("play.xpass.top/vip/working/playlist.json")) {
+        return new Response('{"playlist":[{"sources":[{"file":"https://vip.example/vivarium/master.m3u8","type":"hls"}]}]}', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("play.xpass.top/mdata/tik/playlist.json")) {
+        throw new Error("The TIK mirror must not be selected before VIP");
+      }
+      if (url.includes("vip.example/vivarium/master.m3u8")) {
+        return new Response("#EXTM3U\n#EXT-X-VERSION:3", {
+          status: 200,
+          headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "vivarium-movie",
+      activePlayerAlias: "xpass",
+      players: [{
+        alias: "xpass",
+        provider: "2embed",
+        embedUrl: "https://play.xpass.top/e/movie/tt8368406?autostart=true",
+      }],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://vip.example/vivarium/master.m3u8");
   });
 
   it("classifies Streamtape get_video URLs as MP4 playback", async () => {
@@ -521,6 +607,82 @@ describe("playback resolver", () => {
 
     expect(resolved.resolvedUrl).toBe("https://streamtape.com/get_video?id=fresh&expires=2000200&token=new");
     expect(resolved.streamType).toBe("mp4");
+  });
+
+  it("does not reuse persisted Xpass artwork as a movie stream", async () => {
+    const artworkUrl = "https://p16-sg.tiktokcdn.com/obj/tos-alisg-avt-0068/avatar-id";
+    const requestedUrls: string[] = [];
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("play.xpass.top/e/movie/tt8368406")) {
+        return new Response("<html><body>provider player</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolvePlaybackStream({
+      episodeId: "vivarium-movie",
+      activePlayerAlias: "2embed",
+      players: [{
+        alias: "2embed",
+        provider: "2embed",
+        label: "Bombuj Vivarium",
+        sourcePageUrl: "https://www.2embed.cc/embed/tt8368406",
+        embedUrl: "https://play.xpass.top/e/movie/tt8368406?autostart=true",
+        streamUrl: artworkUrl,
+        streamType: "hls",
+        resolvedAt: Date.now(),
+      }],
+    })).rejects.toMatchObject({
+      message: expect.stringContaining("did not expose a direct MP4/HLS/DASH stream"),
+    });
+
+    expect(requestedUrls).not.toContain(artworkUrl);
+  });
+
+  it("rejects image responses and uses the refreshed media type", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://cdn.example/not-a-video") {
+        return new Response("image", {
+          status: 200,
+          headers: { "Content-Type": "image/jpeg" },
+        });
+      }
+      if (url === "https://provider.example/embed/vivarium") {
+        return new Response('file: "https://cdn.example/vivarium.mp4"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://cdn.example/vivarium.mp4") {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "vivarium-movie",
+      activePlayerAlias: "provider",
+      players: [{
+        alias: "provider",
+        provider: "provider",
+        embedUrl: "https://provider.example/embed/vivarium",
+        streamUrl: "https://cdn.example/not-a-video",
+        streamType: "hls",
+      }],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://cdn.example/vivarium.mp4");
+    expect(resolved.streamType).toBe("mp4");
+    expect(resolved.playbackUrl).toContain("vivarium-movie.mp4");
   });
 
   it("extracts VidKing sources into universal playback", async () => {

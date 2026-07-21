@@ -91,6 +91,8 @@ export type PlaybackResolveResult = {
   subtitlesUrl?: string;
 };
 
+type PlaybackStreamType = PlaybackResolveResult["streamType"];
+
 type ResolvedStreamTarget = {
   streamUrl: string;
   refererUrl: string;
@@ -98,7 +100,7 @@ type ResolvedStreamTarget = {
 
 type BrowserStreamCandidate = NonNullable<CreateDownloadInput["streamCandidates"]>[number];
 
-function inferStreamType(value: string): "hls" | "mp4" | "dash" | "embed" | "unknown" {
+function inferStreamType(value: string): PlaybackStreamType {
   if (/\/api\/download-full\/browser-file\?/i.test(value)) {
     try {
       const parsed = new URL(value, "http://localhost");
@@ -116,8 +118,9 @@ function inferStreamType(value: string): "hls" | "mp4" | "dash" | "embed" | "unk
   return "unknown";
 }
 
-function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId: string) {
-  const name = `${sanitizeFilename(episodeId || "playback")}.${inferStreamType(streamUrl) === "mp4" ? "mp4" : "m3u8"}`;
+function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId: string, streamType = inferStreamType(streamUrl)) {
+  const extension = streamType === "mp4" ? "mp4" : streamType === "dash" ? "mpd" : "m3u8";
+  const name = `${sanitizeFilename(episodeId || "playback")}.${extension}`;
   const params = new URLSearchParams({
     url: streamUrl,
     name,
@@ -462,7 +465,7 @@ function isVolatileProviderStream(player: PlaybackResolveInput["players"][number
     player.embedUrl,
     candidateEmbedUrl,
   ].filter(Boolean).join(" ").toLowerCase();
-  return /svetserialu|filemoon|vidmoly|streamtape|mixdrop|miixdrop|dood|voe|hqq|sb\d+/i.test(signature);
+  return /svetserialu|filemoon|vidmoly|streamtape|mixdrop|miixdrop|dood|voe|hqq|sb\d+|bombuj|2embed|xpass|multiembed|moviesclub|primewire|videasy|vidsrc/i.test(signature);
 }
 
 function canReuseDirectStreamUrl(player: PlaybackResolveInput["players"][number], candidateEmbedUrl: string, directUrl: string) {
@@ -1188,7 +1191,27 @@ async function resolvePreferredHlsVariant(streamUrl: string, refererUrl: string,
   }
 }
 
-async function validateResolvedStream(target: ResolvedStreamTarget): Promise<{ ok: true } | { ok: false; reason: string }> {
+function streamTypeFromContentType(contentType: string): PlaybackStreamType {
+  if (/mpegurl|application\/vnd\.apple\.mpegurl|application\/x-mpegurl/i.test(contentType)) return "hls";
+  if (/dash\+xml/i.test(contentType)) return "dash";
+  if (/video\/mp4|application\/mp4/i.test(contentType)) return "mp4";
+  return "unknown";
+}
+
+function isClearlyNonMediaStreamUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:$|[?#])/i.test(parsed.pathname);
+  } catch {
+    return true;
+  }
+}
+
+type StreamValidationResult =
+  | { ok: true; streamType: PlaybackStreamType }
+  | { ok: false; reason: string };
+
+async function validateResolvedStream(target: ResolvedStreamTarget): Promise<StreamValidationResult> {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
@@ -1197,6 +1220,9 @@ async function validateResolvedStream(target: ResolvedStreamTarget): Promise<{ o
   const host = new URL(target.streamUrl).hostname;
 
   try {
+    if (isClearlyNonMediaStreamUrl(target.streamUrl)) {
+      return { ok: false, reason: `Resolved URL on ${host} points to artwork instead of playable media.` };
+    }
     const streamType = inferStreamType(target.streamUrl);
     const response = await fetch(target.streamUrl, {
       method: "GET",
@@ -1204,15 +1230,22 @@ async function validateResolvedStream(target: ResolvedStreamTarget): Promise<{ o
         "user-agent": USER_AGENT,
         accept: streamType === "hls" ? "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*" : "*/*",
         referer: target.refererUrl,
-        ...(streamType === "mp4" ? { range: "bytes=0-1" } : {}),
+        ...(streamType === "mp4" || streamType === "unknown" ? { range: "bytes=0-4095" } : {}),
       },
       redirect: "follow",
       signal: controller.signal,
     });
-    await response.body?.cancel().catch(() => undefined);
     if (response.ok || response.status === 206) {
-      return { ok: true };
+      const contentType = response.headers.get("content-type") ?? "";
+      if (/^(?:image|font)\//i.test(contentType) || /text\/html|application\/(?:xhtml\+xml|json)/i.test(contentType)) {
+        await response.body?.cancel().catch(() => undefined);
+        return { ok: false, reason: `Resolved URL on ${host} returned ${contentType || "non-media content"} instead of playable media.` };
+      }
+      await response.body?.cancel().catch(() => undefined);
+      const detectedType = streamTypeFromContentType(contentType);
+      return { ok: true, streamType: detectedType !== "unknown" ? detectedType : streamType };
     }
+    await response.body?.cancel().catch(() => undefined);
     return { ok: false, reason: `Resolved stream host ${host} returned HTTP ${response.status}.` };
   } catch (error) {
     const cause = error instanceof Error && "cause" in error ? error.cause : null;
@@ -1350,7 +1383,10 @@ function extractXpassPlaylistUrls(text: string, baseUrl: string) {
       // Ignore malformed playlist URLs.
     }
   }
-  return Array.from(urls);
+  return Array.from(urls).sort((left, right) => {
+    const score = (value: string) => /\/vip\//i.test(value) ? 0 : /\/mdata\//i.test(value) ? 2 : 1;
+    return score(left) - score(right);
+  });
 }
 
 async function resolveXpassPlaylistStream(embedUrl: string, html: string, finalUrl: string): Promise<ResolvedStreamTarget | null> {
@@ -1805,7 +1841,7 @@ async function resolveVidkingStream(provider: string | undefined, embedUrl: stri
   const cacheKey = `${route.mediaType}:${route.tmdbId}:${route.seasonId}:${route.episodeId}`;
   const cached = vidkingResolvedStreamCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    const validation = await validateResolvedStream(cached.target).catch((error): { ok: false; reason: string } => ({
+    const validation = await validateResolvedStream(cached.target).catch((error): StreamValidationResult => ({
       ok: false,
       reason: error instanceof Error ? error.message : String(error),
     }));
@@ -2668,6 +2704,13 @@ async function resolveStreamTarget(
     const finalUrl = fetched.finalUrl;
     const mediaRefererUrl = refererUrl ?? finalUrl;
 
+    if (/play\.xpass\.top/i.test(finalUrl)) {
+      const xpass = await resolveXpassPlaylistStream(finalUrl, html, finalUrl);
+      if (xpass) {
+        return xpass;
+      }
+    }
+
     const voeStream = extractVoeObfuscatedStream(html);
     if (voeStream && !isKnownPlaceholderStream(voeStream)) {
       return {
@@ -3044,10 +3087,10 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
             if (refreshedValidation.ok) {
               return {
                 playerAlias: player.alias,
-                playbackUrl: buildPlaybackProxyPath(refreshed.streamUrl, refreshed.refererUrl, input.episodeId),
+                playbackUrl: buildPlaybackProxyPath(refreshed.streamUrl, refreshed.refererUrl, input.episodeId, refreshedValidation.streamType),
                 resolvedUrl: refreshed.streamUrl,
                 refererUrl: refreshed.refererUrl,
-                streamType: player.streamType ?? inferStreamType(refreshed.streamUrl),
+                streamType: refreshedValidation.streamType,
                 subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
               };
             }
@@ -3063,10 +3106,10 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
 
       return {
         playerAlias: player.alias,
-        playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId),
+        playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId, validation.streamType),
         resolvedUrl: resolved.streamUrl,
         refererUrl: resolved.refererUrl,
-        streamType: player.streamType ?? inferStreamType(resolved.streamUrl),
+        streamType: validation.streamType,
         subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
       };
     } catch (error) {
