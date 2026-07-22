@@ -197,6 +197,10 @@ function buildFetchProxyUrl(targetUrl: string) {
   return `${template}${separator}url=${encodeURIComponent(targetUrl)}`;
 }
 
+function isMixdropHost(host: string) {
+  return /(^|\.)(?:mixdrop\.[a-z0-9.-]+|m+i+x+drop\.net)$/i.test(host);
+}
+
 function shouldUsePublicDnsForResolution(value: string) {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -214,7 +218,9 @@ function shouldUsePublicDnsForResolution(value: string) {
       host === "mixdrop.ps" ||
       host === "mixdrop.my" ||
       host === "miixdrop.net" ||
-      host.endsWith(".miixdrop.net")
+      host.endsWith(".miixdrop.net") ||
+      host === "miiiixdrop.net" ||
+      host.endsWith(".miiiixdrop.net")
     );
   } catch {
     return false;
@@ -1555,7 +1561,7 @@ function getAlternateProviderUrls(embedUrl: string) {
   try {
     const parsed = new URL(embedUrl);
     const host = parsed.hostname.toLowerCase();
-    if (/(^|\.)mixdrop\./i.test(host)) {
+    if (isMixdropHost(host)) {
       for (const domain of ["mixdrop.co", "mixdrop.to", "mixdrop.sx", "mixdrop.ps", "mixdrop.my"]) {
         if (host === domain) {
           continue;
@@ -1666,6 +1672,22 @@ function parseVidkingRoute(value: string): VidkingRoute | null {
   }
 }
 
+export function buildVidkingEquivalentUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    let tmdbId = "";
+    if (/(^|\.)(?:vidlink\.pro|moviesapi\.club)$/.test(host)) {
+      tmdbId = parsed.pathname.match(/\/movie\/(\d+)/i)?.[1] ?? "";
+    } else if (/(^|\.)(?:primewire\.zip|primesrc\.me)$/.test(host)) {
+      tmdbId = parsed.searchParams.get("tmdb") ?? "";
+    }
+    return /^\d+$/.test(tmdbId) ? `https://www.vidking.net/embed/movie/${tmdbId}` : null;
+  } catch {
+    return null;
+  }
+}
+
 function mixVidkingWord(value: number) {
   value >>>= 0;
   value ^= value >>> 16;
@@ -1759,15 +1781,21 @@ async function fetchVidkingSeed(mediaId: string, forceRefresh = false) {
   const cached = vidkingSeedCache.get(mediaId);
   if (!forceRefresh && cached && cached.expiresAt - 5000 > Date.now()) return cached.seed;
 
-  const response = await fetch(`${VIDKING_SOURCE_BASE_URL}/seed?mediaId=${encodeURIComponent(mediaId)}`, {
-    headers: {
-      "user-agent": USER_AGENT,
-      accept: "application/json,*/*",
-      origin: "https://www.vidking.net",
-      referer: "https://www.vidking.net/",
-    },
-  });
-  if (!response.ok) throw new Error(`VidKing seed request failed: ${response.status}.`);
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    response = await fetch(`${VIDKING_SOURCE_BASE_URL}/seed?mediaId=${encodeURIComponent(mediaId)}`, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "application/json,*/*",
+        origin: "https://www.vidking.net",
+        referer: "https://www.vidking.net/",
+      },
+    });
+    if (response.status !== 429 || attempt === 3) break;
+    const jitter = Number.parseInt(mediaId.slice(-3), 10) % 400 || 0;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 600 * (attempt + 1) + jitter));
+  }
+  if (!response?.ok) throw new Error(`VidKing seed request failed: ${response?.status ?? "network"}.`);
   const payload = await response.json() as { seed?: unknown; ttlMs?: unknown };
   if (typeof payload.seed !== "string" || !payload.seed) throw new Error("VidKing seed response was invalid.");
   const ttlMs = typeof payload.ttlMs === "number" && Number.isFinite(payload.ttlMs) ? payload.ttlMs : 30_000;
@@ -1827,7 +1855,7 @@ function qualityScore(value: string | number | undefined) {
   return numeric ? Number.parseInt(numeric, 10) : 0;
 }
 
-function selectVidkingSource(payload: VidkingSourcePayload) {
+function selectVidkingSources(payload: VidkingSourcePayload) {
   const candidates = (payload.sources ?? [])
     .map((source) => ({
       url: typeof source.url === "string" ? source.url.trim() : "",
@@ -1841,13 +1869,13 @@ function selectVidkingSource(payload: VidkingSourcePayload) {
     return (rightIsHls - leftIsHls) || (qualityScore(right.quality) - qualityScore(left.quality));
   });
 
-  return candidates[0]?.url ?? null;
+  return candidates.map((candidate) => candidate.url);
 }
 
 async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<ReturnType<typeof fetchVidkingMetadata>>) {
   const errors: string[] = [];
   for (const endpoint of VIDKING_SOURCE_SERVERS) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const seed = await fetchVidkingSeed(route.tmdbId, attempt > 0);
       const params = new URLSearchParams({
         title: metadata.title,
@@ -1881,6 +1909,11 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
         vidkingSeedCache.delete(route.tmdbId);
         continue;
       }
+      if (response.status === 429 && attempt < 2) {
+        const jitter = Number.parseInt(route.tmdbId.slice(-3), 10) % 400 || 0;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 600 * (attempt + 1) + jitter));
+        continue;
+      }
       if (!response.ok) {
         errors.push(`${endpoint}: ${response.status}`);
         break;
@@ -1888,8 +1921,20 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
 
       try {
         const payload = decryptVidkingPayload(await response.text(), seed, Number.parseInt(route.tmdbId, 10));
-        if ((payload.sources?.length ?? 0) > 0) return payload;
-        errors.push(`${endpoint}: no playable sources`);
+        const sourceUrls = selectVidkingSources(payload);
+        if (sourceUrls.length === 0) {
+          errors.push(`${endpoint}: no playable sources`);
+          break;
+        }
+        for (const streamUrl of sourceUrls) {
+          const target = { streamUrl, refererUrl: route.embedUrl };
+          const validation = await validateResolvedStream(target).catch((error): StreamValidationResult => ({
+            ok: false,
+            reason: error instanceof Error ? error.message : String(error),
+          }));
+          if (validation.ok) return target;
+          errors.push(`${endpoint}: ${validation.reason}`);
+        }
       } catch (error) {
         errors.push(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1924,15 +1969,7 @@ async function resolveVidkingStream(provider: string | undefined, embedUrl: stri
   }
 
   const metadata = await fetchVidkingMetadata(route);
-  const streamUrl = selectVidkingSource(await fetchVidkingSources(route, metadata));
-  if (!streamUrl) {
-    throw new Error("VidKing source payload did not contain a direct stream.");
-  }
-
-  const target = {
-    streamUrl,
-    refererUrl: route.embedUrl,
-  };
+  const target = await fetchVidkingSources(route, metadata);
   vidkingResolvedStreamCache.set(cacheKey, {
     expiresAt: Date.now() + 30 * 1000,
     target,
@@ -2790,7 +2827,9 @@ async function resolveStreamTarget(
     }
     const html = fetched.text;
     const finalUrl = fetched.finalUrl;
-    const mediaRefererUrl = /(?:^|\.)mixdrop\./i.test(new URL(finalUrl).hostname) ? finalUrl : refererUrl ?? finalUrl;
+    const finalHost = new URL(finalUrl).hostname;
+    const originalHost = new URL(embedUrl).hostname;
+    const mediaRefererUrl = isMixdropHost(finalHost) || isMixdropHost(originalHost) ? finalUrl : refererUrl ?? finalUrl;
 
     if (/play\.xpass\.top/i.test(finalUrl)) {
       const xpass = await resolveXpassPlaylistStream(finalUrl, html, finalUrl);
@@ -3138,12 +3177,18 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
       });
       const directUrlIsFresh = rawDirectUrl && canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl);
       const directUrl = directUrlIsFresh ? rawDirectUrl : null;
+      const equivalentVidkingUrl = buildVidkingEquivalentUrl(candidateEmbedUrl);
+      const equivalentVidking = equivalentVidkingUrl && !directUrl
+        ? await resolveVidkingStream("vidking", equivalentVidkingUrl).catch(() => null)
+        : null;
       let resolved = directUrl
         ? {
             streamUrl: toValidatedHttpUrl(directUrl),
             refererUrl: player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl,
           }
-        : (await resolveVidkingStream(player.provider, candidateEmbedUrl)) ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+        : equivalentVidking
+          ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl))
+          ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
 
       if (!resolved && !directUrl) {
         for (const alternateEmbedUrl of getAlternateProviderUrls(candidateEmbedUrl)) {
@@ -3169,7 +3214,9 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
       const validation = await validateResolvedStream(resolved);
       if (!validation.ok) {
         if (directUrl) {
-          const refreshed = (await resolveVidkingStream(player.provider, candidateEmbedUrl)) ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+          const refreshed = equivalentVidking
+            ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl))
+            ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
           if (refreshed) {
             const refreshedValidation = await validateResolvedStream(refreshed);
             if (refreshedValidation.ok) {

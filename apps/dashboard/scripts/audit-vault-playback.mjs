@@ -13,6 +13,8 @@ const timeoutMs = Math.max(5_000, Number(option("--timeout-ms", "15000")) || 15_
 const reportPath = option("--report", "");
 const perProvider = Math.max(0, Number(option("--per-provider", "0")) || 0);
 const providerFilter = option("--provider", "").trim().toLowerCase();
+const episodeFallback = process.argv.includes("--episode-fallback");
+const perTitle = Math.max(0, Number(option("--per-title", "0")) || 0);
 
 if (!vaultRoot) {
   throw new Error("Pass --vault with the spilled-library folder path.");
@@ -25,7 +27,18 @@ const checks = [];
 const providerCounts = new Map();
 
 for (const show of shows) {
+  let titleChecks = 0;
   for (const episode of show.episodes ?? []) {
+    if (episodeFallback) {
+      const players = (episode.players ?? []).filter((player) =>
+        player?.embedUrl && player.provider !== "local" && player.provider !== "spillsave"
+      );
+      if (players.length > 0 && (perTitle === 0 || titleChecks < perTitle)) {
+        checks.push({ show, episode, player: players[0], players, playerIndex: 0 });
+        titleChecks += 1;
+      }
+      continue;
+    }
     for (const [playerIndex, player] of (episode.players ?? []).entries()) {
       if (!player?.embedUrl || player.provider === "local" || player.provider === "spillsave") continue;
       const provider = player.provider ?? "unknown";
@@ -57,8 +70,8 @@ async function checkPlayer(entry, index) {
         episodeTitle: entry.episode.episodeTitle,
         seasonNumber: entry.episode.seasonNumber,
         episodeNumber: entry.episode.episodeNumber,
-        activePlayerAlias: `audit-${index}`,
-        players: [{ ...entry.player, alias: `audit-${index}` }],
+        activePlayerAlias: entry.players ? (entry.episode.selectedPlayerAlias ?? entry.players[0].alias) : `audit-${index}`,
+        players: entry.players ?? [{ ...entry.player, alias: `audit-${index}` }],
       }),
       signal: controller.signal,
     });
@@ -70,7 +83,7 @@ async function checkPlayer(entry, index) {
       episodeId: entry.episode.id,
       playerIndex: entry.playerIndex,
       alias: entry.player.alias,
-      provider: entry.player.provider ?? "unknown",
+      provider: entry.players ? "episode-fallback" : entry.player.provider ?? "unknown",
       embedUrl: entry.player.embedUrl,
       streamType: payload?.streamType ?? null,
       resolvedUrl: payload?.resolvedUrl ?? null,
@@ -86,7 +99,7 @@ async function checkPlayer(entry, index) {
       episodeId: entry.episode.id,
       playerIndex: entry.playerIndex,
       alias: entry.player.alias,
-      provider: entry.player.provider ?? "unknown",
+      provider: entry.players ? "episode-fallback" : entry.player.provider ?? "unknown",
       embedUrl: entry.player.embedUrl,
       streamType: null,
       resolvedUrl: null,

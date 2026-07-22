@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolvePlaybackStream } from "../full-download";
+import { buildVidkingEquivalentUrl, resolvePlaybackStream } from "../full-download";
 
 const originalFetch = global.fetch;
 
@@ -9,6 +9,12 @@ afterEach(() => {
 });
 
 describe("playback resolver", () => {
+  it("maps unavailable TMDB wrapper players to a playable VidKing equivalent", () => {
+    expect(buildVidkingEquivalentUrl("https://vidlink.pro/movie/19995?sub_file=x")).toBe("https://www.vidking.net/embed/movie/19995");
+    expect(buildVidkingEquivalentUrl("https://moviesapi.club/movie/1318447")).toBe("https://www.vidking.net/embed/movie/1318447");
+    expect(buildVidkingEquivalentUrl("https://primewire.zip/embed/movie?tmdb=157336")).toBe("https://www.vidking.net/embed/movie/157336");
+  });
+
   it("resolves direct HLS players into proxied playback URLs", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -153,17 +159,19 @@ describe("playback resolver", () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("cdn.mixdrop.example/video-720.mp4")) {
-        expect(new Headers(init?.headers).get("referer")).toBe("https://mixdrop.example/e/abc");
+        expect(new Headers(init?.headers).get("referer")).toBe("https://miiiixdrop.net/e/abc");
         return new Response("video", {
           status: 206,
           headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
         });
       }
-      if (url.includes("mixdrop.example")) {
-        return new Response('<script>MDCore.wurl="//cdn.mixdrop.example/video-720.mp4?token=abc";</script>', {
+      if (url.includes("mixdrop.ag")) {
+        const response = new Response('<script>MDCore.wurl="//cdn.mixdrop.example/video-720.mp4?token=abc";</script>', {
           status: 200,
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
+        Object.defineProperty(response, "url", { value: "https://miiiixdrop.net/e/abc" });
+        return response;
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;
@@ -176,7 +184,7 @@ describe("playback resolver", () => {
         provider: "mixdrop",
         label: "Mixdrop",
         sourcePageUrl: "https://source.example/watch",
-        embedUrl: "https://mixdrop.example/e/abc",
+        embedUrl: "https://mixdrop.ag/e/abc",
       }],
     });
 
