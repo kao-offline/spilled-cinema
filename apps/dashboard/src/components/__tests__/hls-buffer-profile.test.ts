@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSmallBufferGapTarget, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
+import { findSmallBufferGapTarget, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
 
 describe("HLS buffer profile", () => {
   it("keeps a substantial rolling buffer on phones", () => {
@@ -28,6 +28,15 @@ describe("HLS buffer profile", () => {
     expect(findSmallBufferGapTarget(525.382809, [{ start: 525.537232, end: 540.54 }]))
       .toBeCloseTo(525.547232, 6);
     expect(findSmallBufferGapTarget(525, [{ start: 527, end: 540 }])).toBeNull();
+  });
+
+  it("only counts contiguous media as usable playback headroom", () => {
+    expect(getBufferedAheadSeconds(10, [
+      { start: 9, end: 24 },
+      { start: 24.2, end: 35 },
+      { start: 38, end: 50 },
+    ])).toBeCloseTo(25);
+    expect(getBufferedAheadSeconds(10, [{ start: 12, end: 30 }])).toBe(0);
   });
 });
 

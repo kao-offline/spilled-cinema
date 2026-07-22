@@ -61,3 +61,13 @@ export function findSmallBufferGapTarget(position: number, ranges: BufferedRange
   }
   return null;
 }
+
+export function getBufferedAheadSeconds(position: number, ranges: BufferedRange[], joinTolerance = 0.5) {
+  let end = position;
+  for (const range of ranges) {
+    if (range.end <= position) continue;
+    if (range.start > end + joinTolerance) break;
+    end = Math.max(end, range.end);
+  }
+  return Math.max(0, end - position);
+}

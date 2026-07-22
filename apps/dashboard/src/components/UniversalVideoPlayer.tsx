@@ -4,7 +4,7 @@ import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { findSmallBufferGapTarget, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
+import { findSmallBufferGapTarget, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
 
 type SubtitleTrack = {
   src: string;
@@ -225,6 +225,8 @@ export function UniversalVideoPlayer({
     let disposed = false;
     let fatalNetworkRecoveries = 0;
     let fatalMediaRecoveries = 0;
+    let adaptiveQualityUnlocked = false;
+    let adaptiveUnlockAheadSeconds = 15;
     const nativeHlsSupported = Boolean(
       videoElement.canPlayType("application/vnd.apple.mpegurl")
       || videoElement.canPlayType("application/x-mpegURL"),
@@ -238,6 +240,7 @@ export function UniversalVideoPlayer({
 
     if (sourceType === "application/x-mpegURL" && Hls.isSupported() && !useNativeHls) {
       const bufferProfile = getHlsBufferProfile();
+      adaptiveUnlockAheadSeconds = Math.min(30, Math.max(12, Math.round(bufferProfile.aheadSeconds / 3)));
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
@@ -245,6 +248,9 @@ export function UniversalVideoPlayer({
         startFragPrefetch: true,
         testBandwidth: false,
         abrEwmaDefaultEstimate: bufferProfile.bandwidthEstimate,
+        abrBandWidthFactor: 0.72,
+        abrBandWidthUpFactor: 0.55,
+        abrMaxWithRealBitrate: true,
         maxStarvationDelay: 4,
         maxLoadingDelay: 4,
         capLevelToPlayerSize: true,
@@ -254,6 +260,8 @@ export function UniversalVideoPlayer({
         backBufferLength: 30,
         maxBufferHole: 0.8,
         highBufferWatchdogPeriod: 2,
+        nudgeOffset: 0.1,
+        nudgeMaxRetry: 5,
       });
       hlsRef.current = hls;
       hls.loadSource(src);
@@ -263,8 +271,8 @@ export function UniversalVideoPlayer({
           index,
           label: hlsLevelLabel(level, index),
         })));
-        hls.nextAutoLevel = 0;
-        setQualityLevel(hls.currentLevel);
+        hls.currentLevel = 0;
+        setQualityLevel(0);
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         setQualityLevel(data.level);
@@ -322,7 +330,14 @@ export function UniversalVideoPlayer({
       setPaused(videoElement.paused);
       setCurrentTime(videoElement.currentTime || 0);
       setDuration(videoElement.duration || 0);
-      setBufferedRanges(getBufferedRanges(videoElement, videoElement.duration || 0));
+      const nextBufferedRanges = getBufferedRanges(videoElement, videoElement.duration || 0);
+      setBufferedRanges(nextBufferedRanges);
+      const hls = hlsRef.current;
+      if (!adaptiveQualityUnlocked && hls && getBufferedAheadSeconds(videoElement.currentTime || 0, nextBufferedRanges) >= adaptiveUnlockAheadSeconds) {
+        adaptiveQualityUnlocked = true;
+        hls.currentLevel = -1;
+        setQualityLevel(-1);
+      }
       setVolume(videoElement.volume || 1);
       setMuted(videoElement.muted);
       setPlaybackRate(videoElement.playbackRate || 1);
@@ -351,11 +366,6 @@ export function UniversalVideoPlayer({
     };
     const markReady = () => {
       setWaiting(false);
-      const hls = hlsRef.current;
-      if (hls && hls.autoLevelEnabled) {
-        hls.currentLevel = -1;
-        setQualityLevel(-1);
-      }
     };
     const markPlaying = () => {
       playbackStartedRef.current = true;
