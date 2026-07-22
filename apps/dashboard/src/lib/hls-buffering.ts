@@ -71,3 +71,23 @@ export function getBufferedAheadSeconds(position: number, ranges: BufferedRange[
   }
   return Math.max(0, end - position);
 }
+
+export function formatHlsQualityLabel(
+  level: { width?: number; height?: number; bitrate?: number },
+  index: number,
+) {
+  // Cinematic encodes crop the black bars, so a 1080p source is commonly
+  // 1920x800 and a 720p source 1280x534. Classify those tiers by width instead
+  // of incorrectly presenting the cropped pixel height as the quality.
+  const width = level.width ?? 0;
+  const height = level.height ?? 0;
+  if (width >= 3400 || height >= 1800) return "2160p";
+  if (width >= 2500 || height >= 1300) return "1440p";
+  if (width >= 1700) return "1080p";
+  if (width >= 1150) return "720p";
+  if (width >= 800) return "480p";
+  if (width >= 560) return "360p";
+  if (height) return `${height}p`;
+  if (level.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
+  return `Level ${index + 1}`;
+}

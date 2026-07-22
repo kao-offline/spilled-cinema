@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSmallBufferGapTarget, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
+import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
 
 describe("HLS buffer profile", () => {
   it("keeps a substantial rolling buffer on phones", () => {
@@ -37,6 +37,12 @@ describe("HLS buffer profile", () => {
       { start: 38, end: 50 },
     ])).toBeCloseTo(25);
     expect(getBufferedAheadSeconds(10, [{ start: 12, end: 30 }])).toBe(0);
+  });
+
+  it("labels cropped cinematic encodes by their standard source tier", () => {
+    expect(formatHlsQualityLabel({ width: 1920, height: 800 }, 2)).toBe("1080p");
+    expect(formatHlsQualityLabel({ width: 1280, height: 534 }, 1)).toBe("720p");
+    expect(formatHlsQualityLabel({ width: 640, height: 266 }, 0)).toBe("360p");
   });
 });
 

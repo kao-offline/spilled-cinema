@@ -4,7 +4,7 @@ import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { findSmallBufferGapTarget, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
+import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
 
 type SubtitleTrack = {
   src: string;
@@ -104,12 +104,6 @@ function getBufferedRanges(video: HTMLVideoElement, duration: number): BufferedR
     if (end > start) ranges.push({ start, end });
   }
   return ranges;
-}
-
-function hlsLevelLabel(level: { height?: number; bitrate?: number }, index: number) {
-  if (level.height) return `${level.height}p`;
-  if (level.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
-  return `Level ${index + 1}`;
 }
 
 export function UniversalVideoPlayer({
@@ -256,7 +250,7 @@ export function UniversalVideoPlayer({
         abrMaxWithRealBitrate: true,
         maxStarvationDelay: 4,
         maxLoadingDelay: 4,
-        capLevelToPlayerSize: true,
+        capLevelToPlayerSize: compactViewport,
         maxBufferLength: bufferProfile.aheadSeconds,
         maxMaxBufferLength: bufferProfile.maximumAheadSeconds,
         maxBufferSize: bufferProfile.maximumBytes,
@@ -272,7 +266,7 @@ export function UniversalVideoPlayer({
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setQualityLevels(hls.levels.map((level, index) => ({
           index,
-          label: hlsLevelLabel(level, index),
+          label: formatHlsQualityLabel(level, index),
         })));
         if (compactViewport) {
           hls.currentLevel = 0;
