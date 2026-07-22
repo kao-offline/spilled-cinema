@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { resolveDownloadByteRange } from "../../../../server/src/http-handlers";
+import { getUpstreamAcceptRanges, resolveDownloadByteRange } from "../../../../server/src/http-handlers";
 
 describe("download serving ranges", () => {
+  it("only advertises byte ranges when the upstream actually supports them", () => {
+    expect(getUpstreamAcceptRanges(new Headers())).toBeNull();
+    expect(getUpstreamAcceptRanges(new Headers({ "Accept-Ranges": "bytes" }))).toBe("bytes");
+  });
+
   it("serves full files when no range is requested", () => {
     expect(resolveDownloadByteRange(1000, undefined)).toEqual({
       statusCode: 200,

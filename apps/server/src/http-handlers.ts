@@ -294,6 +294,10 @@ export function resolveDownloadByteRange(fileSize: number, rangeHeader: string |
   };
 }
 
+export function getUpstreamAcceptRanges(headers: Pick<Headers, "get">) {
+  return headers.get("accept-ranges");
+}
+
 function isBlockedIpAddress(address: string) {
   const version = isIP(address);
   if (version === 4) {
@@ -1332,7 +1336,8 @@ export function createHttpHandlers() {
       const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
       const contentType = (isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)) || isXpassSegment ? "video/mp2t" : upstreamContentType;
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges") || "bytes");
+      const acceptRanges = getUpstreamAcceptRanges(upstream.headers);
+      if (acceptRanges) res.setHeader("Accept-Ranges", acceptRanges);
       res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
       res.setHeader("Content-Disposition", `${inlinePlayback ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {

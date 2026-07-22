@@ -166,11 +166,13 @@ module.exports = async function handler(req, res) {
       : upstreamContentType;
     const contentLength = upstream.headers.get("content-length");
     const contentRange = upstream.headers.get("content-range");
-    const acceptRanges = upstream.headers.get("accept-ranges") || "bytes";
+    const acceptRanges = upstream.headers.get("accept-ranges");
 
     res.statusCode = upstream.status;
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Accept-Ranges", acceptRanges);
+    if (acceptRanges) {
+      res.setHeader("Accept-Ranges", acceptRanges);
+    }
     res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
     res.setHeader("Content-Disposition", `${inlinePlayback ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
 
