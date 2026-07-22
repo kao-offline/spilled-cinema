@@ -484,6 +484,55 @@ describe("playback resolver", () => {
     expect(resolved.resolvedUrl).toBe("https://vip.example/vivarium/master.m3u8");
   });
 
+  it("rejects HLS manifests whose first video segment is forbidden", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://dead.example/vivarium.m3u8") {
+        return new Response("#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment-0.ts", {
+          status: 200,
+          headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+        });
+      }
+      if (url === "https://dead.example/segment-0.ts") {
+        return new Response('{"code":3403,"error":"fail to get resource"}', {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "https://good.example/vivarium.mp4") {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "vivarium-movie",
+      activePlayerAlias: "dead-hls",
+      players: [
+        {
+          alias: "dead-hls",
+          provider: "xpass",
+          embedUrl: "https://dead.example/vivarium.m3u8",
+          streamUrl: "https://dead.example/vivarium.m3u8",
+          streamType: "hls",
+        },
+        {
+          alias: "working-mp4",
+          provider: "fallback",
+          embedUrl: "https://good.example/vivarium.mp4",
+          streamUrl: "https://good.example/vivarium.mp4",
+          streamType: "mp4",
+        },
+      ],
+    });
+
+    expect(resolved.playerAlias).toBe("working-mp4");
+    expect(resolved.resolvedUrl).toBe("https://good.example/vivarium.mp4");
+  });
+
   it("classifies Streamtape get_video URLs as MP4 playback", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

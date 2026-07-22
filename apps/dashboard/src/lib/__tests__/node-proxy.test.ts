@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error The Vercel API route is plain JavaScript.
-import { isAllowedNodeOrigin, isAllowedNodePath } from "../../../api/node-proxy.js";
+import { isAllowedNodeOrigin, isAllowedNodePath, rewriteNodePlaylistUrls } from "../../../api/node-proxy.js";
 
 describe("node proxy allowlist", () => {
   it("allows public localtunnel fetch node origins", () => {
@@ -23,5 +23,18 @@ describe("node proxy allowlist", () => {
   it("rejects private node routes", () => {
     expect(isAllowedNodePath("/api/node/admin/status")).toBe(false);
     expect(isAllowedNodePath("/api/node/private/library")).toBe(false);
+  });
+
+  it("keeps nested HLS requests on the selected fetch node", () => {
+    const child = "/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fsegment.ts&name=movie.m3u8";
+    const rewritten = rewriteNodePlaylistUrls(
+      `#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="${child}"\n#EXTINF:2,\n${child}`,
+      "https://fetch-node.trycloudflare.com",
+      "https://spilled.overload.studio",
+    );
+    const paths = (rewritten as string).split("\n").filter((line: string) => line.includes("node-proxy"));
+    expect(paths).toHaveLength(2);
+    expect(rewritten).toContain("node=https%3A%2F%2Ffetch-node.trycloudflare.com");
+    expect(rewritten).toContain("path=%2Fapi%2Fdownload-full%2Fbrowser-file%3Furl%3D");
   });
 });

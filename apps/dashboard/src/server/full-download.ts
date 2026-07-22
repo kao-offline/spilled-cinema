@@ -1212,6 +1212,70 @@ type StreamValidationResult =
   | { ok: true; streamType: PlaybackStreamType }
   | { ok: false; reason: string };
 
+function firstHlsResourceUrl(playlist: string, playlistUrl: string) {
+  const resource = playlist
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#"));
+  if (!resource) return null;
+  try {
+    return new URL(resource, playlistUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function validateHlsResources(
+  response: Response,
+  target: ResolvedStreamTarget,
+  signal: AbortSignal,
+): Promise<StreamValidationResult> {
+  let playlistResponse = response;
+  let playlistUrl = response.url || target.streamUrl;
+
+  for (let depth = 0; depth < 2; depth += 1) {
+    const playlist = await playlistResponse.text();
+    if (!/^\s*#EXTM3U/i.test(playlist)) {
+      return { ok: false, reason: `Resolved HLS URL on ${new URL(playlistUrl).hostname} did not return an HLS playlist.` };
+    }
+
+    const resourceUrl = firstHlsResourceUrl(playlist, playlistUrl);
+    if (!resourceUrl) return { ok: true, streamType: "hls" };
+    const resourceResponse = await fetch(resourceUrl, {
+      method: "GET",
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "*/*",
+        referer: target.refererUrl,
+      },
+      redirect: "follow",
+      signal,
+    });
+    const resourceHost = new URL(resourceUrl).hostname;
+    if (!resourceResponse.ok && resourceResponse.status !== 206) {
+      await resourceResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, reason: `Resolved HLS media resource on ${resourceHost} returned HTTP ${resourceResponse.status}.` };
+    }
+
+    if (/#EXT-X-STREAM-INF/i.test(playlist)) {
+      playlistResponse = resourceResponse;
+      playlistUrl = resourceResponse.url || resourceUrl;
+      continue;
+    }
+
+    const contentType = resourceResponse.headers.get("content-type") ?? "";
+    await resourceResponse.body?.cancel().catch(() => undefined);
+    const xpassDisguisedSegment = /play\.xpass\.top/i.test(target.refererUrl)
+      && /\/page-\d+\.html(?:$|[?#])/i.test(resourceUrl);
+    if (/^(?:image|font)\//i.test(contentType) || (!xpassDisguisedSegment && /text\/html|application\/(?:xhtml\+xml|json)/i.test(contentType))) {
+      return { ok: false, reason: `Resolved HLS media resource on ${resourceHost} returned ${contentType || "non-media content"}.` };
+    }
+    return { ok: true, streamType: "hls" };
+  }
+
+  return { ok: true, streamType: "hls" };
+}
+
 async function validateResolvedStream(target: ResolvedStreamTarget): Promise<StreamValidationResult> {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -1242,8 +1306,11 @@ async function validateResolvedStream(target: ResolvedStreamTarget): Promise<Str
         await response.body?.cancel().catch(() => undefined);
         return { ok: false, reason: `Resolved URL on ${host} returned ${contentType || "non-media content"} instead of playable media.` };
       }
-      await response.body?.cancel().catch(() => undefined);
       const detectedType = streamTypeFromContentType(contentType);
+      if (streamType === "hls" || detectedType === "hls") {
+        return await validateHlsResources(response, target, controller.signal);
+      }
+      await response.body?.cancel().catch(() => undefined);
       return { ok: true, streamType: detectedType !== "unknown" ? detectedType : streamType };
     }
     await response.body?.cancel().catch(() => undefined);

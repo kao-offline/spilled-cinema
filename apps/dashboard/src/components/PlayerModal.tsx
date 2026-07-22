@@ -176,10 +176,12 @@ function createSubtitleTrack(player: EpisodePlayer | null) {
   }];
 }
 
-function episodeWithSelectedPlayer(episode: LibraryEpisode, player: EpisodePlayer): LibraryEpisode {
+function episodeWithSelectedPlayer(episode: LibraryEpisode, player: EpisodePlayer, includeFallbacks = false): LibraryEpisode {
   return {
     ...episode,
-    players: [player],
+    players: includeFallbacks
+      ? [player, ...episode.players.filter((entry) => entry.alias !== player.alias)]
+      : [player],
     selectedPlayerAlias: player.alias,
   };
 }
@@ -495,7 +497,7 @@ export function PlayerModal({
     }
 
     setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolving" } }));
-    const result = await resolveUniversalPlayback(episodeWithSelectedPlayer(targetEpisode, player));
+    const result = await resolveUniversalPlayback(episodeWithSelectedPlayer(targetEpisode, player, !background));
     void prewarmPlaybackUrl(result.playbackUrl);
     const resolvedPlayer = targetEpisode.players.find((entry) => entry.alias === result.playerAlias) ?? player;
     if (result.streamType !== "embed") {

@@ -72,6 +72,29 @@ function buildProxyDownloadUrl(req, nodeOrigin, downloadPath) {
   return `${url.pathname}${url.search}`;
 }
 
+export function rewriteNodePlaylistUrls(playlist, nodeOrigin, hostedOrigin) {
+  const wrapPath = (path) => {
+    if (!path.startsWith("/api/download-full/browser-file?")) return path;
+    const url = new URL("/api/node-proxy", hostedOrigin);
+    url.searchParams.set("node", nodeOrigin);
+    url.searchParams.set("path", path);
+    return `${url.pathname}${url.search}`;
+  };
+
+  return playlist
+    .split(/\r?\n/)
+    .map((line) => {
+      if (line.trimStart().startsWith("#")) {
+        return line.replace(/\bURI=(["'])(\/api\/download-full\/browser-file\?[^"']+)\1/gi, (_match, quote, path) => (
+          `URI=${quote}${wrapPath(path)}${quote}`
+        ));
+      }
+      const trimmed = line.trim();
+      return trimmed.startsWith("/api/download-full/browser-file?") ? wrapPath(trimmed) : line;
+    })
+    .join("\n");
+}
+
 export default async function handler(req, res) {
   const nodeOrigin = getSingleQueryValue(req.query?.node);
   const targetPath = getSingleQueryValue(req.query?.path);
@@ -118,6 +141,16 @@ export default async function handler(req, res) {
         payload.playbackUrl = buildProxyDownloadUrl(req, nodeOrigin, payload.playbackUrl);
       }
       res.status(response.status).json(payload);
+      return;
+    }
+
+    if (/mpegurl/i.test(contentType) && req.method !== "HEAD") {
+      const hostedOrigin = `https://${req.headers.host || "spilled.overload.studio"}`;
+      const playlist = rewriteNodePlaylistUrls(await response.text(), nodeOrigin, hostedOrigin);
+      res.status(response.status);
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(playlist);
       return;
     }
 
