@@ -1575,7 +1575,9 @@ function getAlternateProviderUrls(embedUrl: string) {
         urls.push(alternate.toString());
       }
     }
-    if (/(^|\.)f16px\.com$|(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$|(^|\.)filemoon\./i.test(host)) {
+    // f16px has its own authoritative video lookup. A missing f16 record should
+    // not be retried as an sb host (the vault already stores real sb mirrors).
+    if (/(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$|(^|\.)filemoon\./i.test(host)) {
       const alternate = new URL(embedUrl);
       alternate.hostname = "sb1254w9megshle.org";
       urls.push(alternate.toString());
@@ -2358,6 +2360,17 @@ async function resolveEncryptedPlaybackStream(embedUrl: string, refererUrl?: str
     return null;
   }
 
+  // f16px is now a Byse SPA whose HTML contains no media data. Removed legacy
+  // codes should fail here instead of starting the expensive access/captcha PoW.
+  if (new URL(parsed.origin).hostname.toLowerCase() === "f16px.com") {
+    const videoResponse = await fetch(`${parsed.origin}/api/videos/${encodeURIComponent(parsed.code)}`, {
+      headers: getByseEmbedHeaders(parsed, embedUrl, undefined, refererUrl),
+    }).catch(() => null);
+    if (videoResponse?.status === 404 || videoResponse?.status === 410) {
+      return null;
+    }
+  }
+
   const playbackUrl = `${parsed.origin}/api/videos/${encodeURIComponent(parsed.code)}/embed/playback`;
   let fingerprint: ByseFingerprint = {
     token: "",
@@ -2743,7 +2756,12 @@ async function resolveStreamTarget(
   }
   visited.add(embedUrl);
 
-  const encryptedPlaybackStream = await resolveEncryptedPlaybackStream(embedUrl, refererUrl);
+  const encryptedPlaybackStream = await resolveEncryptedPlaybackStream(embedUrl, refererUrl).catch((error: unknown) => {
+    if (error instanceof Error && /download gate with reCAPTCHA/i.test(error.message)) {
+      throw error;
+    }
+    return null;
+  });
   if (encryptedPlaybackStream) {
     return { streamUrl: encryptedPlaybackStream, refererUrl: embedUrl };
   }
@@ -2772,7 +2790,7 @@ async function resolveStreamTarget(
     }
     const html = fetched.text;
     const finalUrl = fetched.finalUrl;
-    const mediaRefererUrl = refererUrl ?? finalUrl;
+    const mediaRefererUrl = /(?:^|\.)mixdrop\./i.test(new URL(finalUrl).hostname) ? finalUrl : refererUrl ?? finalUrl;
 
     if (/play\.xpass\.top/i.test(finalUrl)) {
       const xpass = await resolveXpassPlaylistStream(finalUrl, html, finalUrl);

@@ -11,6 +11,8 @@ const baseUrl = option("--base-url", "http://127.0.0.1:5173").replace(/\/$/, "")
 const concurrency = Math.max(1, Number(option("--concurrency", "6")) || 6);
 const timeoutMs = Math.max(5_000, Number(option("--timeout-ms", "15000")) || 15_000);
 const reportPath = option("--report", "");
+const perProvider = Math.max(0, Number(option("--per-provider", "0")) || 0);
+const providerFilter = option("--provider", "").trim().toLowerCase();
 
 if (!vaultRoot) {
   throw new Error("Pass --vault with the spilled-library folder path.");
@@ -20,11 +22,17 @@ const snapshot = JSON.parse(await readFile(path.join(vaultRoot, "library-state.j
 const libraryState = snapshot.libraryState ?? snapshot;
 const shows = Array.isArray(libraryState.shows) ? libraryState.shows : [];
 const checks = [];
+const providerCounts = new Map();
 
 for (const show of shows) {
   for (const episode of show.episodes ?? []) {
     for (const [playerIndex, player] of (episode.players ?? []).entries()) {
       if (!player?.embedUrl || player.provider === "local" || player.provider === "spillsave") continue;
+      const provider = player.provider ?? "unknown";
+      if (providerFilter && provider.toLowerCase() !== providerFilter) continue;
+      const providerCount = providerCounts.get(provider) ?? 0;
+      if (perProvider > 0 && providerCount >= perProvider) continue;
+      providerCounts.set(provider, providerCount + 1);
       checks.push({ show, episode, player, playerIndex });
     }
   }

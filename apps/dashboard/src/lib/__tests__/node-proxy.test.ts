@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error The Vercel API route is plain JavaScript.
-import { isAllowedNodeOrigin, isAllowedNodePath, rewriteNodePlaylistUrls } from "../../../api/node-proxy.js";
+import { buildNodeMediaUrl, isAllowedNodeOrigin, isAllowedNodePath, rewriteNodePlaylistUrls } from "../../../api/node-proxy.js";
 
 describe("node proxy allowlist", () => {
   it("allows public localtunnel fetch node origins", () => {
@@ -36,5 +36,19 @@ describe("node proxy allowlist", () => {
     expect(paths).toHaveLength(2);
     expect(rewritten).toContain("node=https%3A%2F%2Ffetch-node.trycloudflare.com");
     expect(rewritten).toContain("path=%2Fapi%2Fdownload-full%2Fbrowser-file%3Furl%3D");
+  });
+
+  it("streams media directly from CORS-capable Cloudflare nodes", () => {
+    expect(buildNodeMediaUrl(
+      "https://fetch-node.trycloudflare.com",
+      "/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fsegment.ts",
+      "https://spilled.overload.studio",
+    )).toBe("https://fetch-node.trycloudflare.com/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fsegment.ts");
+
+    expect(buildNodeMediaUrl(
+      "https://fetch-node.loca.lt",
+      "/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fsegment.ts",
+      "https://spilled.overload.studio",
+    )).toContain("/api/node-proxy?node=");
   });
 });

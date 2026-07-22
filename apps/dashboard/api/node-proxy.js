@@ -64,12 +64,20 @@ async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
-function buildProxyDownloadUrl(req, nodeOrigin, downloadPath) {
-  const baseUrl = `https://${req.headers.host || "spilled.overload.studio"}`;
-  const url = new URL("/api/node-proxy", baseUrl);
+export function buildNodeMediaUrl(nodeOrigin, downloadPath, hostedOrigin) {
+  const nodeUrl = new URL(nodeOrigin);
+  if (nodeUrl.hostname === "trycloudflare.com" || nodeUrl.hostname.endsWith(".trycloudflare.com")) {
+    return new URL(downloadPath, nodeOrigin).toString();
+  }
+  const url = new URL("/api/node-proxy", hostedOrigin);
   url.searchParams.set("node", nodeOrigin);
   url.searchParams.set("path", downloadPath);
   return `${url.pathname}${url.search}`;
+}
+
+function buildProxyDownloadUrl(req, nodeOrigin, downloadPath) {
+  const hostedOrigin = `https://${req.headers.host || "spilled.overload.studio"}`;
+  return buildNodeMediaUrl(nodeOrigin, downloadPath, hostedOrigin);
 }
 
 export function rewriteNodePlaylistUrls(playlist, nodeOrigin, hostedOrigin) {

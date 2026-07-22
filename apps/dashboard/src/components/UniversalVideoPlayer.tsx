@@ -225,7 +225,8 @@ export function UniversalVideoPlayer({
     let disposed = false;
     let fatalNetworkRecoveries = 0;
     let fatalMediaRecoveries = 0;
-    let adaptiveQualityUnlocked = false;
+    const compactViewport = window.matchMedia("(max-width: 768px)").matches;
+    let adaptiveQualityUnlocked = !compactViewport;
     let adaptiveUnlockAheadSeconds = 15;
     const nativeHlsSupported = Boolean(
       videoElement.canPlayType("application/vnd.apple.mpegurl")
@@ -244,12 +245,14 @@ export function UniversalVideoPlayer({
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        startLevel: 0,
+        startLevel: compactViewport ? 0 : -1,
         startFragPrefetch: true,
-        testBandwidth: false,
-        abrEwmaDefaultEstimate: bufferProfile.bandwidthEstimate,
-        abrBandWidthFactor: 0.72,
-        abrBandWidthUpFactor: 0.55,
+        testBandwidth: true,
+        abrEwmaDefaultEstimate: compactViewport
+          ? bufferProfile.bandwidthEstimate
+          : Math.max(bufferProfile.bandwidthEstimate, 6_000_000),
+        abrBandWidthFactor: compactViewport ? 0.72 : 0.9,
+        abrBandWidthUpFactor: compactViewport ? 0.55 : 0.75,
         abrMaxWithRealBitrate: true,
         maxStarvationDelay: 4,
         maxLoadingDelay: 4,
@@ -271,8 +274,13 @@ export function UniversalVideoPlayer({
           index,
           label: hlsLevelLabel(level, index),
         })));
-        hls.currentLevel = 0;
-        setQualityLevel(0);
+        if (compactViewport) {
+          hls.currentLevel = 0;
+          setQualityLevel(0);
+        } else {
+          hls.currentLevel = -1;
+          setQualityLevel(-1);
+        }
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
         setQualityLevel(data.level);

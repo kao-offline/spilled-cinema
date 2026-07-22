@@ -33,7 +33,7 @@ type PlayerResolutionStatus = {
   playback?: PlaybackResolveResult;
 };
 
-const ENABLE_PLAYER_BACKGROUND_DISCOVERY = false;
+const ENABLE_PLAYER_BACKGROUND_DISCOVERY = true;
 
 function episodeShortLabel(episode: LibraryEpisode | null) {
   if (!episode) return "Episode";

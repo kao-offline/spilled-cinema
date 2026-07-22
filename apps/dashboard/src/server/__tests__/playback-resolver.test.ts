@@ -150,9 +150,10 @@ describe("playback resolver", () => {
   });
 
   it("extracts protocol-relative Mixdrop-style MP4 assignments", async () => {
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("cdn.mixdrop.example/video-720.mp4")) {
+        expect(new Headers(init?.headers).get("referer")).toBe("https://mixdrop.example/e/abc");
         return new Response("video", {
           status: 206,
           headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
@@ -181,6 +182,33 @@ describe("playback resolver", () => {
 
     expect(resolved.resolvedUrl).toBe("https://cdn.mixdrop.example/video-720.mp4?token=abc");
     expect(resolved.streamType).toBe("mp4");
+  });
+
+  it("fails removed f16px videos before starting the expensive Byse challenge", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/videos/filemoon-code")) {
+        return new Response('{"error":"video not found"}', {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolvePlaybackStream({
+      episodeId: "filemoon-movie",
+      activePlayerAlias: "filemoon",
+      players: [{
+        alias: "filemoon",
+        provider: "filemoon",
+        embedUrl: "https://f16px.com/e/filemoon-code",
+      }],
+    })).rejects.toThrow();
+
+    const requestedUrls = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input));
+    expect(requestedUrls).toContain("https://f16px.com/api/videos/filemoon-code");
+    expect(requestedUrls.some((url) => /access\/challenge|embed\/(?:captcha|playback)/.test(url))).toBe(false);
   });
 
   it("tries alternate Mixdrop domains when the imported domain is blocked", async () => {
