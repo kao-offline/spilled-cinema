@@ -5,6 +5,7 @@ import type {
   ImportedShow,
   LibrarySettings,
   OfflineEpisodeDownload,
+  CastMember,
 } from "./types";
 import { archiveImportedShow } from "./import-archive";
 import { HOMEPAGE_ARTWORK_VERSION } from "./import-client";
@@ -64,6 +65,34 @@ function uniqueStrings(values: Array<string | null | undefined>) {
     result.push(normalized);
   }
   return result;
+}
+
+function mergeCastMembers(existing: CastMember[] = [], incoming: CastMember[] = []) {
+  const merged: CastMember[] = [];
+  const indexes = new Map<string, number>();
+
+  for (const member of [...existing, ...incoming]) {
+    const name = member.name?.trim();
+    if (!name) continue;
+    const key = normalizeLooseText(name);
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, merged.length);
+      merged.push({ ...member, name });
+      continue;
+    }
+
+    const current = merged[existingIndex];
+    merged[existingIndex] = {
+      ...current,
+      ...member,
+      name: current.name || name,
+      role: member.role?.trim() || current.role || null,
+      profileUrl: member.profileUrl?.trim() || current.profileUrl || null,
+    };
+  }
+
+  return merged;
 }
 
 function parseYearNumber(value: string | number | null | undefined) {
@@ -142,8 +171,8 @@ function hydrateShowMetadata(show: ImportedShow): NonNullable<ImportedShow["meta
     ...(show.metadata?.genres ?? []),
     ...(Array.isArray(extendedShow.genres) ? extendedShow.genres : []),
   ]);
-  const actors = show.metadata?.actors?.length ? show.metadata.actors : show.actors ?? [];
-  const directors = show.metadata?.directors?.length ? show.metadata.directors : show.directors ?? [];
+  const actors = mergeCastMembers(show.actors ?? [], show.metadata?.actors ?? []);
+  const directors = mergeCastMembers(show.directors ?? [], show.metadata?.directors ?? []);
 
   return {
     title: show.metadata?.title ?? show.title,
@@ -512,11 +541,11 @@ function mergeProviderMatches(existingShow: ImportedShow, nextShow: ImportedShow
 
 function mergeShowArtwork(existingShow: ImportedShow, nextShow: ImportedShow): NonNullable<ImportedShow["artwork"]> {
   return {
-    posterUrl: nextShow.artwork?.posterUrl ?? nextShow.posterUrl ?? existingShow.artwork?.posterUrl ?? existingShow.posterUrl ?? null,
-    backdropUrl: nextShow.artwork?.backdropUrl ?? nextShow.backdropUrl ?? existingShow.artwork?.backdropUrl ?? existingShow.backdropUrl ?? null,
-    bannerUrl: nextShow.artwork?.bannerUrl ?? nextShow.bannerUrl ?? existingShow.artwork?.bannerUrl ?? existingShow.bannerUrl ?? null,
-    clearLogoUrl: nextShow.artwork?.clearLogoUrl ?? nextShow.clearLogoUrl ?? existingShow.artwork?.clearLogoUrl ?? existingShow.clearLogoUrl ?? null,
-    bannerWithLogoUrl: nextShow.artwork?.bannerWithLogoUrl ?? nextShow.homepageBannerUrl ?? existingShow.artwork?.bannerWithLogoUrl ?? existingShow.homepageBannerUrl ?? null,
+    posterUrl: existingShow.artwork?.posterUrl ?? existingShow.posterUrl ?? nextShow.artwork?.posterUrl ?? nextShow.posterUrl ?? null,
+    backdropUrl: existingShow.artwork?.backdropUrl ?? existingShow.backdropUrl ?? nextShow.artwork?.backdropUrl ?? nextShow.backdropUrl ?? null,
+    bannerUrl: existingShow.artwork?.bannerUrl ?? existingShow.bannerUrl ?? nextShow.artwork?.bannerUrl ?? nextShow.bannerUrl ?? null,
+    clearLogoUrl: existingShow.artwork?.clearLogoUrl ?? existingShow.clearLogoUrl ?? nextShow.artwork?.clearLogoUrl ?? nextShow.clearLogoUrl ?? null,
+    bannerWithLogoUrl: existingShow.artwork?.bannerWithLogoUrl ?? existingShow.homepageBannerUrl ?? nextShow.artwork?.bannerWithLogoUrl ?? nextShow.homepageBannerUrl ?? null,
   };
 }
 
@@ -543,9 +572,10 @@ function mergeShowMetadata(existingShow: ImportedShow, nextShow: ImportedShow, e
     episodeCount: episodes.length,
     genres: uniqueStrings([...(existing.genres ?? []), ...(next.genres ?? [])]),
     ratings: mergeRatings(existing, next),
-    actors: next.actors.length ? next.actors : existing.actors,
-    directors: next.directors.length ? next.directors : existing.directors,
+    actors: mergeCastMembers(existing.actors, next.actors),
+    directors: mergeCastMembers(existing.directors, next.directors),
     updatedAt: Date.now(),
+    enrichmentVersion: Math.max(existing.enrichmentVersion ?? 0, next.enrichmentVersion ?? 0) || undefined,
   };
 }
 
@@ -652,6 +682,65 @@ function mergeImportedShow(existingShow: ImportedShow, nextShow: ImportedShow): 
     directors: metadata.directors,
     episodes,
   };
+}
+
+export function mergeLibraryStates(primaryState: LibraryState, secondaryState: LibraryState): LibraryState {
+  const primary = normalizeLibraryStateCandidate(primaryState);
+  const secondary = normalizeLibraryStateCandidate(secondaryState);
+  const shows = [...primary.shows];
+
+  for (const incomingShow of secondary.shows) {
+    const existingIndex = shows.findIndex((show) => showsReferToSameTitle(show, incomingShow));
+    if (existingIndex >= 0) {
+      shows[existingIndex] = mergeImportedShow(shows[existingIndex], incomingShow);
+    } else {
+      shows.push(incomingShow);
+    }
+  }
+
+  return normalizeLibraryStateCandidate({
+    ...secondary,
+    ...primary,
+    shows: shows.sort((left, right) => right.importedAt - left.importedAt),
+    settings: {
+      ...secondary.settings,
+      ...primary.settings,
+      artworkSources: {
+        ...secondary.settings.artworkSources,
+        ...primary.settings.artworkSources,
+      },
+    },
+    offlineDownloads: {
+      ...secondary.offlineDownloads,
+      ...primary.offlineDownloads,
+    },
+  });
+}
+
+export function updateShowCast(slug: string, actors: CastMember[], directors: CastMember[] = []) {
+  const state = readLibraryState();
+  const nextState = {
+    ...state,
+    shows: state.shows.map((show) => {
+      if (show.slug !== slug) return show;
+      const metadata = hydrateShowMetadata(show);
+      const mergedActors = mergeCastMembers(metadata.actors, actors);
+      const mergedDirectors = mergeCastMembers(metadata.directors, directors);
+      return {
+        ...show,
+        actors: mergedActors,
+        directors: mergedDirectors,
+        metadata: {
+          ...metadata,
+          actors: mergedActors,
+          directors: mergedDirectors,
+          updatedAt: Date.now(),
+        },
+      };
+    }),
+  };
+  writeLibraryState(nextState);
+  return nextState;
 }
 
 export function setDownloadedLanguage(episodeId: string, language: string) {

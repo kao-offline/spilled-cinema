@@ -29,6 +29,7 @@ type ShowDetailProps = {
     bannerWithLogoUrl?: string | null;
     clearLogoUrl?: string | null;
   }) => void;
+  onUpdateCast: (actors: CastMember[]) => void;
   artworkSources: ArtworkSourceSettings;
   fullDownloadJobsByEpisode: Record<string, FullDownloadJob>;
   onStartFullDownload: (episode: LibraryEpisode) => void;
@@ -139,6 +140,7 @@ export function ShowDetail({
   onRemoveShow,
   onToggleFavorite,
   onUpdateArtwork,
+  onUpdateCast,
   artworkSources,
   fullDownloadJobsByEpisode,
   onStartFullDownload,
@@ -257,7 +259,10 @@ export function ShowDetail({
     setCastLoading(true);
     void fetchCastForShow(show)
       .then((cast) => {
-        if (!canceled) setFetchedActors(cast);
+        if (!canceled) {
+          setFetchedActors(cast);
+          if (cast.length > 0) onUpdateCast(cast);
+        }
       })
       .catch(() => {
         if (!canceled) setFetchedActors([]);
@@ -268,7 +273,7 @@ export function ShowDetail({
     return () => {
       canceled = true;
     };
-  }, [show, actors.length]);
+  }, [show, actors.length, onUpdateCast]);
 
   useEffect(() => {
     let canceled = false;

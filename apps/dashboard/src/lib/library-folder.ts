@@ -94,6 +94,7 @@ export type VaultSnapshot = {
 };
 
 let dbInstance: IDBDatabase | null = null;
+let vaultSnapshotWriteQueue: Promise<void> = Promise.resolve();
 let vaultDiagnostics: VaultDiagnostics = {
   lastOperation: null,
   lastReadError: null,
@@ -1015,10 +1016,10 @@ export async function readVaultSnapshot(): Promise<VaultSnapshot | null> {
   }
 }
 
-export async function writeVaultSnapshot(snapshot: VaultSnapshot): Promise<void> {
+async function writeVaultSnapshotNow(serializedSnapshot: string): Promise<void> {
   if (isNativeVaultAvailable()) {
     try {
-      await window.spilledNative!.writeVaultSnapshot(JSON.stringify(snapshot, null, 2));
+      await window.spilledNative!.writeVaultSnapshot(serializedSnapshot);
       recordVaultInfo("write_snapshot", "Wrote native vault snapshot.");
       recordVaultDiagnostics({ lastWriteError: null });
     } catch (error) {
@@ -1037,7 +1038,7 @@ export async function writeVaultSnapshot(snapshot: VaultSnapshot): Promise<void>
     const writable = await fileHandle.createWritable();
 
     try {
-      await writable.write(JSON.stringify(snapshot, null, 2));
+      await writable.write(serializedSnapshot);
     } finally {
       await writable.close();
     }
@@ -1046,5 +1047,14 @@ export async function writeVaultSnapshot(snapshot: VaultSnapshot): Promise<void>
   } catch (error) {
     recordVaultWriteError("write_snapshot", error);
   }
+}
+
+export function writeVaultSnapshot(snapshot: VaultSnapshot): Promise<void> {
+  const serializedSnapshot = JSON.stringify(snapshot, null, 2);
+  const pendingWrite = vaultSnapshotWriteQueue
+    .catch(() => undefined)
+    .then(() => writeVaultSnapshotNow(serializedSnapshot));
+  vaultSnapshotWriteQueue = pendingWrite;
+  return pendingWrite;
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readLibraryState, updateEpisodePlaybackProgress, upsertImportedShow } from "./storage";
+import { mergeLibraryStates, normalizeLibraryStateCandidate, readLibraryState, updateEpisodePlaybackProgress, updateShowCast, upsertImportedShow } from "./storage";
 import type { ImportedShow } from "./types";
 
 function createStorageStub() {
@@ -259,6 +259,84 @@ describe("library storage imports", () => {
     expect(episode.playbackPositionSeconds).toBe(42);
     expect(episode.playbackDurationSeconds).toBe(120);
     expect(readLibraryState().shows[0].posterUrl).toBe("https://image.example/poster.jpg");
+  });
+
+  it("keeps selected artwork when a provider is imported again", () => {
+    upsertImportedShow(showFixture({
+      slug: "vidking-movie-artwork",
+      posterUrl: "https://image.example/selected-poster.jpg",
+      backdropUrl: "https://image.example/selected-backdrop.jpg",
+      clearLogoUrl: "https://image.example/selected-logo.png",
+    }));
+    upsertImportedShow(showFixture({
+      slug: "vidking-movie-artwork",
+      posterUrl: "https://provider.example/default-poster.jpg",
+      backdropUrl: "https://provider.example/default-backdrop.jpg",
+      clearLogoUrl: "https://provider.example/default-logo.png",
+      importedAt: 2,
+    }));
+
+    const show = readLibraryState().shows[0];
+    expect(show.posterUrl).toBe("https://image.example/selected-poster.jpg");
+    expect(show.backdropUrl).toBe("https://image.example/selected-backdrop.jpg");
+    expect(show.clearLogoUrl).toBe("https://image.example/selected-logo.png");
+  });
+
+  it("persists fetched cast and retains richer actor details across imports", () => {
+    const show = showFixture({
+      slug: "vidking-movie-cast",
+      metadata: {
+        title: "Example Movie",
+        seasonCount: 1,
+        episodeCount: 1,
+        genres: ["Drama"],
+        ratings: [],
+        actors: [],
+        directors: [],
+        updatedAt: 1,
+        enrichmentVersion: 2,
+      },
+    });
+    upsertImportedShow(show);
+    updateShowCast(show.slug, [{ name: "Actor One", role: "Lead", profileUrl: "https://image.example/actor.jpg" }]);
+    upsertImportedShow(showFixture({
+      slug: show.slug,
+      actors: [{ name: "Actor One" }, { name: "Actor Two", role: "Supporting" }],
+      importedAt: 2,
+    }));
+
+    const persisted = readLibraryState().shows[0];
+    expect(persisted.metadata?.actors).toEqual([
+      { name: "Actor One", role: "Lead", profileUrl: "https://image.example/actor.jpg" },
+      { name: "Actor Two", role: "Supporting", profileUrl: null },
+    ]);
+    expect(persisted.metadata?.enrichmentVersion).toBe(2);
+  });
+
+  it("reconciles a local library with a vault snapshot without dropping rich fields", () => {
+    const local = normalizeLibraryStateCandidate({
+      shows: [showFixture({
+        slug: "vidking-shared-movie",
+        posterUrl: "https://image.example/local-choice.jpg",
+        actors: [{ name: "Local Actor", profileUrl: "https://image.example/local-actor.jpg" }],
+      })],
+    });
+    const vault = normalizeLibraryStateCandidate({
+      shows: [
+        showFixture({
+          slug: "bombuj-shared-movie",
+          actors: [{ name: "Vault Actor", role: "Lead" }],
+          importedAt: 2,
+        }),
+        showFixture({ slug: "vault-only-movie", title: "Vault Only", externalIds: { tmdb: "99" } }),
+      ],
+    });
+
+    const merged = mergeLibraryStates(local, vault);
+    expect(merged.shows).toHaveLength(2);
+    const shared = merged.shows.find((entry) => entry.externalIds?.tmdb === "1");
+    expect(shared?.posterUrl).toBe("https://image.example/local-choice.jpg");
+    expect(shared?.metadata?.actors.map((actor) => actor.name)).toEqual(["Local Actor", "Vault Actor"]);
   });
 
   it("hydrates legacy fields into unified metadata and artwork", () => {

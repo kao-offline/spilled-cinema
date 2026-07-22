@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
@@ -48,6 +48,9 @@ import {
   removeDownloadedLanguage,
   exportLibraryState,
   importLibraryState,
+  mergeLibraryStates,
+  normalizeLibraryStateCandidate,
+  updateShowCast,
 } from "./lib/storage";
 import type { DownloadEngine, EpisodePlayer, ImportedShow, LibraryEpisode, LibraryState, PlayerAlias } from "./lib/types";
 import { clearOfflineCache } from "./lib/offline";
@@ -777,26 +780,32 @@ function AppContent() {
     return status;
   }
 
-  function applyVaultSnapshot(snapshot: VaultSnapshot, preserveUiState: boolean) {
+  function applyVaultSnapshot(snapshot: VaultSnapshot, preserveUiState: boolean, mergeLocalData = false) {
     const currentState = stateRef.current;
-    const importedState = importLibraryState(snapshot.libraryState);
+    const importedState = normalizeLibraryStateCandidate(snapshot.libraryState as Partial<LibraryState>);
+    const restoredState = mergeLocalData ? mergeLibraryStates(currentState, importedState) : importedState;
     const nextState = {
-      ...importedState,
-      query: preserveUiState ? currentState.query : importedState.query,
-      selectedEpisodeId: preserveUiState ? currentState.selectedEpisodeId : importedState.selectedEpisodeId,
+      ...restoredState,
+      query: preserveUiState ? currentState.query : restoredState.query,
+      selectedEpisodeId: preserveUiState ? currentState.selectedEpisodeId : restoredState.selectedEpisodeId,
       settings: {
-        ...importedState.settings,
+        ...restoredState.settings,
         connectedFolderName: vaultStatus.folderName ?? currentState.settings.connectedFolderName,
       },
     };
 
     writeLibraryState(nextState);
+    stateRef.current = nextState;
     setState(nextState);
 
-    const restoredLanguages = replaceDownloadedLanguageMap(snapshot.downloadedLanguages ?? readDownloadedLanguageMap());
+    const restoredLanguages = replaceDownloadedLanguageMap(mergeLocalData
+      ? { ...(snapshot.downloadedLanguages ?? {}), ...readDownloadedLanguageMap() }
+      : snapshot.downloadedLanguages ?? readDownloadedLanguageMap());
     setDownloadedEpisodeLanguageById(new Map(Object.entries(restoredLanguages)));
 
-    const restoredQueue = replaceDownloadQueue(snapshot.downloadQueue ?? readDownloadQueue());
+    const restoredQueue = replaceDownloadQueue(mergeLocalData
+      ? { ...(snapshot.downloadQueue ?? {}), ...readDownloadQueue() }
+      : snapshot.downloadQueue ?? readDownloadQueue());
     setDownloadQueue(restoredQueue);
     lastKnownVaultSnapshotAtRef.current = Math.max(lastKnownVaultSnapshotAtRef.current, snapshot.updatedAt);
   }
@@ -992,7 +1001,7 @@ function AppContent() {
       }
 
       if (snapshot?.libraryState) {
-        applyVaultSnapshot(snapshot, false);
+        applyVaultSnapshot(snapshot, false, true);
       }
 
       setVaultSnapshotReady(true);
@@ -3133,6 +3142,12 @@ function AppContent() {
     setState(nextState);
   }
 
+  const handleUpdateShowCast = useCallback((slug: string, actors: ImportedShow["actors"] = []) => {
+    const nextState = updateShowCast(slug, actors);
+    stateRef.current = nextState;
+    setState(nextState);
+  }, []);
+
   async function handleEnsureHomepageTextArtwork(slug: string) {
     const show = state.shows.find((entry) => entry.slug === slug);
     if (!show || show.homepageArtworkVersion === HOMEPAGE_ARTWORK_VERSION) {
@@ -3423,6 +3438,7 @@ function AppContent() {
               onRemoveShow={() => handleRemoveShow(activeShowSlug)}
               onToggleFavorite={() => handleToggleFavorite(activeShowSlug)}
               onUpdateArtwork={(artwork) => handleUpdateShowArtwork(activeShowSlug, artwork)}
+              onUpdateCast={(actors) => handleUpdateShowCast(activeShowSlug, actors)}
               artworkSources={state.settings.artworkSources}
               fullDownloadJobsByEpisode={fullDownloadJobsByEpisode}
               onStartFullDownload={handleStartFullDownload}
