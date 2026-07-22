@@ -3573,28 +3573,30 @@ function AppContent() {
             <>
               {/* Only show Hero if no search query, or adjust logically */}
               {!state.query && activeView === "home" && (
-                <Hero 
-                  featuredShow={featuredShow} 
-                  onPrev={handlePrevHero}
-                  onNext={handleNextHero}
-                  progressKey={featuredShow?.slug}
-                  progressDurationMs={HERO_ROTATION_MS}
-                  onPlay={() => {
-                    if (latestEpisodeOfFeatured) {
-                      handleSelectEpisode(latestEpisodeOfFeatured);
-                    } else if (featuredShow) {
-                      handleOpenShow(featuredShow.slug);
-                    }
-                  }} 
-                  onToggleFavorite={featuredShow ? () => handleToggleFavorite(featuredShow.slug) : undefined}
-                />
+                <div className="hidden lg:block">
+                  <Hero
+                    featuredShow={featuredShow}
+                    onPrev={handlePrevHero}
+                    onNext={handleNextHero}
+                    progressKey={featuredShow?.slug}
+                    progressDurationMs={HERO_ROTATION_MS}
+                    onPlay={() => {
+                      if (latestEpisodeOfFeatured) {
+                        handleSelectEpisode(latestEpisodeOfFeatured);
+                      } else if (featuredShow) {
+                        handleOpenShow(featuredShow.slug);
+                      }
+                    }}
+                    onToggleFavorite={featuredShow ? () => handleToggleFavorite(featuredShow.slug) : undefined}
+                  />
+                </div>
               )}
 
-              <div className="mt-2 px-4 pb-16 sm:px-6 lg:px-10">
-                <div className="mb-7 flex flex-col gap-2 border-b border-white/[0.07] pb-5 sm:flex-row sm:items-end sm:justify-between">
+              <div className="px-4 pb-16 sm:px-6 lg:mt-2 lg:px-10">
+                <div className="mb-5 flex items-end justify-between border-b border-white/[0.07] pb-4 lg:mb-7 lg:pb-5">
                   <div>
-                    <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.3em] text-white/28">Your collection</div>
-                    <h2 className="text-2xl font-black tracking-[-0.035em] text-white capitalize sm:text-3xl">
+                    <div className="mb-1.5 hidden text-[10px] font-black uppercase tracking-[0.3em] text-white/28 lg:block">Your collection</div>
+                    <h2 className="text-xl font-black tracking-[-0.035em] text-white capitalize sm:text-3xl">
                     {state.query ? "Local Vault" : activeView === "favorites" ? "Favorites" : "All Library"}
                     </h2>
                   </div>

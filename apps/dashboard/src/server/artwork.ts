@@ -1082,8 +1082,7 @@ export async function fetchTmdbPersonCredits(input: {
         (candidate.known_for_department?.toLowerCase() === "acting" ? 24 : 0) +
         Math.min(candidate.popularity ?? 0, 40),
     }))
-    .sort((left, right) => right.score - left.score)
-    [0]?.candidate;
+    .sort((left, right) => right.score - left.score)[0]?.candidate;
 
   if (!person?.id) {
     return [];

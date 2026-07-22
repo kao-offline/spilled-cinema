@@ -1,11 +1,12 @@
-import { LoaderCircle, MoreHorizontal, Search, Settings, X } from "lucide-react";
-import { useState } from "react";
+import { LoaderCircle, MoreHorizontal } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { CommandSearchResult } from "../lib/command-search";
 import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import type { ImportedShow } from "../lib/types";
 import { balancedBackgroundImage } from "../lib/image-resolution";
 import { MobileDock } from "./MobileDock";
 import { CommandResultRow } from "./CommandResultRow";
+import { MobileBrandSearch } from "./MobileBrandSearch";
 
 type MobileHomePageProps = {
   featuredShow: ImportedShow | null;
@@ -62,10 +63,22 @@ export function MobileHomePage({
 }: MobileHomePageProps) {
   const [searchActive, setSearchActive] = useState(false);
   const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
+  const [heroIndex, setHeroIndex] = useState(0);
   const bannerRails = rails.filter((rail) => rail.kind === "banner");
   const posterRails = rails.filter((rail) => rail.kind === "poster");
-  const primaryBanner = bannerRails[0]?.items[0] ?? null;
+  const heroItems = bannerRails[0]?.items.slice(0, 5) ?? [];
+  const primaryBanner = heroItems[heroIndex] ?? heroItems[0] ?? null;
   const heroImage = primaryBanner ? getItemImage(primaryBanner, "banner") : null;
+
+  useEffect(() => {
+    if (heroItems.length < 2 || searchActive) return;
+    const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroItems.length), 6500);
+    return () => window.clearInterval(timer);
+  }, [heroItems.length, searchActive]);
+
+  useEffect(() => {
+    if (heroIndex >= heroItems.length) setHeroIndex(0);
+  }, [heroIndex, heroItems.length]);
 
   const activateItem = (item: HomepageRailItem) => {
     if (item.kind === "local") onOpenLocal(item);
@@ -75,51 +88,19 @@ export function MobileHomePage({
   return (
     <div className="mobile-home min-h-[100dvh] bg-[#090a0e] pb-32 text-white lg:hidden">
       <header className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
-        <button type="button" onClick={onOpenLibrary} className="mx-auto block" aria-label="Open library">
-          <img src="/Spilled.svg" alt="Spilled" className="h-10 w-auto brightness-0 invert" />
-        </button>
-
-        <div className="mt-5 flex gap-2.5">
-          <label className="flex h-14 min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-[#24262c] px-4 text-left text-base font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] focus-within:ring-1 focus-within:ring-white/16">
-            <Search className="h-5 w-5 shrink-0 text-white/48" />
-            <input
-              value={searchQuery}
-              onFocus={() => {
-                setSearchActive(true);
-                onSearchActiveChange(true);
-              }}
-              onChange={(event) => {
-                onSearchQueryChange(event.target.value);
-                setExpandedResultId(null);
-              }}
-              placeholder="Search any movie, series or paste a link…"
-              enterKeyHint="search"
-              autoCapitalize="none"
-              className="min-w-0 flex-1 bg-transparent text-base text-white outline-none placeholder:text-white/34"
-            />
-            {searchQuery ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onSearchQueryChange("");
-                  setExpandedResultId(null);
-                }}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-white/55"
-                aria-label="Clear search"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            ) : null}
-          </label>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] bg-[#24262c] text-white transition active:scale-95"
-            aria-label="Open settings"
-          >
-            <Settings className="h-6 w-6 fill-white" />
-          </button>
-        </div>
+        <MobileBrandSearch
+          query={searchQuery}
+          onQueryChange={(value) => {
+            onSearchQueryChange(value);
+            setExpandedResultId(null);
+          }}
+          onFocus={() => {
+            setSearchActive(true);
+            onSearchActiveChange(true);
+          }}
+          onOpenLibrary={onOpenLibrary}
+          onOpenSettings={onOpenSettings}
+        />
       </header>
 
       {searchActive && searchQuery.trim().length > 0 ? (
@@ -158,10 +139,10 @@ export function MobileHomePage({
           <button
             type="button"
             onClick={() => primaryBanner ? activateItem(primaryBanner) : onPlayFeatured()}
-            className="group relative block aspect-[2.08/1] w-full overflow-hidden rounded-[26px] bg-[#191b20] text-left shadow-[0_18px_46px_rgba(0,0,0,0.34)]"
+            className="mobile-home-hero group relative block aspect-[2.08/1] w-full overflow-hidden rounded-[26px] bg-[#191b20] text-left shadow-[0_18px_46px_rgba(0,0,0,0.34)] transition active:scale-[0.985]"
           >
             {heroImage ? (
-              <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(heroImage, "backdrop-hero")} />
+              <div key={heroImage} className="mobile-home-hero-image absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(heroImage, "backdrop-hero")} />
             ) : (
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_30%,rgba(255,255,255,.14),transparent_34%),linear-gradient(135deg,#252832,#111218)]" />
             )}
@@ -172,6 +153,13 @@ export function MobileHomePage({
               </div>
             ) : null}
           </button>
+          {heroItems.length > 1 ? (
+            <div className="mt-3 flex justify-center gap-1.5" aria-label="Featured titles">
+              {heroItems.map((item, index) => (
+                <button key={item.id} type="button" onClick={() => setHeroIndex(index)} className={`h-1.5 rounded-full transition-all duration-300 ${index === heroIndex ? "w-6 bg-white" : "w-1.5 bg-white/25"}`} aria-label={`Show ${item.title}`} />
+              ))}
+            </div>
+          ) : null}
         </section>
 
         {posterRails.map((rail) => (
@@ -189,7 +177,7 @@ export function MobileHomePage({
                     <button
                       type="button"
                       onClick={() => activateItem(item)}
-                      className="relative block aspect-[2/3] w-full overflow-hidden rounded-[15px] bg-[#181a20] text-left"
+                      className="mobile-home-card relative block aspect-[2/3] w-full overflow-hidden rounded-[15px] bg-[#181a20] text-left transition active:scale-[0.96]"
                     >
                       {image ? <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(image, "poster-card")} /> : null}
                       <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/35 to-transparent" />

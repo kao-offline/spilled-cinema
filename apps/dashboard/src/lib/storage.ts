@@ -10,6 +10,7 @@ import type {
 import { archiveImportedShow } from "./import-archive";
 import { HOMEPAGE_ARTWORK_VERSION } from "./import-client";
 import { getIntegrationById, type IntegrationId } from "./integrations";
+import { balanceImageResolution } from "./image-resolution";
 
 const STORAGE_KEY = "spilled-library.state.v1";
 const DOWNLOADED_LANGUAGE_KEY = "spilled-library.downloaded-languages.v1";
@@ -148,11 +149,11 @@ function inferRuntimeMinutes(show: ImportedShow) {
 
 function hydrateShowArtwork(show: ImportedShow): NonNullable<ImportedShow["artwork"]> {
   return {
-    posterUrl: show.artwork?.posterUrl ?? show.posterUrl ?? null,
-    backdropUrl: show.artwork?.backdropUrl ?? show.backdropUrl ?? null,
-    bannerUrl: show.artwork?.bannerUrl ?? show.bannerUrl ?? null,
-    clearLogoUrl: show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null,
-    bannerWithLogoUrl: show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
+    posterUrl: balanceImageResolution(show.artwork?.posterUrl ?? show.posterUrl ?? null, "poster-detail"),
+    backdropUrl: balanceImageResolution(show.artwork?.backdropUrl ?? show.backdropUrl ?? null, "backdrop-hero"),
+    bannerUrl: balanceImageResolution(show.artwork?.bannerUrl ?? show.bannerUrl ?? null, "backdrop-hero"),
+    clearLogoUrl: balanceImageResolution(show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null, "logo"),
+    bannerWithLogoUrl: balanceImageResolution(show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null, "backdrop-hero"),
   };
 }
 
@@ -210,7 +211,7 @@ function sanitizeImportedShow(show: ImportedShow): ImportedShow {
     metadata,
     actors: metadata.actors,
     directors: metadata.directors,
-    homepagePosterUrl: homepageArtworkIsCurrent ? show.homepagePosterUrl ?? null : null,
+    homepagePosterUrl: homepageArtworkIsCurrent ? balanceImageResolution(show.homepagePosterUrl ?? null, "poster-card") : null,
     homepageBannerUrl: homepageArtworkIsCurrent ? artwork.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null : null,
     homepageArtworkVersion: homepageArtworkIsCurrent ? show.homepageArtworkVersion ?? null : null,
   };

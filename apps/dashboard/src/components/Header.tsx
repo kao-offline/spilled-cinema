@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import type { LocalRuntimeStatus } from "../lib/runtime-bridge";
 import { getConnectionModeLabel } from "../lib/runtime-bridge";
+import { MobileBrandSearch } from "./MobileBrandSearch";
 
 type HeaderProps = {
   query: string;
@@ -44,9 +45,18 @@ export function Header({
   const filterLabel = mediaFilter === "movies" ? "Movies" : mediaFilter === "series" ? "Series" : "All Content";
 
   return (
-    <header className="sticky top-0 z-[50] flex flex-col gap-3 bg-[#090a0e]/94 px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-2xl lg:h-20 lg:flex-row lg:items-center lg:justify-between lg:border-b lg:border-white/[0.07] lg:bg-[#05060a]/88 lg:px-10 lg:py-0">
-      <img src="/Spilled.svg" alt="Spilled" className="mx-auto h-9 w-auto brightness-0 invert lg:hidden" />
-      <div className="flex w-full flex-col gap-3 pr-[4.15rem] lg:w-auto lg:flex-row lg:items-center lg:gap-6 lg:pr-0">
+    <header className="sticky top-0 z-[50] bg-[#090a0e]/94 px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-2xl lg:flex lg:h-20 lg:items-center lg:justify-between lg:border-b lg:border-white/[0.07] lg:bg-[#05060a]/88 lg:px-10 lg:py-0">
+      <MobileBrandSearch query={query} onQueryChange={onQueryChange} onOpenSettings={onOpenSettings} placeholder="Search any movie, series or paste a link…" />
+      {showMediaFilter ? (
+        <div className="mt-3 flex gap-2 lg:hidden" aria-label="Library filters">
+          {(["all", "movies", "series"] as const).map((option) => (
+            <button key={option} type="button" onClick={() => setMediaFilter(option)} className={clsx("rounded-full border px-3.5 py-2 text-xs font-black capitalize transition", mediaFilter === option ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.04] text-white/50 active:bg-white/10")}>
+              {option === "all" ? "All titles" : option}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="hidden w-full flex-col gap-3 lg:flex lg:w-auto lg:flex-row lg:items-center lg:gap-6">
         {showMediaFilter ? (
           <div className="relative hidden lg:block" ref={dropdownRef}>
             <button
@@ -94,10 +104,6 @@ export function Header({
           />
         </div>
       </div>
-
-      <button type="button" onClick={onOpenSettings} className="absolute bottom-3 right-4 flex h-14 w-14 items-center justify-center rounded-[18px] bg-[#24262c] text-white lg:hidden" aria-label="Open settings">
-        <Settings2 className="h-6 w-6" />
-      </button>
 
       <div className="hidden w-full items-center justify-between gap-4 lg:flex lg:w-auto">
         <div className="flex h-10 min-w-0 items-center gap-3 rounded-full border border-white/[0.07] bg-white/[0.035] px-4">

@@ -76,6 +76,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
   const [requestVersion, setRequestVersion] = useState(0);
   const [artworkLoading, setArtworkLoading] = useState(false);
   const [artworkError, setArtworkError] = useState<string | null>(null);
+  const [appliedSelection, setAppliedSelection] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -95,6 +96,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
 
   useEffect(() => {
     if (!open) return;
+    setAppliedSelection(null);
     setArtworkTab(show?.posterUrl || !show?.clearLogoUrl ? "poster" : "logo");
     setArtworkSourceFilter("all");
     setArtworkLanguageFilter("all");
@@ -184,7 +186,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
       clearLogoUrl: artworkTab === "logo" ? selectedAsset.url : show.clearLogoUrl ?? null,
       bannerWithLogoUrl: artworkTab === "wlogo-banner" ? selectedAsset.url : show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
     });
-    onClose();
+    setAppliedSelection(`${artworkTab}:${selectedAsset.url}`);
   };
 
   return createPortal(
@@ -229,7 +231,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <main className="min-h-0 overscroll-contain overflow-y-auto px-4 py-4 sm:px-7 sm:py-6">
+            <main className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-4 py-4 sm:px-7 sm:py-6">
               <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
                   {(["all", "current", "tmdb", "fanart", "tvdb"] as const).map((source) => (
@@ -302,7 +304,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
                     {selectedAsset ? <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.2em] text-white/32">{selectedAsset.source}{selectedAsset.language ? ` · ${selectedAsset.language}` : ""}</div> : null}
                   </div>
                 </div>
-                <button type="button" disabled={!selectedAsset || artworkLoading} onClick={applySelection} className="mt-auto flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-black shadow-[0_14px_35px_rgba(0,0,0,0.35)] transition hover:bg-white/88 disabled:cursor-not-allowed disabled:opacity-35 lg:mt-4"><Check className="h-4 w-4" /> Apply {artworkTab}</button>
+                <button type="button" disabled={!selectedAsset || artworkLoading} onClick={applySelection} className="mt-auto flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-black shadow-[0_14px_35px_rgba(0,0,0,0.35)] transition hover:bg-white/88 disabled:cursor-not-allowed disabled:opacity-35 lg:mt-4"><Check className="h-4 w-4" /> {selectedAsset && appliedSelection === `${artworkTab}:${selectedAsset.url}` ? "Applied — keep choosing" : `Apply ${artworkTab}`}</button>
                 <p className="mt-3 hidden text-center text-[10px] leading-relaxed text-white/28 lg:block">Only this artwork slot will change. Your other title images stay untouched.</p>
               </div>
             </aside>
