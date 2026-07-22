@@ -367,7 +367,7 @@ function isCacheableHlsAsset(url: URL, contentType: string) {
     /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
 }
 
-function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string) {
+function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string, inlinePlayback = false) {
   const params = new URLSearchParams({
     url: streamUrl,
     name: fileName,
@@ -375,21 +375,24 @@ function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?
   if (referer) {
     params.set("referer", referer);
   }
+  if (inlinePlayback) {
+    params.set("playback", "1");
+  }
   return `/api/download-full/browser-file?${params.toString()}`;
 }
 
-function rewriteHlsTagUris(line: string, playlistUrl: URL, fileName: string, referer?: string) {
+function rewriteHlsTagUris(line: string, playlistUrl: URL, fileName: string, referer?: string, inlinePlayback = false) {
   return line.replace(/\bURI=(["'])([^"']+)\1/gi, (match, quote: string, rawUrl: string) => {
     try {
       const absolute = new URL(rawUrl, playlistUrl).toString();
-      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString())}${quote}`;
+      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback)}${quote}`;
     } catch {
       return match;
     }
   });
 }
 
-function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: string, referer?: string) {
+function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: string, referer?: string, inlinePlayback = false) {
   const output: string[] = [];
   const pendingSegmentTags: string[] = [];
   const preserveImageNamedSegments = Boolean(getBrowserFileOriginHeader(referer));
@@ -400,12 +403,12 @@ function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: st
       continue;
     }
     if (trimmed.startsWith("#EXTINF") || trimmed.startsWith("#EXT-X-BYTERANGE")) {
-      pendingSegmentTags.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer));
+      pendingSegmentTags.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback));
       continue;
     }
     if (trimmed.startsWith("#")) {
       output.push(...pendingSegmentTags.splice(0));
-      output.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer));
+      output.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback));
       continue;
     }
 
@@ -418,7 +421,7 @@ function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: st
         continue;
       }
       output.push(...pendingSegmentTags.splice(0));
-      output.push(buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString()));
+      output.push(buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback));
     } catch {
       output.push(...pendingSegmentTags.splice(0));
       output.push(line);
@@ -1296,6 +1299,7 @@ export function createHttpHandlers() {
       const streamUrl = params.get("url");
       const fileName = getSafeFileName(params.get("name"));
       const referer = params.get("referer") || undefined;
+      const inlinePlayback = params.get("playback") === "1";
       if (!streamUrl) return sendJson(res, 400, { error: "Missing stream URL." });
 
       const parsed = new URL(streamUrl);
@@ -1330,10 +1334,10 @@ export function createHttpHandlers() {
       res.setHeader("Content-Type", contentType);
       res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges") || "bytes");
       res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
-      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.setHeader("Content-Disposition", `${inlinePlayback ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {
         const playlist = await upstream.text();
-        const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer);
+        const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer, inlinePlayback);
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
         res.setHeader("Content-Length", Buffer.byteLength(rewritten).toString());
         return res.end(rewritten);

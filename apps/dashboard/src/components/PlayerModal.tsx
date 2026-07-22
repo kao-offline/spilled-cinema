@@ -60,6 +60,7 @@ function buildPlaybackProxyUrl(player: EpisodePlayer, episodeId: string, resolve
     url: resolvedUrl,
     name: `${episodeId}.${streamType === "mp4" ? "mp4" : "m3u8"}`,
     referer: player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl,
+    playback: "1",
   });
   return buildRuntimeUrl(`/api/download-full/browser-file?${params.toString()}`);
 }

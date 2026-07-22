@@ -584,8 +584,12 @@ export function UniversalVideoPlayer({
       {paused && !waiting ? (
         <button
           type="button"
-          onClick={togglePlay}
-          className="absolute left-1/2 top-1/2 z-20 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/54 text-white shadow-[0_18px_50px_rgba(0,0,0,.48)] backdrop-blur-md transition active:scale-95 lg:hidden"
+          data-player-control
+          onClick={(event) => {
+            event.stopPropagation();
+            togglePlay();
+          }}
+          className="absolute left-1/2 top-1/2 z-20 flex h-16 w-16 touch-manipulation -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/54 text-white shadow-[0_18px_50px_rgba(0,0,0,.48)] backdrop-blur-md transition active:scale-95 lg:hidden"
           aria-label={autoplayBlocked ? "Tap to start playback" : "Play"}
         >
           <Play className="ml-1 h-7 w-7 fill-white" strokeWidth={0} />

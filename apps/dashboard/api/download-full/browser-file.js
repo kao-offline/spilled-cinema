@@ -29,7 +29,7 @@ function isCacheableHlsAsset(url, contentType) {
     /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
 }
 
-function buildBrowserFileProxyPath(streamUrl, fileName, referer) {
+function buildBrowserFileProxyPath(streamUrl, fileName, referer, inlinePlayback = false) {
   const params = new URLSearchParams({
     url: streamUrl,
     name: fileName,
@@ -37,21 +37,24 @@ function buildBrowserFileProxyPath(streamUrl, fileName, referer) {
   if (referer) {
     params.set("referer", referer);
   }
+  if (inlinePlayback) {
+    params.set("playback", "1");
+  }
   return `/api/download-full/browser-file?${params.toString()}`;
 }
 
-function rewriteHlsTagUris(line, playlistUrl, fileName, referer) {
+function rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback = false) {
   return line.replace(/\bURI=(["'])([^"']+)\1/gi, (match, quote, rawUrl) => {
     try {
       const absolute = new URL(rawUrl, playlistUrl).toString();
-      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString())}${quote}`;
+      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback)}${quote}`;
     } catch {
       return match;
     }
   });
 }
 
-function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
+function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer, inlinePlayback = false) {
   const preserveImageNamedSegments = Boolean(getBrowserFileOriginHeader(referer));
   return playlist
     .split(/\r?\n/)
@@ -61,7 +64,7 @@ function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
         return line;
       }
       if (trimmed.startsWith("#")) {
-        return rewriteHlsTagUris(line, playlistUrl, fileName, referer);
+        return rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback);
       }
       const isKnownAd = /ad-site|\.image(?:[?#]|$)/i.test(trimmed);
       const isImageNamed = /\.(?:png|jpe?g|webp|gif)(?:[?#]|$)/i.test(trimmed);
@@ -71,7 +74,7 @@ function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
 
       try {
         const absolute = new URL(trimmed, playlistUrl).toString();
-        return buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString());
+        return buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback);
       } catch {
         return line;
       }
@@ -108,6 +111,7 @@ module.exports = async function handler(req, res) {
     const streamUrl = params.get("url");
     const fileName = getSafeName(params.get("name"));
     const referer = params.get("referer") || undefined;
+    const inlinePlayback = params.get("playback") === "1";
 
     if (!streamUrl) {
       res.statusCode = 400;
@@ -168,11 +172,11 @@ module.exports = async function handler(req, res) {
     res.setHeader("Content-Type", contentType);
     res.setHeader("Accept-Ranges", acceptRanges);
     res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
-    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader("Content-Disposition", `${inlinePlayback ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
 
     if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {
       const playlist = await upstream.text();
-      const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer);
+      const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer, inlinePlayback);
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
       res.setHeader("Content-Length", Buffer.byteLength(rewritten).toString());
       res.end(rewritten);

@@ -37,6 +37,7 @@ describe("playback resolver", () => {
     expect(resolved.playerAlias).toBe("direct");
     expect(resolved.resolvedUrl).toBe("https://cdn.example/master.m3u8");
     expect(resolved.playbackUrl).toContain("/api/download-full/browser-file?");
+    expect(resolved.playbackUrl).toContain("playback=1");
     expect(resolved.streamType).toBe("hls");
   });
 
@@ -398,7 +399,7 @@ describe("playback resolver", () => {
       }],
     });
 
-    expect(resolved.resolvedUrl).toBe("https://cdn.xpass.example/variant.m3u8");
+    expect(resolved.resolvedUrl).toBe("https://cdn.xpass.example/master.m3u8");
     expect(resolved.refererUrl).toBe("https://play.xpass.top/e/movie/tt0499549?autostart=true");
     expect(resolved.streamType).toBe("hls");
   });

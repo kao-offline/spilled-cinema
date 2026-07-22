@@ -125,6 +125,7 @@ function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId
     url: streamUrl,
     name,
     referer: refererUrl,
+    playback: "1",
   });
   return `/api/download-full/browser-file?${params.toString()}`;
 }
@@ -1408,7 +1409,9 @@ async function resolveXpassPlaylistStream(embedUrl: string, html: string, finalU
     const streamUrl = findMediaUrlInDecodedText(playlistText, playlistFinalUrl);
     if (streamUrl && !isKnownPlaceholderStream(streamUrl)) {
       return {
-        streamUrl: await resolvePreferredHlsVariant(streamUrl, finalUrl),
+        // Keep adaptive Xpass masters intact so phones can start at a lower
+        // rendition instead of being pinned to the largest video stream.
+        streamUrl,
         refererUrl: embedUrl,
       };
     }
