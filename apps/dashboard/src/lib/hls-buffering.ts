@@ -10,6 +10,20 @@ type HlsBufferProfile = {
   bandwidthEstimate: number;
 };
 
+type NativeHlsOptions = {
+  canPlayNativeHls: boolean;
+  userAgent?: string;
+  platform?: string;
+  maxTouchPoints?: number;
+};
+
+export function shouldPreferNativeHls(options: NativeHlsOptions) {
+  if (!options.canPlayNativeHls) return false;
+  const appleMobile = /iPad|iPhone|iPod/i.test(options.userAgent ?? "")
+    || (options.platform === "MacIntel" && (options.maxTouchPoints ?? 0) > 1);
+  return appleMobile;
+}
+
 export function selectHlsBufferProfile(options: {
   saveData?: boolean;
   effectiveType?: string;

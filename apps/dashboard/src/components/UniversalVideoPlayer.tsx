@@ -4,7 +4,7 @@ import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { findSmallBufferGapTarget, selectHlsBufferProfile } from "../lib/hls-buffering";
+import { findSmallBufferGapTarget, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
 
 type SubtitleTrack = {
   src: string;
@@ -223,8 +223,20 @@ export function UniversalVideoPlayer({
     setQualityLevel(-1);
     setSettingsOpen(false);
     let disposed = false;
+    let fatalNetworkRecoveries = 0;
+    let fatalMediaRecoveries = 0;
+    const nativeHlsSupported = Boolean(
+      videoElement.canPlayType("application/vnd.apple.mpegurl")
+      || videoElement.canPlayType("application/x-mpegURL"),
+    );
+    const useNativeHls = sourceType === "application/x-mpegURL" && shouldPreferNativeHls({
+      canPlayNativeHls: nativeHlsSupported,
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
+    });
 
-    if (sourceType === "application/x-mpegURL" && Hls.isSupported()) {
+    if (sourceType === "application/x-mpegURL" && Hls.isSupported() && !useNativeHls) {
       const bufferProfile = getHlsBufferProfile();
       const hls = new Hls({
         enableWorker: true,
@@ -263,6 +275,16 @@ export function UniversalVideoPlayer({
         const details = String(data.details ?? "");
         const startupLoadFailed = /manifest|level/i.test(details) && data.type === Hls.ErrorTypes.NETWORK_ERROR;
         const beforePlayback = !playbackStartedRef.current && (videoElement.currentTime || 0) < 3;
+        if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && fatalNetworkRecoveries < 2) {
+          fatalNetworkRecoveries += 1;
+          hls.startLoad(videoElement.currentTime || -1);
+          return;
+        }
+        if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR && fatalMediaRecoveries < 2) {
+          fatalMediaRecoveries += 1;
+          hls.recoverMediaError();
+          return;
+        }
         if (beforePlayback && (data.fatal || networkBlocked || startupLoadFailed) && !playbackErrorSentRef.current) {
           setWaiting(false);
           playbackErrorSentRef.current = true;
@@ -443,6 +465,7 @@ export function UniversalVideoPlayer({
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      hlsRef.current?.startLoad(video.currentTime || -1);
       void video.play()
         .then(() => setAutoplayBlocked(false))
         .catch(() => {

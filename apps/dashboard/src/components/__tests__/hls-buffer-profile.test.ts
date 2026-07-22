@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSmallBufferGapTarget, selectHlsBufferProfile } from "../../lib/hls-buffering";
+import { findSmallBufferGapTarget, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
 
 describe("HLS buffer profile", () => {
   it("keeps a substantial rolling buffer on phones", () => {
@@ -28,5 +28,34 @@ describe("HLS buffer profile", () => {
     expect(findSmallBufferGapTarget(525.382809, [{ start: 525.537232, end: 540.54 }]))
       .toBeCloseTo(525.547232, 6);
     expect(findSmallBufferGapTarget(525, [{ start: 527, end: 540 }])).toBeNull();
+  });
+});
+
+describe("native mobile HLS selection", () => {
+  it("uses the native media stack on iPhones", () => {
+    expect(shouldPreferNativeHls({
+      canPlayNativeHls: true,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    })).toBe(true);
+  });
+
+  it("detects iPads that identify as Macs", () => {
+    expect(shouldPreferNativeHls({
+      canPlayNativeHls: true,
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)",
+      platform: "MacIntel",
+      maxTouchPoints: 5,
+    })).toBe(true);
+  });
+
+  it("keeps Hls.js on desktop and Android", () => {
+    expect(shouldPreferNativeHls({
+      canPlayNativeHls: true,
+      userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9)",
+      platform: "Linux armv8l",
+      maxTouchPoints: 5,
+    })).toBe(false);
   });
 });
