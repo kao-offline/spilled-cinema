@@ -191,12 +191,12 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
     <div className="fixed inset-0 z-[150] h-[100dvh] overflow-hidden bg-[#030407]/88 backdrop-blur-xl" onMouseDown={onClose}>
       <div className="mx-auto box-border flex h-full min-h-0 w-full items-center justify-center p-1.5 sm:p-4 lg:p-6" onMouseDown={(event) => event.stopPropagation()}>
         <section
-          className="relative flex h-full max-h-full min-h-0 w-full max-w-[1480px] flex-col overflow-hidden rounded-[1.25rem] border border-white/[0.09] bg-[#08090d] shadow-[0_45px_160px_rgba(0,0,0,0.8)] sm:max-h-[920px] sm:rounded-[2rem]"
+          className="relative flex h-[calc(100dvh-0.75rem)] min-h-0 w-full max-w-[1480px] flex-col overflow-hidden rounded-[1.25rem] border border-white/[0.09] bg-[#08090d] shadow-[0_45px_160px_rgba(0,0,0,0.8)] sm:h-[calc(100dvh-2rem)] sm:max-h-[920px] sm:rounded-[2rem] lg:h-[calc(100dvh-3rem)]"
           role="dialog"
           aria-modal="true"
           aria-label={`Edit artwork for ${show.title}`}
         >
-          <header className="relative max-h-[42dvh] shrink-0 overflow-y-auto overflow-x-hidden border-b border-white/[0.07] px-4 pb-3 pt-3 sm:max-h-none sm:px-7 sm:pb-5 sm:pt-6">
+          <header className="custom-scrollbar relative max-h-[min(38dvh,18rem)] shrink-0 overflow-y-auto overflow-x-hidden border-b border-white/[0.07] px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-7 sm:pb-5 sm:pt-6">
             {heroArtwork ? (
               <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-25 blur-sm" style={balancedBackgroundImage(heroArtwork, "backdrop-thumb")} />
             ) : null}
@@ -290,9 +290,9 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
               )}
             </main>
 
-            <aside className="shrink-0 border-t border-white/[0.07] bg-[#0b0c10] p-4 lg:border-l lg:border-t-0 lg:p-6">
-              <div className="lg:sticky lg:top-6">
-                <div className="hidden lg:block">
+            <aside className="flex min-h-0 shrink-0 flex-col overflow-hidden border-t border-white/[0.07] bg-[#0b0c10] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 lg:border-l lg:border-t-0 lg:p-6">
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="custom-scrollbar hidden min-h-0 flex-1 overflow-y-auto pr-1 lg:block">
                   <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-white/32">Selected {artworkTab}</div>
                   <div className={clsx("mt-3 flex w-full items-center justify-center overflow-hidden rounded-xl bg-[#14161d] bg-center bg-no-repeat ring-1 ring-white/[0.08]", previewClasses(artworkTab), previewFit(artworkTab))} style={selectedAsset ? balancedBackgroundImage(selectedAsset.url, artworkTab === "logo" ? "logo" : artworkTab === "poster" ? "poster-card" : "backdrop-thumb") : undefined}>
                     {!selectedAsset ? <ImageIcon className="h-7 w-7 text-white/15" /> : null}
@@ -302,7 +302,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
                     {selectedAsset ? <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.2em] text-white/32">{selectedAsset.source}{selectedAsset.language ? ` · ${selectedAsset.language}` : ""}</div> : null}
                   </div>
                 </div>
-                <button type="button" disabled={!selectedAsset || artworkLoading} onClick={applySelection} className="flex w-full items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-black shadow-[0_14px_35px_rgba(0,0,0,0.35)] transition hover:bg-white/88 disabled:cursor-not-allowed disabled:opacity-35"><Check className="h-4 w-4" /> Apply {artworkTab}</button>
+                <button type="button" disabled={!selectedAsset || artworkLoading} onClick={applySelection} className="mt-auto flex w-full shrink-0 items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-black shadow-[0_14px_35px_rgba(0,0,0,0.35)] transition hover:bg-white/88 disabled:cursor-not-allowed disabled:opacity-35 lg:mt-4"><Check className="h-4 w-4" /> Apply {artworkTab}</button>
                 <p className="mt-3 hidden text-center text-[10px] leading-relaxed text-white/28 lg:block">Only this artwork slot will change. Your other title images stay untouched.</p>
               </div>
             </aside>

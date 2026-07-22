@@ -8,7 +8,7 @@ import { formatEpisodeTitle } from "../lib/episode-title";
 import { buildRuntimeUrl, requestRuntimeJson } from "../lib/local-api";
 import { resolveUniversalPlayback, type PlaybackResolveFailure, type PlaybackResolveResult } from "../lib/full-download-client";
 import { getLibraryVaultFileObjectUrl } from "../lib/library-folder";
-import { readCachedPlayerFailure, readCachedPlayerUrl, removeCachedPlayerUrl, writeCachedPlayerFailure, writeCachedPlayerUrl } from "../lib/player-url-cache";
+import { readCachedPlayerFailure, readCachedPlayerUrl, removeCachedPlayerFailure, removeCachedPlayerUrl, writeCachedPlayerFailure, writeCachedPlayerUrl } from "../lib/player-url-cache";
 import { balancedBackgroundImage } from "../lib/image-resolution";
 import { prewarmPlaybackUrl } from "../lib/playback-prewarm";
 import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
@@ -314,6 +314,24 @@ export function PlayerModal({
 
   function handleChoosePlayer(player: EpisodePlayer) {
     if (!episode) return;
+    const shouldRetry = player.alias === activePlayer?.alias
+      || playerStatuses[player.alias]?.status === "failed"
+      || player.resolutionStatus === "failed";
+    if (shouldRetry && !isLocalPlayer(player)) {
+      const key = playbackCacheKey(player);
+      removeCachedPlayerUrl("playback", key);
+      removeCachedPlayerFailure("playback", key);
+      playbackErrorRetryRef.current = key;
+      setPlayback(null);
+      setPlaybackError(null);
+      setPlaybackFailures([]);
+      setProviderFrame(null);
+      setPlayerStatuses((current) => ({
+        ...current,
+        [player.alias]: { status: "unresolved" },
+      }));
+      setPlaybackRetryNonce((value) => value + 1);
+    }
     if (episode.players.some((entry) => entry.alias === player.alias)) {
       setLocalSelectedAlias(null);
       onSelectPlayer(episode.id, player.alias);
@@ -465,6 +483,7 @@ export function PlayerModal({
         subtitlesUrl: player.subtitlesUrl,
       } satisfies PlaybackResolveResult;
       void prewarmPlaybackUrl(result.playbackUrl);
+      removeCachedPlayerFailure("playback", playbackCacheKey(player));
       setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
       if (player.streamUrl) {
         onResolvePlayer?.(targetEpisode.id, player, result);
@@ -486,6 +505,7 @@ export function PlayerModal({
       } satisfies PlaybackResolveResult;
       void prewarmPlaybackUrl(result.playbackUrl);
       writeCachedPlayerUrl("playback", playbackCacheKey(player), result.playbackUrl);
+      removeCachedPlayerFailure("playback", playbackCacheKey(player));
       setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
       onResolvePlayer?.(targetEpisode.id, player, result);
       if (!background) setPlayback(result);
@@ -502,6 +522,7 @@ export function PlayerModal({
     const result = await resolveUniversalPlayback(episodeWithSelectedPlayer(targetEpisode, player, !background));
     void prewarmPlaybackUrl(result.playbackUrl);
     const resolvedPlayer = targetEpisode.players.find((entry) => entry.alias === result.playerAlias) ?? player;
+    removeCachedPlayerFailure("playback", playbackCacheKey(resolvedPlayer));
     if (result.streamType !== "embed") {
       writeCachedPlayerUrl("playback", playbackCacheKey(resolvedPlayer), result.playbackUrl);
       onResolvePlayer?.(targetEpisode.id, resolvedPlayer, result);

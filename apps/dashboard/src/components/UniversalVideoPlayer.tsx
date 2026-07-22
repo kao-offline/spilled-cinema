@@ -23,6 +23,17 @@ type QualityLevel = {
   label: string;
 };
 
+type WebKitFullscreenVideo = HTMLVideoElement & {
+  webkitDisplayingFullscreen?: boolean;
+  webkitEnterFullscreen?: () => void;
+  webkitExitFullscreen?: () => void;
+};
+
+type LockableScreenOrientation = ScreenOrientation & {
+  lock?: (orientation: "landscape") => Promise<void>;
+  unlock?: () => void;
+};
+
 type SubtitleEdge = "none" | "shadow" | "outline";
 
 type SubtitleAppearance = {
@@ -190,6 +201,7 @@ export function UniversalVideoPlayer({
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [cssFullscreen, setCssFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -556,10 +568,41 @@ export function UniversalVideoPlayer({
   }, [autoPlayToken, src]);
 
   useEffect(() => {
-    const handleFullscreenChange = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    const video = videoRef.current as WebKitFullscreenVideo | null;
+    const handleFullscreenChange = () => {
+      const active = document.fullscreenElement === containerRef.current;
+      setFullscreen(active);
+      if (!active) {
+        setCssFullscreen(false);
+        (screen.orientation as LockableScreenOrientation | undefined)?.unlock?.();
+      }
+    };
+    const handleWebKitBeginFullscreen = () => {
+      setFullscreen(true);
+      setSettingsOpen(false);
+    };
+    const handleWebKitEndFullscreen = () => {
+      setFullscreen(false);
+      setCssFullscreen(false);
+    };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
+    video?.addEventListener("webkitbeginfullscreen", handleWebKitBeginFullscreen);
+    video?.addEventListener("webkitendfullscreen", handleWebKitEndFullscreen);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      video?.removeEventListener("webkitbeginfullscreen", handleWebKitBeginFullscreen);
+      video?.removeEventListener("webkitendfullscreen", handleWebKitEndFullscreen);
+    };
+  }, [poster, sourceType, src, subtitleTrackSignature]);
+
+  useEffect(() => {
+    if (!cssFullscreen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [cssFullscreen]);
 
   function togglePlay() {
     const video = videoRef.current;
@@ -667,9 +710,62 @@ export function UniversalVideoPlayer({
 
   async function toggleFullscreen() {
     const element = containerRef.current;
-    if (!element) return;
-    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
-    else await element.requestFullscreen().catch(() => undefined);
+    const video = videoRef.current as WebKitFullscreenVideo | null;
+    if (!element || !video) return;
+
+    if (video.webkitDisplayingFullscreen) {
+      video.webkitExitFullscreen?.();
+      return;
+    }
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    if (cssFullscreen) {
+      setCssFullscreen(false);
+      setFullscreen(false);
+      return;
+    }
+
+    setSettingsOpen(false);
+    const appleTouchDevice = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (appleTouchDevice && typeof video.webkitEnterFullscreen === "function") {
+      try {
+        // This must happen synchronously inside the tap handler on iOS.
+        video.webkitEnterFullscreen();
+        setFullscreen(true);
+        return;
+      } catch {
+        // Continue to the standard API or app-level fallback.
+      }
+    }
+
+    if (document.fullscreenEnabled && typeof element.requestFullscreen === "function") {
+      const entered = await element.requestFullscreen({ navigationUI: "hide" })
+        .then(() => true)
+        .catch(() => false);
+      if (entered) {
+        setFullscreen(true);
+        const orientation = screen.orientation as LockableScreenOrientation | undefined;
+        void orientation?.lock?.("landscape").catch(() => undefined);
+        return;
+      }
+    }
+
+    // iPhone Safari exposes fullscreen on the video element rather than arbitrary containers.
+    if (typeof video.webkitEnterFullscreen === "function") {
+      try {
+        video.webkitEnterFullscreen();
+        setFullscreen(true);
+        return;
+      } catch {
+        // Fall through to an app-level fullscreen surface on older embedded browsers.
+      }
+    }
+
+    setCssFullscreen(true);
+    setFullscreen(true);
   }
 
   function handleSurfaceClick(event: MouseEvent<HTMLDivElement>) {
@@ -715,7 +811,11 @@ export function UniversalVideoPlayer({
   return (
     <div
       ref={containerRef}
-      className={clsx("spilled-universal-player group relative h-full w-full overflow-hidden bg-black text-white", className)}
+      className={clsx(
+        "spilled-universal-player group relative h-full w-full overflow-hidden bg-black text-white",
+        cssFullscreen && "fixed inset-0 z-[250] h-[100dvh] min-h-[100dvh] w-screen",
+        className,
+      )}
       data-subtitle-edge={subtitleAppearance.edge}
       style={subtitlePlayerStyle}
       onClick={handleSurfaceClick}

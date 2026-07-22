@@ -116,3 +116,11 @@ export function writeCachedPlayerFailure(kind: string, key: string, error: strin
     // Cache failure should not block playback.
   }
 }
+
+export function removeCachedPlayerFailure(kind: string, key: string) {
+  try {
+    localStorage.removeItem(cacheKey(`${kind}:failure`, key));
+  } catch {
+    // Cache failure should not block playback.
+  }
+}
