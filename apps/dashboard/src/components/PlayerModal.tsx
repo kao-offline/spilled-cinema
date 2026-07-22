@@ -10,6 +10,7 @@ import { resolveUniversalPlayback, type PlaybackResolveFailure, type PlaybackRes
 import { getLibraryVaultFileObjectUrl } from "../lib/library-folder";
 import { readCachedPlayerFailure, readCachedPlayerUrl, removeCachedPlayerUrl, writeCachedPlayerFailure, writeCachedPlayerUrl } from "../lib/player-url-cache";
 import { balancedBackgroundImage } from "../lib/image-resolution";
+import { prewarmPlaybackUrl } from "../lib/playback-prewarm";
 import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
 import { resolveTitleItem, searchTitleItems } from "../lib/provider-modules-client";
 import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
@@ -459,6 +460,7 @@ export function PlayerModal({
         streamType: player.streamType ?? inferStreamType(cachedRawUrl) ?? cachedStreamType,
         subtitlesUrl: player.subtitlesUrl,
       } satisfies PlaybackResolveResult;
+      void prewarmPlaybackUrl(result.playbackUrl);
       setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
       if (player.streamUrl) {
         onResolvePlayer?.(targetEpisode.id, player, result);
@@ -478,6 +480,7 @@ export function PlayerModal({
         streamType: player.streamType ?? inferStreamType(persistedUrl),
         subtitlesUrl: player.subtitlesUrl,
       } satisfies PlaybackResolveResult;
+      void prewarmPlaybackUrl(result.playbackUrl);
       writeCachedPlayerUrl("playback", playbackCacheKey(player), result.playbackUrl);
       setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
       onResolvePlayer?.(targetEpisode.id, player, result);
@@ -493,6 +496,7 @@ export function PlayerModal({
 
     setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolving" } }));
     const result = await resolveUniversalPlayback(episodeWithSelectedPlayer(targetEpisode, player));
+    void prewarmPlaybackUrl(result.playbackUrl);
     const resolvedPlayer = targetEpisode.players.find((entry) => entry.alias === result.playerAlias) ?? player;
     if (result.streamType !== "embed") {
       writeCachedPlayerUrl("playback", playbackCacheKey(resolvedPlayer), result.playbackUrl);

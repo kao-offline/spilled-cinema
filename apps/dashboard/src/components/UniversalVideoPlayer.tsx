@@ -4,6 +4,7 @@ import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
+import { findSmallBufferGapTarget, selectHlsBufferProfile } from "../lib/hls-buffering";
 
 type SubtitleTrack = {
   src: string;
@@ -21,6 +22,17 @@ type QualityLevel = {
   index: number;
   label: string;
 };
+
+function getHlsBufferProfile() {
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  return selectHlsBufferProfile({
+    saveData: connection?.saveData,
+    effectiveType: connection?.effectiveType,
+    compactViewport: window.matchMedia("(max-width: 768px)").matches,
+  });
+}
 
 type UniversalVideoPlayerProps = {
   src: string;
@@ -213,19 +225,23 @@ export function UniversalVideoPlayer({
     let disposed = false;
 
     if (sourceType === "application/x-mpegURL" && Hls.isSupported()) {
+      const bufferProfile = getHlsBufferProfile();
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
         startLevel: 0,
-        startFragPrefetch: false,
+        startFragPrefetch: true,
         testBandwidth: false,
-        abrEwmaDefaultEstimate: 1_500_000,
-        maxStarvationDelay: 2,
-        maxLoadingDelay: 2,
+        abrEwmaDefaultEstimate: bufferProfile.bandwidthEstimate,
+        maxStarvationDelay: 4,
+        maxLoadingDelay: 4,
         capLevelToPlayerSize: true,
-        maxBufferLength: 20,
-        maxMaxBufferLength: 45,
-        backBufferLength: 20,
+        maxBufferLength: bufferProfile.aheadSeconds,
+        maxMaxBufferLength: bufferProfile.maximumAheadSeconds,
+        maxBufferSize: bufferProfile.maximumBytes,
+        backBufferLength: 30,
+        maxBufferHole: 0.8,
+        highBufferWatchdogPeriod: 2,
       });
       hlsRef.current = hls;
       hls.loadSource(src);
@@ -293,7 +309,24 @@ export function UniversalVideoPlayer({
         duration: videoElement.duration || 0,
       });
     };
-    const markWaiting = () => setWaiting(true);
+    const skipSmallBufferGap = () => {
+      const position = videoElement.currentTime || 0;
+      const ranges: BufferedRange[] = [];
+      for (let index = 0; index < videoElement.buffered.length; index += 1) {
+        ranges.push({ start: videoElement.buffered.start(index), end: videoElement.buffered.end(index) });
+      }
+      const target = findSmallBufferGapTarget(position, ranges);
+      if (target == null) return false;
+      videoElement.currentTime = target;
+      return true;
+    };
+    const markWaiting = () => {
+      if (!skipSmallBufferGap()) setWaiting(true);
+    };
+    const prioritizeSeekTarget = () => {
+      setWaiting(true);
+      hlsRef.current?.startLoad(videoElement.currentTime || 0);
+    };
     const markReady = () => {
       setWaiting(false);
       const hls = hlsRef.current;
@@ -323,16 +356,21 @@ export function UniversalVideoPlayer({
 
     const syncNow = () => sync(true);
     const syncThrottled = () => sync(false);
+    const syncProgress = () => {
+      skipSmallBufferGap();
+      sync(false);
+    };
     videoElement.addEventListener("play", syncNow);
     videoElement.addEventListener("pause", syncNow);
     videoElement.addEventListener("timeupdate", syncThrottled);
     videoElement.addEventListener("durationchange", syncNow);
-    videoElement.addEventListener("progress", syncThrottled);
+    videoElement.addEventListener("progress", syncProgress);
     videoElement.addEventListener("loadedmetadata", syncNow);
     videoElement.addEventListener("loadedmetadata", restoreInitialTime, { once: true });
     videoElement.addEventListener("volumechange", syncNow);
     videoElement.addEventListener("ratechange", syncNow);
     videoElement.addEventListener("waiting", markWaiting);
+    videoElement.addEventListener("seeking", prioritizeSeekTarget);
     videoElement.addEventListener("playing", markPlaying);
     videoElement.addEventListener("canplay", markReady);
     videoElement.addEventListener("error", markError);
