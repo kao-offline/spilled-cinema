@@ -1,4 +1,4 @@
-const { Readable } = require("node:stream");
+import { Readable } from "node:stream";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -95,7 +95,7 @@ function getBrowserFileOriginHeader(referer) {
   return undefined;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");
