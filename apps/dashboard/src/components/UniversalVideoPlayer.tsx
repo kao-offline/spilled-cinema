@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
@@ -22,6 +22,53 @@ type QualityLevel = {
   index: number;
   label: string;
 };
+
+type SubtitleEdge = "none" | "shadow" | "outline";
+
+type SubtitleAppearance = {
+  size: number;
+  textColor: string;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  edge: SubtitleEdge;
+  position: number;
+};
+
+const SUBTITLE_APPEARANCE_KEY = "spilled.player.subtitle-appearance.v1";
+const DEFAULT_SUBTITLE_APPEARANCE: SubtitleAppearance = {
+  size: 100,
+  textColor: "#ffffff",
+  backgroundColor: "#000000",
+  backgroundOpacity: 65,
+  edge: "outline",
+  position: 88,
+};
+
+function readSubtitleAppearance() {
+  if (typeof window === "undefined") return DEFAULT_SUBTITLE_APPEARANCE;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SUBTITLE_APPEARANCE_KEY) ?? "null") as Partial<SubtitleAppearance> | null;
+    if (!saved) return DEFAULT_SUBTITLE_APPEARANCE;
+    return {
+      size: clamp(Number(saved.size) || 100, 60, 200),
+      textColor: /^#[0-9a-f]{6}$/i.test(saved.textColor ?? "") ? saved.textColor! : DEFAULT_SUBTITLE_APPEARANCE.textColor,
+      backgroundColor: /^#[0-9a-f]{6}$/i.test(saved.backgroundColor ?? "") ? saved.backgroundColor! : DEFAULT_SUBTITLE_APPEARANCE.backgroundColor,
+      backgroundOpacity: clamp(Number(saved.backgroundOpacity) || 0, 0, 100),
+      edge: ["none", "shadow", "outline"].includes(saved.edge ?? "") ? saved.edge as SubtitleEdge : DEFAULT_SUBTITLE_APPEARANCE.edge,
+      position: clamp(Number(saved.position) || 88, 65, 94),
+    };
+  } catch {
+    return DEFAULT_SUBTITLE_APPEARANCE;
+  }
+}
+
+function hexToRgba(hex: string, opacity: number) {
+  const value = hex.replace("#", "");
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${clamp(opacity, 0, 100) / 100})`;
+}
 
 function getHlsBufferProfile() {
   const connection = (navigator as Navigator & {
@@ -149,6 +196,8 @@ export function UniversalVideoPlayer({
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
   const [qualityLevel, setQualityLevel] = useState(-1);
   const [captionsEnabled, setCaptionsEnabled] = useState(subtitleTracks.some((track) => track.default));
+  const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState(() => Math.max(0, subtitleTracks.findIndex((track) => track.default)));
+  const [subtitleAppearance, setSubtitleAppearance] = useState<SubtitleAppearance>(readSubtitleAppearance);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const sourceType = useMemo(() => getSourceType(src), [src]);
   const subtitleTrackSignature = useMemo(
@@ -180,6 +229,14 @@ export function UniversalVideoPlayer({
   useEffect(() => {
     onProgressRef.current = onProgress;
   }, [onProgress]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SUBTITLE_APPEARANCE_KEY, JSON.stringify(subtitleAppearance));
+    } catch {
+      // Player preferences are optional when storage is unavailable.
+    }
+  }, [subtitleAppearance]);
 
   useEffect(() => {
     const host = videoHostRef.current;
@@ -277,7 +334,7 @@ export function UniversalVideoPlayer({
         }
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
-        setQualityLevel(data.level);
+        setQualityLevel(hls.autoLevelEnabled ? -1 : data.level);
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         const responseCode = typeof data.response?.code === "number" ? data.response.code : 0;
@@ -311,6 +368,15 @@ export function UniversalVideoPlayer({
             abr: { autoSwitchBitrate: { audio: true, video: true } },
             buffer: { bufferTimeDefault: 20, bufferTimeAtTopQuality: 30 },
           },
+        });
+        dash.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+          if (disposed) return;
+          const representations = dash.getRepresentationsByType("video");
+          setQualityLevels(representations.map((representation, index) => ({
+            index,
+            label: formatHlsQualityLabel(representation, index),
+          })));
+          setQualityLevel(-1);
         });
         dash.initialize(videoElement, src, false);
       }).catch(() => {
@@ -427,17 +493,39 @@ export function UniversalVideoPlayer({
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    for (const track of Array.from(video.textTracks)) {
-      track.mode = captionsEnabled ? "showing" : "disabled";
+    for (const [index, track] of Array.from(video.textTracks).entries()) {
+      track.mode = captionsEnabled && index === selectedSubtitleTrack ? "showing" : "disabled";
     }
-  }, [captionsEnabled, subtitleTrackSignature]);
+  }, [captionsEnabled, selectedSubtitleTrack, subtitleTrackSignature]);
 
   useEffect(() => {
     if (subtitleTracks.length === 0) return;
-    if (subtitleTracks.some((track) => track.default)) {
+    const defaultIndex = subtitleTracks.findIndex((track) => track.default);
+    setSelectedSubtitleTrack(Math.max(0, defaultIndex));
+    if (defaultIndex >= 0) {
       setCaptionsEnabled(true);
     }
   }, [subtitleTrackSignature, subtitleTracks]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return undefined;
+    const cleanups: Array<() => void> = [];
+    for (const track of Array.from(video.textTracks)) {
+      const applyPosition = () => {
+        for (const cue of Array.from(track.cues ?? [])) {
+          if (!("snapToLines" in cue) || !("line" in cue)) continue;
+          const vttCue = cue as VTTCue;
+          vttCue.snapToLines = false;
+          vttCue.line = subtitleAppearance.position;
+        }
+      };
+      applyPosition();
+      track.addEventListener("cuechange", applyPosition);
+      cleanups.push(() => track.removeEventListener("cuechange", applyPosition));
+    }
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [subtitleAppearance.position, subtitleTrackSignature]);
 
   useEffect(() => {
     if (!autoPlayToken || autoPlayToken === lastAutoPlayTokenRef.current) return undefined;
@@ -559,10 +647,21 @@ export function UniversalVideoPlayer({
     setPlaybackRate(value);
   }
 
-  function setHlsQuality(value: number) {
+  function setPlayerQuality(value: number) {
     const hls = hlsRef.current;
-    if (!hls) return;
-    hls.currentLevel = value;
+    if (hls) {
+      hls.currentLevel = value;
+      setQualityLevel(value);
+      return;
+    }
+    const dash = dashRef.current;
+    if (!dash) return;
+    dash.updateSettings({
+      streaming: {
+        abr: { autoSwitchBitrate: { audio: true, video: value < 0 } },
+      },
+    });
+    if (value >= 0) dash.setRepresentationForTypeByIndex("video", value, true);
     setQualityLevel(value);
   }
 
@@ -607,11 +706,18 @@ export function UniversalVideoPlayer({
   const playableDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const watchedPercent = playableDuration > 0 ? clamp((currentTime / playableDuration) * 100, 0, 100) : 0;
   const speedOptions = [0.75, 1, 1.25, 1.5, 2];
+  const subtitlePlayerStyle = {
+    "--subtitle-size": `${subtitleAppearance.size}%`,
+    "--subtitle-color": subtitleAppearance.textColor,
+    "--subtitle-bg": hexToRgba(subtitleAppearance.backgroundColor, subtitleAppearance.backgroundOpacity),
+  } as CSSProperties;
 
   return (
     <div
       ref={containerRef}
-      className={clsx("group relative h-full w-full overflow-hidden bg-black text-white", className)}
+      className={clsx("spilled-universal-player group relative h-full w-full overflow-hidden bg-black text-white", className)}
+      data-subtitle-edge={subtitleAppearance.edge}
+      style={subtitlePlayerStyle}
       onClick={handleSurfaceClick}
       onMouseMove={() => setControlsVisible(true)}
       onMouseLeave={() => {
@@ -748,9 +854,9 @@ export function UniversalVideoPlayer({
           </div>
 
           {settingsOpen ? (
-            <div className="absolute bottom-12 right-0 w-[min(18rem,calc(100vw-1.5rem))] rounded-lg border border-white/12 bg-neutral-950/94 p-3 text-sm text-white shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+            <div className="custom-scrollbar absolute bottom-12 right-0 max-h-[min(68svh,36rem)] w-[min(22rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl border border-white/12 bg-[#0b0c0f]/96 p-3 text-sm text-white shadow-[0_24px_80px_rgba(0,0,0,0.68)] backdrop-blur-2xl">
               <div className="mb-3 flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-[0.18em] text-white/52">Playback</span>
+                <span className="text-xs font-bold uppercase tracking-[0.18em] text-white/52">Player settings</span>
                 <span className="text-xs font-semibold text-white/58">{formatClock(currentTime)}</span>
               </div>
 
@@ -779,12 +885,12 @@ export function UniversalVideoPlayer({
                   <div className="grid grid-cols-2 gap-1">
                     <button
                       type="button"
-                      onClick={() => setHlsQuality(-1)}
-                      disabled={!hlsRef.current}
+                      onClick={() => setPlayerQuality(-1)}
+                      disabled={qualityLevels.length === 0}
                       className={clsx(
                         "rounded-md px-2 py-1.5 text-xs font-bold transition",
                         qualityLevel === -1 ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        !hlsRef.current && "cursor-not-allowed opacity-40",
+                        qualityLevels.length === 0 && "cursor-not-allowed opacity-40",
                       )}
                     >
                       Auto
@@ -793,7 +899,7 @@ export function UniversalVideoPlayer({
                       <button
                         key={level.index}
                         type="button"
-                        onClick={() => setHlsQuality(level.index)}
+                        onClick={() => setPlayerQuality(level.index)}
                         className={clsx(
                           "rounded-md px-2 py-1.5 text-xs font-bold transition",
                           qualityLevel === level.index ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
@@ -818,6 +924,102 @@ export function UniversalVideoPlayer({
                   <span>Subtitles</span>
                   <span>{subtitleTracks.length === 0 ? "Unavailable" : captionsEnabled ? "On" : "Off"}</span>
                 </button>
+
+                <div className="border-t border-white/8 pt-3">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Subtitle appearance</span>
+                    <button type="button" onClick={() => setSubtitleAppearance(DEFAULT_SUBTITLE_APPEARANCE)} className="text-[10px] font-bold text-white/42 transition hover:text-white">Reset</button>
+                  </div>
+
+                  <div className="mb-3 rounded-xl border border-white/8 bg-white/[0.035] p-3 text-center">
+                    <span
+                      className="inline rounded px-1.5 py-0.5 font-bold leading-relaxed"
+                      style={{
+                        color: subtitleAppearance.textColor,
+                        backgroundColor: hexToRgba(subtitleAppearance.backgroundColor, subtitleAppearance.backgroundOpacity),
+                        fontSize: `${Math.max(12, subtitleAppearance.size * 0.16)}px`,
+                        textShadow: subtitleAppearance.edge === "outline" ? "-1px -1px #000, 1px -1px #000, -1px 1px #000, 1px 1px #000" : subtitleAppearance.edge === "shadow" ? "0 3px 6px #000" : "none",
+                      }}
+                    >
+                      Subtitle preview
+                    </span>
+                  </div>
+
+                  {subtitleTracks.length > 1 ? (
+                    <div className="mb-3">
+                      <div className="mb-2 text-xs font-semibold text-white/58">Track</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {subtitleTracks.map((track, index) => (
+                          <button
+                            key={`${track.src}:${index}`}
+                            type="button"
+                            onClick={() => {
+                              setSelectedSubtitleTrack(index);
+                              setCaptionsEnabled(true);
+                            }}
+                            className={clsx(
+                              "truncate rounded-md px-2 py-1.5 text-xs font-bold transition",
+                              captionsEnabled && selectedSubtitleTrack === index ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
+                            )}
+                          >
+                            {track.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <label className="mb-3 block">
+                    <div className="mb-2 flex items-center justify-between text-xs font-semibold text-white/58">
+                      <span>Text size</span>
+                      <span className="tabular-nums text-white/42">{subtitleAppearance.size}%</span>
+                    </div>
+                    <input type="range" min={60} max={200} step={10} value={subtitleAppearance.size} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, size: Number(event.target.value) }))} className="h-1 w-full accent-white" />
+                  </label>
+
+                  <div className="mb-3 grid grid-cols-2 gap-2">
+                    <label>
+                      <div className="mb-2 text-xs font-semibold text-white/58">Text color</div>
+                      <div className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.065] px-2">
+                        <input type="color" value={subtitleAppearance.textColor} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, textColor: event.target.value }))} className="h-6 w-7 cursor-pointer border-0 bg-transparent p-0" />
+                        <span className="text-[9px] font-bold uppercase text-white/42">{subtitleAppearance.textColor}</span>
+                      </div>
+                    </label>
+                    <label>
+                      <div className="mb-2 text-xs font-semibold text-white/58">Background</div>
+                      <div className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.065] px-2">
+                        <input type="color" value={subtitleAppearance.backgroundColor} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, backgroundColor: event.target.value }))} className="h-6 w-7 cursor-pointer border-0 bg-transparent p-0" />
+                        <span className="text-[9px] font-bold uppercase text-white/42">{subtitleAppearance.backgroundColor}</span>
+                      </div>
+                    </label>
+                  </div>
+
+                  <label className="mb-3 block">
+                    <div className="mb-2 flex items-center justify-between text-xs font-semibold text-white/58">
+                      <span>Background opacity</span>
+                      <span className="tabular-nums text-white/42">{subtitleAppearance.backgroundOpacity}%</span>
+                    </div>
+                    <input type="range" min={0} max={100} step={5} value={subtitleAppearance.backgroundOpacity} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, backgroundOpacity: Number(event.target.value) }))} className="h-1 w-full accent-white" />
+                  </label>
+
+                  <div className="mb-3">
+                    <div className="mb-2 text-xs font-semibold text-white/58">Text edge</div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(["none", "shadow", "outline"] as const).map((edge) => (
+                        <button key={edge} type="button" onClick={() => setSubtitleAppearance((value) => ({ ...value, edge }))} className={clsx("rounded-md px-2 py-1.5 text-xs font-bold capitalize transition", subtitleAppearance.edge === edge ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14")}>{edge}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs font-semibold text-white/58">Vertical position</div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[{ label: "High", value: 72 }, { label: "Middle", value: 82 }, { label: "Low", value: 90 }].map((position) => (
+                        <button key={position.value} type="button" onClick={() => setSubtitleAppearance((value) => ({ ...value, position: position.value }))} className={clsx("rounded-md px-2 py-1.5 text-xs font-bold transition", subtitleAppearance.position === position.value ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14")}>{position.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}

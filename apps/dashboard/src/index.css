@@ -627,3 +627,27 @@ body {
 [data-subtitle-edge="shadow"] .spilled-video-player .vjs-text-track-cue {
   text-shadow: 0 3px 6px rgba(0, 0, 0, 0.65);
 }
+
+.spilled-universal-player video::cue {
+  color: var(--subtitle-color, #ffffff);
+  background-color: var(--subtitle-bg, rgba(0, 0, 0, 0.65));
+  font-size: var(--subtitle-size, 100%);
+  line-height: 1.35;
+}
+
+[data-subtitle-edge="none"].spilled-universal-player video::cue {
+  text-shadow: none;
+}
+
+[data-subtitle-edge="shadow"].spilled-universal-player video::cue {
+  text-shadow: 0 3px 7px rgba(0, 0, 0, 0.92);
+}
+
+[data-subtitle-edge="outline"].spilled-universal-player video::cue {
+  text-shadow:
+    -1px -1px 0 #000,
+    1px -1px 0 #000,
+    -1px 1px 0 #000,
+    1px 1px 0 #000,
+    0 2px 4px rgba(0, 0, 0, 0.8);
+}
