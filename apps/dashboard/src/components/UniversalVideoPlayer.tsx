@@ -4,7 +4,7 @@ import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
+import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
 
 type SubtitleTrack = {
   src: string;
@@ -452,7 +452,7 @@ export function UniversalVideoPlayer({
         .then(() => setAutoplayBlocked(false))
         .catch((error: unknown) => {
           if (canceled) return;
-          if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) {
+          if (isAutoplayPolicyError(error)) {
             setWaiting(false);
             setAutoplayBlocked(true);
           }
@@ -480,9 +480,17 @@ export function UniversalVideoPlayer({
       hlsRef.current?.startLoad(video.currentTime || -1);
       void video.play()
         .then(() => setAutoplayBlocked(false))
-        .catch(() => {
+        .catch((error: unknown) => {
           setWaiting(false);
-          setAutoplayBlocked(true);
+          if (isAutoplayPolicyError(error)) {
+            setAutoplayBlocked(true);
+            return;
+          }
+          setAutoplayBlocked(false);
+          if (!playbackErrorSentRef.current) {
+            playbackErrorSentRef.current = true;
+            onErrorRef.current?.("The resolved stream could not be started.");
+          }
         });
     }
     else video.pause();

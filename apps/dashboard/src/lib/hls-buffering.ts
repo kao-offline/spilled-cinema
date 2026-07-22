@@ -91,3 +91,12 @@ export function formatHlsQualityLabel(
   if (level.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
   return `Level ${index + 1}`;
 }
+
+export function isAutoplayPolicyError(error: unknown) {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "name" in error
+    && (error as { name?: unknown }).name === "NotAllowedError"
+  );
+}

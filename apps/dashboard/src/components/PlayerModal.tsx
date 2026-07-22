@@ -445,7 +445,9 @@ export function PlayerModal({
   async function resolveSinglePlayer(targetEpisode: LibraryEpisode, player: EpisodePlayer, background = false) {
     if (isLocalPlayer(player)) return null;
 
-    const cachedUrl = readCachedPlayerUrl("playback", playbackCacheKey(player));
+    const playerCacheKey = playbackCacheKey(player);
+    const forceFreshResolution = !background && playbackErrorRetryRef.current === playerCacheKey;
+    const cachedUrl = forceFreshResolution ? null : readCachedPlayerUrl("playback", playerCacheKey);
     const cachedStreamType = cachedUrl ? inferStreamType(cachedUrl) : "unknown";
     if (cachedUrl && !isVolatileRemotePlayer(player) && cachedStreamType !== "unknown" && cachedStreamType !== "embed") {
       const cachedProxy = parsePlaybackProxyUrl(cachedUrl);
@@ -471,7 +473,7 @@ export function PlayerModal({
       return result;
     }
 
-    const persistedUrl = hasReusablePersistedStream(player) ? player.streamUrl?.trim() : "";
+    const persistedUrl = !forceFreshResolution && hasReusablePersistedStream(player) ? player.streamUrl?.trim() : "";
     const persistedPlaybackUrl = persistedUrl ? buildPlaybackProxyUrl(player, targetEpisode.id, persistedUrl) : null;
     if (persistedUrl && persistedPlaybackUrl) {
       const result = {

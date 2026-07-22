@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
+import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
 
 describe("HLS buffer profile", () => {
   it("keeps a substantial rolling buffer on phones", () => {
@@ -43,6 +43,12 @@ describe("HLS buffer profile", () => {
     expect(formatHlsQualityLabel({ width: 1920, height: 800 }, 2)).toBe("1080p");
     expect(formatHlsQualityLabel({ width: 1280, height: 534 }, 1)).toBe("720p");
     expect(formatHlsQualityLabel({ width: 640, height: 266 }, 0)).toBe("360p");
+  });
+
+  it("does not mistake an interrupted or broken source for autoplay blocking", () => {
+    expect(isAutoplayPolicyError({ name: "NotAllowedError" })).toBe(true);
+    expect(isAutoplayPolicyError({ name: "AbortError" })).toBe(false);
+    expect(isAutoplayPolicyError({ name: "NotSupportedError" })).toBe(false);
   });
 });
 
