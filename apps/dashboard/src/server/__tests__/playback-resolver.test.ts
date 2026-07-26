@@ -101,7 +101,7 @@ describe("playback resolver", () => {
     expect(resolved.streamType).toBe("mp4");
   });
 
-  it("does not fall back across audio language groups", async () => {
+  it("uses another language only after the selected language cannot resolve", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -129,7 +129,7 @@ describe("playback resolver", () => {
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;
 
-    await expect(resolvePlaybackStream({
+    const resolved = await resolvePlaybackStream({
       episodeId: "episode-language",
       activePlayerAlias: "english",
       players: [
@@ -150,9 +150,10 @@ describe("playback resolver", () => {
           embedUrl: "https://czech.example/embed",
         },
       ],
-    })).rejects.toMatchObject({
-      message: expect.not.stringContaining("czech-provider"),
     });
+
+    expect(resolved.playerAlias).toBe("czech");
+    expect(resolved.resolvedUrl).toBe("https://cdn.example/czech.mp4");
   });
 
   it("extracts protocol-relative Mixdrop-style MP4 assignments", async () => {
@@ -192,13 +193,19 @@ describe("playback resolver", () => {
     expect(resolved.streamType).toBe("mp4");
   });
 
-  it("fails removed f16px videos before starting the expensive Byse challenge", async () => {
+  it("uses the f16px playback endpoint even when its metadata endpoint would report 404", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/api/videos/filemoon-code")) {
-        return new Response('{"error":"video not found"}', {
-          status: 404,
+      if (url.endsWith("/api/videos/filemoon-code/embed/playback")) {
+        return new Response("{}", {
+          status: 200,
           headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "https://f16px.com/e/filemoon-code") {
+        return new Response("<html></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -215,8 +222,8 @@ describe("playback resolver", () => {
     })).rejects.toThrow();
 
     const requestedUrls = vi.mocked(global.fetch).mock.calls.map(([input]) => String(input));
-    expect(requestedUrls).toContain("https://f16px.com/api/videos/filemoon-code");
-    expect(requestedUrls.some((url) => /access\/challenge|embed\/(?:captcha|playback)/.test(url))).toBe(false);
+    expect(requestedUrls).not.toContain("https://f16px.com/api/videos/filemoon-code");
+    expect(requestedUrls).toContain("https://f16px.com/api/videos/filemoon-code/embed/playback");
   });
 
   it("tries alternate Mixdrop domains when the imported domain is blocked", async () => {
@@ -327,6 +334,39 @@ describe("playback resolver", () => {
         label: "File",
         sourcePageUrl: "https://svetserialu.to/watch",
         embedUrl: "https://sb1254w9megshle.org/e/abc123",
+      }],
+    })).rejects.toBeTruthy();
+
+    expect(requestedBysePlayback).toBe(true);
+  });
+
+  it("recognizes rotating Byse hosts from their frontend shell", async () => {
+    let requestedBysePlayback = false;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://rotating-file-host.example/e/abc123") {
+        return new Response("<html><title>Byse Frontend</title><script>document.documentElement.classList.add('video-embed-mode')</script></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://rotating-file-host.example/api/videos/abc123/embed/playback") {
+        requestedBysePlayback = true;
+        return new Response("{}", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(resolvePlaybackStream({
+      episodeId: "episode-rotating-byse-shell",
+      activePlayerAlias: "filemoon",
+      players: [{
+        alias: "filemoon",
+        provider: "filemoon",
+        embedUrl: "https://rotating-file-host.example/e/abc123",
       }],
     })).rejects.toBeTruthy();
 
@@ -573,7 +613,7 @@ describe("playback resolver", () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("streamtape.example")) {
-        return new Response('<script>document.getElementById("robotlink").innerHTML = "/get_video?id=abc&expires=123&token=xyz";</script>', {
+        return new Response('<script>document.getElementById("robotlink").innerHTML = "https://streamtape.to/get_video?id=abc&expires=123&token=xyz";</script>', {
           status: 200,
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
@@ -601,6 +641,109 @@ describe("playback resolver", () => {
 
     expect(resolved.resolvedUrl).toBe("https://streamtape.com/get_video?id=abc&expires=123&token=xyz");
     expect(resolved.playbackUrl).toContain("episode-streamtape.mp4");
+    expect(resolved.streamType).toBe("mp4");
+  });
+
+  it("refreshes stale SvetSerialu provider embeds from their source wrapper", async () => {
+    const requestedUrls: string[] = [];
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("svetserialov.to/sources/filemoon")) {
+        return new Response('<iframe src="https://filemoon-current.example/e/fresh"></iframe>', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://filemoon-current.example/e/fresh") {
+        return new Response('file: "https://cdn.example/fresh/master.m3u8"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://cdn.example/fresh/master.m3u8") {
+        return new Response("#EXTM3U\n#EXT-X-VERSION:3", {
+          status: 200,
+          headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "episode-stale-filemoon",
+      activePlayerAlias: "filemoon",
+      players: [{
+        alias: "filemoon",
+        provider: "filemoon",
+        sourcePageUrl: "https://svetserialov.to/sources/filemoon?episodeId=25",
+        embedUrl: "https://f16px.com/e/deleted",
+      }],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://cdn.example/fresh/master.m3u8");
+    expect(resolved.refererUrl).toBe("https://filemoon-current.example/e/fresh");
+    expect(requestedUrls).not.toContain("https://f16px.com/e/deleted");
+  });
+
+  it("skips a dead SvetSerialu source and validates the next mirror", async () => {
+    const deadSource = Buffer.from("https://svetserialu.to/sources/dead").toString("base64");
+    const goodSource = Buffer.from("https://svetserialu.to/sources/good").toString("base64");
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://svetserialu.to/serial/test/s01e01") {
+        return new Response(
+          `<button class="source_link" data-iframe="${deadSource}"></button><button class="source_link" data-iframe="${goodSource}"></button>`,
+          { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
+        );
+      }
+      if (url === "https://svetserialu.to/sources/dead") {
+        return new Response('<iframe src="https://dead.example/embed"></iframe>', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://svetserialu.to/sources/good") {
+        return new Response('<iframe src="https://good.example/embed"></iframe>', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://dead.example/embed") {
+        return new Response('file: "https://cdn.example/dead.mp4"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://cdn.example/dead.mp4") {
+        return new Response("forbidden", { status: 403 });
+      }
+      if (url === "https://good.example/embed") {
+        return new Response('file: "https://cdn.example/good.mp4"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://cdn.example/good.mp4") {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "episode-svet-mirrors",
+      activePlayerAlias: "svet",
+      players: [{
+        alias: "svet",
+        provider: "svetserialu",
+        embedUrl: "https://svetserialu.to/serial/test/s01e01",
+      }],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://cdn.example/good.mp4");
     expect(resolved.streamType).toBe("mp4");
   });
 
@@ -724,7 +867,7 @@ describe("playback resolver", () => {
         resolvedAt: Date.now(),
       }],
     })).rejects.toMatchObject({
-      message: expect.stringContaining("did not expose a direct MP4/HLS/DASH stream"),
+      message: expect.stringContaining("No validated MP4/HLS/DASH source"),
     });
 
     expect(requestedUrls).not.toContain(artworkUrl);
@@ -823,6 +966,60 @@ describe("playback resolver", () => {
     expect(new Headers(sourceRequestHeaders).get("origin")).toBe("https://www.vidking.net");
   });
 
+  it("falls back from an unavailable VidKing movie source API to 2Embed", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("db.speedracelight.com/3/movie/550")) {
+        return Response.json({
+          title: "Fight Club",
+          release_date: "1999-10-15",
+          imdb_id: "tt0137523",
+        });
+      }
+      if (url.includes("api.speedracelight.com/seed?mediaId=550")) {
+        return Response.json({ seed: "fixture-seed-2026", ttlMs: 30_000 });
+      }
+      if (url.includes("api.speedracelight.com/")) {
+        return new Response("unavailable", { status: 500 });
+      }
+      if (url === "https://www.vidking.net/embed/movie/550") {
+        return new Response("<html><body>Player API unavailable</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url.includes("db.videasy.to/3/movie/550")) {
+        return Response.json({ imdb_id: "tt0137523" });
+      }
+      if (url === "https://www.2embed.cc/embed/tt0137523") {
+        return new Response('file: "https://cdn.example/fight-club.mp4"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://cdn.example/fight-club.mp4") {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "episode-vidking-fallback",
+      activePlayerAlias: "vidking-player",
+      players: [{
+        alias: "vidking-player",
+        provider: "vidking",
+        embedUrl: "https://www.vidking.net/embed/movie/550",
+      }],
+    });
+
+    expect(resolved.resolvedUrl).toBe("https://cdn.example/fight-club.mp4");
+    expect(resolved.streamType).toBe("mp4");
+  });
+
   it("rejects reachable embeds that do not expose a direct stream", async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -846,7 +1043,7 @@ describe("playback resolver", () => {
         embedUrl: "https://embed.example/player",
       }],
     })).rejects.toMatchObject({
-      message: expect.stringContaining("did not expose a direct MP4/HLS/DASH stream"),
+      message: expect.stringContaining("No validated MP4/HLS/DASH source"),
     });
   });
 });

@@ -575,7 +575,7 @@ function mergeShowMetadata(existingShow: ImportedShow, nextShow: ImportedShow, e
     ratings: mergeRatings(existing, next),
     actors: mergeCastMembers(existing.actors, next.actors),
     directors: mergeCastMembers(existing.directors, next.directors),
-    updatedAt: Date.now(),
+    updatedAt: Math.max(existing.updatedAt ?? 0, next.updatedAt ?? 0) || Date.now(),
     enrichmentVersion: Math.max(existing.enrichmentVersion ?? 0, next.enrichmentVersion ?? 0) || undefined,
   };
 }
@@ -681,6 +681,11 @@ function mergeImportedShow(existingShow: ImportedShow, nextShow: ImportedShow): 
     metadata,
     actors: metadata.actors,
     directors: metadata.directors,
+    availableSeasons: Array.from(new Set([
+      ...existingShow.availableSeasons,
+      ...nextShow.availableSeasons,
+      ...episodes.map((episode) => episode.seasonNumber),
+    ])).filter((season) => Number.isFinite(season)).sort((left, right) => left - right),
     episodes,
   };
 }
@@ -760,11 +765,28 @@ export function removeDownloadedLanguage(episodeId: string) {
 
 export function upsertImportedShow(show: ImportedShow) {
   const state = readLibraryState();
-  const shows = [...state.shows];
   const sanitizedShow = sanitizeImportedShow(show);
-  const existingIndex = shows.findIndex((entry) => showsReferToSameTitle(entry, sanitizedShow));
-
   archiveImportedShow(sanitizedShow);
+  const nextState = mergeImportedShowIntoState(state, sanitizedShow);
+
+  writeLibraryState(nextState);
+  return nextState;
+}
+
+export function mergeImportedShowIntoState(
+  state: LibraryState,
+  show: ImportedShow,
+  targetShowSlug?: string,
+) {
+  const normalizedState = normalizeLibraryStateCandidate(state);
+  const shows = [...normalizedState.shows];
+  const sanitizedShow = sanitizeImportedShow(show);
+  const targetIndex = targetShowSlug
+    ? shows.findIndex((entry) => entry.slug === targetShowSlug)
+    : -1;
+  const existingIndex = targetIndex >= 0
+    ? targetIndex
+    : shows.findIndex((entry) => showsReferToSameTitle(entry, sanitizedShow));
 
   if (existingIndex >= 0) {
     shows[existingIndex] = mergeImportedShow(shows[existingIndex], sanitizedShow);
@@ -772,13 +794,10 @@ export function upsertImportedShow(show: ImportedShow) {
     shows.unshift(sanitizedShow);
   }
 
-  const nextState = {
-    ...state,
+  return normalizeLibraryStateCandidate({
+    ...normalizedState,
     shows: shows.sort((left, right) => right.importedAt - left.importedAt),
-  };
-
-  writeLibraryState(nextState);
-  return nextState;
+  });
 }
 
 export function removeShow(slug: string) {

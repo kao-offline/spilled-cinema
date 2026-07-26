@@ -8,6 +8,7 @@ export async function loadProviderFeed(input: {
   feedId: string;
   cursor?: string | null;
   limit?: number;
+  fresh?: boolean;
   repositoryUrls?: string[];
   svetserialuCredentials?: SvetSerialuCredentials | null;
 }): Promise<ProviderFeedResponse> {
@@ -20,6 +21,7 @@ export async function loadProviderFeed(input: {
       return await remoteAdapter.getFeed(input.feedId, {
         cursor: input.cursor ?? null,
         limit: input.limit,
+        fresh: input.fresh,
       });
     }
   }
@@ -32,6 +34,7 @@ export async function loadProviderFeed(input: {
   return await adapter.getFeed(input.feedId, {
     cursor: input.cursor ?? null,
     limit: input.limit,
+    fresh: input.fresh,
     svetserialuCredentials: input.svetserialuCredentials,
   });
 }

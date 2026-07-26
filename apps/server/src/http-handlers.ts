@@ -682,6 +682,7 @@ export function createHttpHandlers() {
         feedId?: string;
         cursor?: string | null;
         limit?: number;
+        fresh?: boolean;
         repositoryUrls?: string[];
         svetserialuCredentials?: SvetSerialuCredentials | null;
       }>(req);
@@ -695,6 +696,7 @@ export function createHttpHandlers() {
         feedId,
         cursor: body.cursor ?? null,
         limit: body.limit,
+        fresh: body.fresh === true,
         repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
         svetserialuCredentials: body.svetserialuCredentials,
       }));

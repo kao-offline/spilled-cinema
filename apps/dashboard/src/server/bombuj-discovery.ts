@@ -124,24 +124,32 @@ function createSeriesItem(input: {
 }
 
 export function parseBombujMovieBrowsePage(html: string, sectionKey: ExploreSectionKey) {
-  const matches = [
-    ...html.matchAll(
-      /<a href="([^"]+online-film-[^"]+)"[^>]*>\s*(?:<div[^>]*>\s*)*<img[^>]+src="([^"]+)"[\s\S]*?<div[^>]*font-size:18px[^>]*>([\s\S]*?)<\/div>/gi,
-    ),
-  ];
+  const matches = [...html.matchAll(
+    /<a\b[^>]*href=["']([^"']*online-film-[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+  )];
 
   return uniqueBy(
-    matches.map((match) => {
+    matches.flatMap((match) => {
       const detailUrl = absoluteBombujUrl(match[1], MOVIE_BASE_URL);
       const slug = detailUrl.split("/").pop()?.replace(/^online-film-/i, "") ?? "";
-      return createMovieItem({
-        title: stripTags(match[3]).trim() || slug.replace(/-/g, " "),
+      const cardHtml = match[2] ?? "";
+      const images = [...cardHtml.matchAll(/<img\b[^>]*src=["']([^"']+)["'][^>]*>/gi)];
+      const cover = images.find((image) => /\/images\/covers\//i.test(image[1])) ?? images.at(-1);
+      if (cover && /\/images\/slide\//i.test(cover[1])) {
+        return [];
+      }
+      const title =
+        cardHtml.match(/<div\b[^>]*font-size\s*:\s*(?:18|23)px[^>]*>([\s\S]*?)<\/div>/i)?.[1] ??
+        cover?.[0].match(/\balt=["']([^"']+)["']/i)?.[1] ??
+        "";
+      return [createMovieItem({
+        title: stripTags(title).trim() || slug.replace(/-/g, " "),
         slug,
-        posterUrl: absoluteBombujUrl(match[2], MOVIE_BASE_URL),
+        posterUrl: cover ? absoluteBombujUrl(cover[1], MOVIE_BASE_URL) : null,
         detailUrl,
         year: slug.match(/(19|20)\d{2}/)?.[0] ?? null,
         sectionKey,
-      });
+      })];
     }),
     (item) => item.slug,
   );
@@ -362,13 +370,13 @@ export async function hydrateBombujItem(item: ExploreItem) {
   });
 }
 
-export async function getBombujMovieSections(): Promise<BombujSectionResult> {
+export async function getBombujMovieSections(forceFresh = false): Promise<BombujSectionResult> {
   const [{ html: latestHtml, stale: latestStale }, { html: popularHtml, stale: popularStale }, { html: todayHtml, stale: todayStale }, { html: overallHtml, stale: overallStale }, { html: genreHtml, stale: genreStale }] = await Promise.all([
-    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/all.php?page=1&sort=id&title=1&zaner=all#obrazkove-zoradenie`, FEED_TTL_MS),
-    cachedFetchText(`${MOVIE_BASE_URL}/uvodna.php`, FEED_TTL_MS),
-    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/all.php?page=1&sort=todayviews&title=1&zaner=all#obrazkove-zoradenie`, FEED_TTL_MS),
-    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/all.php?page=1&sort=views&title=1&zaner=all#obrazkove-zoradenie`, FEED_TTL_MS),
-    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/`, FEED_TTL_MS),
+    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/all.php?page=1&sort=id&title=1&zaner=all#obrazkove-zoradenie`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${MOVIE_BASE_URL}/uvodna.php`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/all.php?page=1&sort=todayviews&title=1&zaner=all#obrazkove-zoradenie`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/all.php?page=1&sort=views&title=1&zaner=all#obrazkove-zoradenie`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${MOVIE_BASE_URL}/zanre/obr/`, FEED_TTL_MS, undefined, forceFresh),
   ]);
 
   const latest = parseBombujMovieBrowsePage(latestHtml, "newest");
@@ -406,7 +414,7 @@ export async function getBombujMovieSections(): Promise<BombujSectionResult> {
   };
 }
 
-export async function getBombujSeriesSections(): Promise<BombujSectionResult> {
+export async function getBombujSeriesSections(forceFresh = false): Promise<BombujSectionResult> {
   const [
     { html: seriesHomeHtml, stale: seriesHomeStale },
     { html: topTodayHtml, stale: topTodayStale },
@@ -416,17 +424,17 @@ export async function getBombujSeriesSections(): Promise<BombujSectionResult> {
     { html: latestRawHtml, stale: latestRawStale },
     { html: genreBrowseHtml, stale: genreBrowseStale },
   ] = await Promise.all([
-    cachedFetchText(`${SERIES_BASE_URL}/`, FEED_TTL_MS),
+    cachedFetchText(`${SERIES_BASE_URL}/`, FEED_TTL_MS, undefined, forceFresh),
     cachedFetchText(`${SERIES_BASE_URL}/paginate/data4.php?page=1`, FEED_TTL_MS, {
       headers: { Referer: `${SERIES_BASE_URL}/` },
-    }),
+    }, forceFresh),
     cachedFetchText(`${SERIES_BASE_URL}/paginate/data3.php?page=1`, FEED_TTL_MS, {
       headers: { Referer: `${SERIES_BASE_URL}/` },
-    }),
-    cachedFetchText(`${SERIES_BASE_URL}/index.php?page=1&type=2#nove`, FEED_TTL_MS),
-    cachedFetchText(`${SERIES_BASE_URL}/index.php?page=1&type=3#nove`, FEED_TTL_MS),
-    cachedFetchText(`${SERIES_BASE_URL}/index.php?page=1&type=4#nove`, FEED_TTL_MS),
-    cachedFetchText(`${SERIES_BASE_URL}/zoznam-serialov/podla-zanru/`, FEED_TTL_MS),
+    }, forceFresh),
+    cachedFetchText(`${SERIES_BASE_URL}/index.php?page=1&type=2#nove`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${SERIES_BASE_URL}/index.php?page=1&type=3#nove`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${SERIES_BASE_URL}/index.php?page=1&type=4#nove`, FEED_TTL_MS, undefined, forceFresh),
+    cachedFetchText(`${SERIES_BASE_URL}/zoznam-serialov/podla-zanru/`, FEED_TTL_MS, undefined, forceFresh),
   ]);
 
   const latestSeries = parseBombujSeriesCardGrid(seriesHomeHtml, "newest");

@@ -14,6 +14,7 @@ type JsonRequestInit = {
 
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
+const PLAYBACK_RUNTIME_TIMEOUT_MS = 90000;
 
 function canUseHostedSameOriginApi() {
   return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
@@ -31,6 +32,15 @@ export function isHostedSameOriginApiPath(path: string) {
 }
 
 function getRuntimeTimeoutMs(path: string) {
+  if (
+    path.startsWith("/api/player/resolve") ||
+    path.startsWith("/api/player/clean-resolve") ||
+    path.startsWith("/api/player/playback-resolve") ||
+    path.startsWith("/api/download-full/browser-start")
+  ) {
+    return PLAYBACK_RUNTIME_TIMEOUT_MS;
+  }
+
   if (
     path.startsWith("/api/import-") ||
     path.startsWith("/api/provider-import") ||
@@ -96,9 +106,20 @@ async function fetchHostedSameOriginApi<T>(path: string, init: JsonRequestInit):
 }
 
 async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
-  if (!window.spilledNative?.serverUrl) {
+  if (!window.spilledNative) {
     return null;
   }
+  if (window.spilledNative.requestRuntime) {
+    const result = await window.spilledNative.requestRuntime(path, init);
+    return {
+      ok: result.status >= 200 && result.status < 300,
+      status: result.status,
+      data: result.data as T,
+      origin: "spilled-native://desktop",
+      transport: "native",
+    };
+  }
+  if (!window.spilledNative.serverUrl) return null;
 
   const response = await fetchWithTimeout(`${window.spilledNative.serverUrl}${path}`, {
     method: init.method ?? "GET",

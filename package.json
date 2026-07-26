@@ -2,8 +2,10 @@
   "name": "spilled-cinema-monorepo",
   "private": true,
   "dependencies": {
+    "@convex-dev/migrations": "^0.3.5",
+    "@node-rs/argon2": "^2.0.2",
     "@simplewebauthn/server": "^13.3.0",
-    "convex": "^1.36.1",
+    "convex": "^1.42.3",
     "openid-client": "^6.8.4"
   },
   "workspaces": [
@@ -11,6 +13,13 @@
     "apps/*/*",
     "packages/*"
   ],
+  "overrides": {
+    "@hono/node-server": "^2.0.5",
+    "fast-uri": "^3.1.4",
+    "hono": "^4.12.32",
+    "postcss": "^8.5.23",
+    "sharp": "^0.35.3"
+  },
   "devDependencies": {
     "concurrently": "^9.2.1",
     "tsx": "^4.20.3"
@@ -26,6 +35,14 @@
     "control-plane": "powershell -ExecutionPolicy Bypass -File scripts/control-plane.ps1",
     "convex:codegen": "npx convex codegen",
     "convex:deploy": "powershell -ExecutionPolicy Bypass -Command \"$env:CONVEX_DEPLOYMENT='prod:cheerful-lynx-4'; npx convex deploy\"",
+    "node:migrate-v2": "tsx scripts/migrate-node-state.ts",
+    "node:generate-v2-secrets": "node scripts/generate-v2-secrets.mjs",
+    "node:enroll-v2": "node scripts/enroll-node-v2.mjs",
+    "node:smoke-v2": "node scripts/smoke-server-v2.mjs",
+    "node:smoke-native-v2": "node scripts/smoke-native-pipe-v2.mjs",
+    "operator:configure-oidc": "node scripts/configure-operator-oidc.mjs",
+    "release:validate-credentials": "node scripts/validate-production-credentials.mjs",
+    "connector:sign-wasm": "node scripts/sign-wasm-connector.mjs",
     "vault:update": "node scripts/update-vault-metadata.mjs",
     "dev": "concurrently \"npm run dev:extractor\" \"npm run dev:dashboard\""
   }

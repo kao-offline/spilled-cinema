@@ -13,6 +13,8 @@ const timeoutMs = Math.max(5_000, Number(option("--timeout-ms", "15000")) || 15_
 const reportPath = option("--report", "");
 const perProvider = Math.max(0, Number(option("--per-provider", "0")) || 0);
 const providerFilter = option("--provider", "").trim().toLowerCase();
+const titleFilter = option("--title", "").trim().toLowerCase();
+const episodeFilter = option("--episode", "").trim().toLowerCase();
 const episodeFallback = process.argv.includes("--episode-fallback");
 const perTitle = Math.max(0, Number(option("--per-title", "0")) || 0);
 
@@ -27,8 +29,18 @@ const checks = [];
 const providerCounts = new Map();
 
 for (const show of shows) {
+  if (
+    titleFilter &&
+    !String(show.slug ?? "").toLowerCase().includes(titleFilter) &&
+    !String(show.title ?? "").toLowerCase().includes(titleFilter)
+  ) {
+    continue;
+  }
   let titleChecks = 0;
   for (const episode of show.episodes ?? []) {
+    if (episodeFilter && !String(episode.id ?? "").toLowerCase().includes(episodeFilter)) {
+      continue;
+    }
     if (episodeFallback) {
       const players = (episode.players ?? []).filter((player) =>
         player?.embedUrl && player.provider !== "local" && player.provider !== "spillsave"

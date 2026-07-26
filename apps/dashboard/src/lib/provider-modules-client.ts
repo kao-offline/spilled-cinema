@@ -51,6 +51,7 @@ export async function fetchProviderFeed(input: {
   feedId: string;
   cursor?: string | null;
   limit?: number;
+  fresh?: boolean;
 }) {
   const response = await requestRuntimeJson<ProviderFeedResponse & { error?: string }>("/api/provider-feed", {
     method: "POST",

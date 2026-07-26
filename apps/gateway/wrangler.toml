@@ -1,0 +1,15 @@
+name = "spilled-node-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-07-26"
+
+[[durable_objects.bindings]]
+name = "NODE_LINKS"
+class_name = "NodeLink"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NodeLink"]
+
+[vars]
+MAX_FRAME_BYTES = "1048576"
+TURN_URLS = "turns:turn.spilled.overload.studio:5349?transport=tcp,turn:turn.spilled.overload.studio:3478?transport=udp"

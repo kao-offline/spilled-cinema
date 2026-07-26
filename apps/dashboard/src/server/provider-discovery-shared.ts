@@ -15,6 +15,8 @@ type LastGoodEntry<T> = {
 
 const memoryCache = new Map<string, CacheEntry<unknown>>();
 const lastGoodCache = new Map<string, LastGoodEntry<unknown>>();
+const inflightFetches = new Map<string, Promise<string>>();
+const FORCE_REFRESH_MIN_INTERVAL_MS = 30_000;
 
 export function decodeHtml(value: string) {
   return value
@@ -76,23 +78,32 @@ async function fetchText(url: string, init?: RequestInit) {
   return response.text();
 }
 
-export async function cachedFetchText(url: string, ttlMs: number, init?: RequestInit) {
+export async function cachedFetchText(url: string, ttlMs: number, init?: RequestInit, forceFresh = false) {
   const cacheKey = `html:${url}:${JSON.stringify(init?.method ?? "GET")}:${JSON.stringify(init?.body ?? null)}`;
   const now = Date.now();
   const cached = memoryCache.get(cacheKey) as CacheEntry<string> | undefined;
-  if (cached && cached.expiresAt > now) {
+  const cachedAt = cached ? cached.expiresAt - ttlMs : 0;
+  if (cached && cached.expiresAt > now && (!forceFresh || now - cachedAt < FORCE_REFRESH_MIN_INTERVAL_MS)) {
     return { html: cached.value, stale: false };
   }
 
   try {
-    const html = await fetchText(url, init);
+    const pending = inflightFetches.get(cacheKey);
+    const request = pending ?? fetchText(url, init);
+    if (!pending) {
+      inflightFetches.set(cacheKey, request);
+    }
+    const html = await request.finally(() => {
+      if (!pending) inflightFetches.delete(cacheKey);
+    });
+    const completedAt = Date.now();
     memoryCache.set(cacheKey, {
       value: html,
-      expiresAt: now + ttlMs,
+      expiresAt: completedAt + ttlMs,
     });
     lastGoodCache.set(cacheKey, {
       value: html,
-      updatedAt: now,
+      updatedAt: completedAt,
     });
     return { html, stale: false };
   } catch (error) {

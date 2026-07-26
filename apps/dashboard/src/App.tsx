@@ -133,6 +133,7 @@ import {
 } from "./lib/provider-modules-shared";
 import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/private-node-client";
 import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLibraryPath } from "./lib/library-routes";
+import { scanProviderFeeds } from "./lib/library-watcher";
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
@@ -494,7 +495,9 @@ function createEmptyProviderFeedPageState(): ProviderFeedPageState {
 function mergeProviderFeedItems(left: ExploreItem[], right: ExploreItem[]) {
   const merged = new Map<string, ExploreItem>();
   for (const item of [...left, ...right]) {
-    merged.set(item.id, item);
+    if (!merged.has(item.id)) {
+      merged.set(item.id, item);
+    }
   }
   return Array.from(merged.values());
 }
@@ -594,6 +597,7 @@ function AppContent() {
   const companionSourceImportsRef = useRef(new Set<string>());
   const metadataEnrichmentActiveRef = useRef(false);
   const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
+  const libraryWatcherActiveRef = useRef(false);
   const activeWatchEpisodeIdRef = useRef(activeWatchEpisodeId);
   const deferredExploreQuery = useDeferredValue(discoveryState.exploreQuery);
 
@@ -772,6 +776,88 @@ function AppContent() {
       canceled = true;
     };
   }, [providerRepositoryUrls]);
+
+  useEffect(() => {
+    if (providerModules.length === 0 || !localRuntimeStatus.available) return;
+    let canceled = false;
+    let timer: number | null = null;
+
+    const poll = async () => {
+      if (canceled) return;
+      if (libraryWatcherActiveRef.current) {
+        timer = window.setTimeout(() => void poll(), 1_000);
+        return;
+      }
+      libraryWatcherActiveRef.current = true;
+      let retrySoon = false;
+      try {
+        const result = await scanProviderFeeds(
+          stateRef.current,
+          providerModules,
+          stateRef.current.settings.artworkSources,
+        );
+        if (canceled) return;
+
+        if (result.changedTitles.length > 0) {
+          const nextState = mergeLibraryStates(stateRef.current, result.state);
+          writeLibraryState(nextState);
+          stateRef.current = nextState;
+          setState(nextState);
+        }
+
+        if (result.feedResponses.length > 0) {
+          setProviderFeedStates((current) => {
+            const next = { ...current };
+            for (const feedResponse of result.feedResponses) {
+              const viewId = createProviderFeedViewId(feedResponse.moduleId, feedResponse.feedId);
+              const page = next[viewId];
+              if (!page) continue;
+              next[viewId] = {
+                ...page,
+                feed: {
+                  ...feedResponse,
+                  items: mergeProviderFeedItems(feedResponse.items, page.feed?.items ?? []),
+                },
+                feedError: null,
+              };
+            }
+            return next;
+          });
+        }
+        retrySoon = result.failures.length > 0 && result.checkedFeeds === 0;
+      } catch {
+        retrySoon = true;
+      } finally {
+        libraryWatcherActiveRef.current = false;
+        if (!canceled) {
+          const delay = retrySoon
+            ? 15_000
+            : document.visibilityState === "visible"
+              ? 2 * 60_000
+              : 5 * 60_000;
+          timer = window.setTimeout(() => void poll(), delay);
+        }
+      }
+    };
+
+    const runNow = () => {
+      if (canceled || document.visibilityState === "hidden") return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void poll(), 0);
+    };
+
+    runNow();
+    window.addEventListener("focus", runNow);
+    window.addEventListener("online", runNow);
+    document.addEventListener("visibilitychange", runNow);
+    return () => {
+      canceled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("focus", runNow);
+      window.removeEventListener("online", runNow);
+      document.removeEventListener("visibilitychange", runNow);
+    };
+  }, [localRuntimeStatus.available, localRuntimeStatus.origin, providerModules]);
 
   async function refreshVaultState() {
     const status = await getVaultStatus();
@@ -1026,14 +1112,38 @@ function AppContent() {
 
     const timeout = window.setTimeout(() => {
       void (async () => {
+        // The vault may have been updated by the provider watcher, another tab,
+        // or a maintenance command since this render. Always reconcile the
+        // latest disk snapshot before writing so a stale browser tab cannot
+        // silently remove newly discovered seasons or episodes.
+        const currentVaultSnapshot = await readVaultSnapshot();
+        const stateToPersist = currentVaultSnapshot?.libraryState
+          ? mergeLibraryStates(
+              state,
+              normalizeLibraryStateCandidate(currentVaultSnapshot.libraryState as Partial<LibraryState>),
+            )
+          : state;
+
+        if (JSON.stringify(stateToPersist) !== JSON.stringify(state)) {
+          writeLibraryState(stateToPersist);
+          stateRef.current = stateToPersist;
+          setState(stateToPersist);
+        }
+
         const snapshotUpdatedAt = Date.now();
         lastKnownVaultSnapshotAtRef.current = Math.max(lastKnownVaultSnapshotAtRef.current, snapshotUpdatedAt);
         await writeVaultSnapshot({
           version: 1,
           updatedAt: snapshotUpdatedAt,
-          libraryState: state,
-          downloadedLanguages: Object.fromEntries(downloadedLanguageMapRef.current),
-          downloadQueue: downloadQueueRef.current,
+          libraryState: stateToPersist,
+          downloadedLanguages: {
+            ...(currentVaultSnapshot?.downloadedLanguages ?? {}),
+            ...Object.fromEntries(downloadedLanguageMapRef.current),
+          },
+          downloadQueue: {
+            ...(currentVaultSnapshot?.downloadQueue ?? {}),
+            ...downloadQueueRef.current,
+          },
         });
         setVaultDiagnostics(getVaultDiagnostics());
       })();
@@ -1190,18 +1300,33 @@ function AppContent() {
 
   useEffect(() => {
     let canceled = false;
+    let timer: number | null = null;
 
     const probe = async () => {
       const status = await probeLocalRuntime();
       if (!canceled) {
         setLocalRuntimeStatus(status);
+        timer = window.setTimeout(() => void probe(), status.available ? 60_000 : 10_000);
       }
     };
 
+    const probeNow = () => {
+      if (canceled) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void probe(), 0);
+    };
+
     void probe();
+    window.addEventListener("focus", probeNow);
+    window.addEventListener("online", probeNow);
+    document.addEventListener("visibilitychange", probeNow);
 
     return () => {
       canceled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("focus", probeNow);
+      window.removeEventListener("online", probeNow);
+      document.removeEventListener("visibilitychange", probeNow);
     };
   }, []);
 
@@ -1584,6 +1709,7 @@ function AppContent() {
       moduleId: activeProviderFeedMeta.module.moduleId,
       feedId: activeProviderFeedMeta.feed.feedId,
       limit: 24,
+      fresh: true,
     })
       .then((feed) => {
         updateProviderFeedPageState(viewId, {
@@ -2388,6 +2514,7 @@ function AppContent() {
         moduleId: activeProviderFeedMeta.module.moduleId,
         feedId: activeProviderFeedMeta.feed.feedId,
         limit: 24,
+        fresh: true,
       });
       updateProviderFeedPageState(viewId, {
         feed,

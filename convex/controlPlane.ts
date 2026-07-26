@@ -60,6 +60,15 @@ const capabilityValidator = v.union(
   v.literal("download"),
 );
 
+const verificationStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("verified"),
+  v.literal("degraded"),
+  v.literal("quarantined"),
+  v.literal("disabled"),
+  v.literal("legacy-unverified"),
+);
+
 const relaySelectRequestValidator = {
   capability: capabilityValidator,
   contentId: v.optional(v.string()),
@@ -92,7 +101,7 @@ type SpillshareInput = {
 
 function supportsPublicCapability(node: Doc<"nodes">, capability: keyof Doc<"nodes">["capabilities"]) {
   const policy = node.capabilities[capability];
-  return policy.visibility === "public";
+  return node.verificationStatus === "verified" && policy.visibility === "public";
 }
 
 function scoreNode(node: Doc<"nodes">, heartbeat: Doc<"nodeHeartbeats">, regionHint?: string) {
@@ -133,6 +142,7 @@ async function upsertNodeDocument(ctx: MutationCtx, record: NodeRecordInput, now
 
   return await ctx.db.insert("nodes", {
     ...payload,
+    verificationStatus: "pending",
     registeredAt: now,
   });
 }
@@ -293,6 +303,382 @@ export const heartbeatNode = internalMutation({
       nodeId: args.record.nodeId,
       expiresAt: now + args.record.ttlMs,
     };
+  },
+});
+
+export const setNodeVerificationStatus = internalMutation({
+  args: {
+    nodeId: v.string(),
+    status: verificationStatusValidator,
+  },
+  handler: async (ctx, args) => {
+    const node = await ctx.db
+      .query("nodes")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (!node) {
+      throw new Error("Node not found.");
+    }
+    const now = Date.now();
+    await ctx.db.patch(node._id, {
+      verificationStatus: args.status,
+      verifiedAt: args.status === "verified" ? now : node.verifiedAt,
+      quarantinedAt: args.status === "quarantined" ? now : node.quarantinedAt,
+      updatedAt: now,
+    });
+    return { ok: true, nodeId: args.nodeId, status: args.status };
+  },
+});
+
+export const getVerifiedNodeForTicket = internalQuery({
+  args: {
+    nodeId: v.string(),
+    capability: capabilityValidator,
+  },
+  handler: async (ctx, args) => {
+    const node = await ctx.db
+      .query("nodes")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (!node || !supportsPublicCapability(node, args.capability)) {
+      return null;
+    }
+    const heartbeat = await ctx.db
+      .query("nodeHeartbeats")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    return heartbeat && heartbeat.expiresAt > Date.now()
+      ? { nodeId: node.nodeId, protocolVersion: node.protocolVersion }
+      : null;
+  },
+});
+
+export const recordCapabilityTicket = internalMutation({
+  args: {
+    ticketId: v.string(),
+    nodeId: v.string(),
+    principalKind: v.string(),
+    capability: v.string(),
+    action: v.string(),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    outcome: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("capabilityTicketAudit", args);
+  },
+});
+
+export const publishVerifiedSpillshareAvailability = internalMutation({
+  args: {
+    contentId: v.string(),
+    nodeId: v.string(),
+    renditionClass: v.string(),
+    verifiedAt: v.number(),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("spillshareAvailabilityV2")
+      .withIndex("by_content_id_and_node_id", (q) => q.eq("contentId", args.contentId).eq("nodeId", args.nodeId))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, args);
+      return existing._id;
+    }
+    return await ctx.db.insert("spillshareAvailabilityV2", args);
+  },
+});
+
+export const listVerifiedSpillshareAvailability = internalQuery({
+  args: {
+    contentId: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("spillshareAvailabilityV2")
+      .withIndex("by_content_id", (q) => q.eq("contentId", args.contentId))
+      .take(Math.min(args.limit ?? 20, 100));
+    return rows
+      .filter((row) => row.expiresAt > Date.now())
+      .map(({ contentId, nodeId, renditionClass, verifiedAt, expiresAt }) => ({
+        contentId,
+        nodeId,
+        renditionClass,
+        verifiedAt,
+        expiresAt,
+      }));
+  },
+});
+
+export const enrollV2Node = internalMutation({
+  args: {
+    nodeId: v.string(),
+    ed25519PublicKey: v.string(),
+    x25519PublicKey: v.string(),
+    transportKeySignature: v.string(),
+    installIdHash: v.string(),
+    protocolVersion: v.number(),
+    keyVersion: v.number(),
+    enrollmentCredentialHash: v.string(),
+    advertisedCapabilities: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const identity = await ctx.db
+      .query("nodeIdentities")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    const identityPayload = {
+      nodeId: args.nodeId,
+      ed25519PublicKey: args.ed25519PublicKey,
+      x25519PublicKey: args.x25519PublicKey,
+      transportKeySignature: args.transportKeySignature,
+      installIdHash: args.installIdHash,
+      protocolVersion: args.protocolVersion,
+      keyVersion: args.keyVersion,
+      updatedAt: now,
+    };
+    if (identity) {
+      await ctx.db.patch(identity._id, identityPayload);
+    } else {
+      await ctx.db.insert("nodeIdentities", { ...identityPayload, createdAt: now });
+    }
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (registration) {
+      await ctx.db.patch(registration._id, {
+        enrollmentCredentialHash: args.enrollmentCredentialHash,
+        advertisedCapabilities: args.advertisedCapabilities,
+        status: registration.status === "verified" ? "verified" : "pending",
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("nodeRegistrations", {
+        nodeId: args.nodeId,
+        status: "pending",
+        enrollmentCredentialHash: args.enrollmentCredentialHash,
+        advertisedCapabilities: args.advertisedCapabilities,
+        registeredAt: now,
+        updatedAt: now,
+      });
+    }
+    return { ok: true, nodeId: args.nodeId, status: registration?.status ?? "pending" };
+  },
+});
+
+export const listV2VerificationCandidates = internalQuery({
+  args: { limit: v.number() },
+  handler: async (ctx, args) => {
+    const pending = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .take(Math.min(Math.max(Math.floor(args.limit), 1), 50));
+    const remaining = Math.max(0, Math.min(Math.floor(args.limit), 50) - pending.length);
+    const degraded = remaining
+      ? await ctx.db
+          .query("nodeRegistrations")
+          .withIndex("by_status", (q) => q.eq("status", "degraded"))
+          .take(remaining)
+      : [];
+    const registrations = pending.concat(degraded);
+    const candidates: Array<{
+      nodeId: string;
+      advertisedCapabilities: string[];
+      identity: Doc<"nodeIdentities">;
+      online: boolean;
+    }> = [];
+    for (const registration of registrations) {
+      const identity = await ctx.db
+        .query("nodeIdentities")
+        .withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId))
+        .unique();
+      const heartbeat = await ctx.db
+        .query("nodeHeartbeatsV2")
+        .withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId))
+        .unique();
+      if (identity) {
+        candidates.push({
+          nodeId: registration.nodeId,
+          advertisedCapabilities: registration.advertisedCapabilities ?? [],
+          identity,
+          online: Boolean(heartbeat && heartbeat.expiresAt > Date.now()),
+        });
+      }
+    }
+    return candidates;
+  },
+});
+
+export const verifyGatewayNodeCredential = internalQuery({
+  args: {
+    nodeId: v.string(),
+    enrollmentCredentialHash: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (!registration || registration.status === "disabled" || registration.status === "quarantined") {
+      return false;
+    }
+    const revocation = await ctx.db
+      .query("nodeRevocations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .first();
+    return !revocation && registration.enrollmentCredentialHash === args.enrollmentCredentialHash;
+  },
+});
+
+export const verifyGatewayTicket = internalQuery({
+  args: {
+    ticketId: v.string(),
+    nodeId: v.string(),
+    capability: v.string(),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const audit = await ctx.db
+      .query("capabilityTicketAudit")
+      .withIndex("by_ticket_id", (q) => q.eq("ticketId", args.ticketId))
+      .unique();
+    return Boolean(
+      audit &&
+      audit.nodeId === args.nodeId &&
+      audit.capability === args.capability &&
+      audit.expiresAt === args.expiresAt &&
+      audit.expiresAt > Date.now() &&
+      audit.outcome === "issued",
+    );
+  },
+});
+
+export const allowCapabilityTicketIssue = internalQuery({
+  args: {
+    nodeId: v.string(),
+    windowMs: v.number(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const recent = await ctx.db
+      .query("capabilityTicketAudit")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .order("desc")
+      .take(Math.min(Math.max(Math.floor(args.limit), 1), 200));
+    const cutoff = Date.now() - Math.min(Math.max(args.windowMs, 1_000), 60 * 60_000);
+    return recent.filter((entry) => entry.issuedAt >= cutoff).length < args.limit;
+  },
+});
+
+export const recordGatewayHeartbeatV2 = internalMutation({
+  args: {
+    nodeId: v.string(),
+    protocolVersion: v.number(),
+    capacityClass: v.string(),
+    ttlMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("nodeHeartbeatsV2")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    const payload = {
+      nodeId: args.nodeId,
+      gatewayAttestedAt: now,
+      expiresAt: now + Math.min(Math.max(args.ttlMs, 15_000), 120_000),
+      capacityClass: args.capacityClass,
+      protocolVersion: args.protocolVersion,
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, payload);
+      return existing._id;
+    }
+    return await ctx.db.insert("nodeHeartbeatsV2", payload);
+  },
+});
+
+export const setV2NodeVerification = internalMutation({
+  args: {
+    nodeId: v.string(),
+    status: verificationStatusValidator,
+    capabilities: v.array(v.object({
+      capability: v.string(),
+      status: verificationStatusValidator,
+    })),
+  },
+  handler: async (ctx, args) => {
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (!registration) throw new Error("V2 node registration not found.");
+    const now = Date.now();
+    await ctx.db.patch(registration._id, { status: args.status, updatedAt: now });
+    for (const capability of args.capabilities) {
+      const existing = await ctx.db
+        .query("nodeCapabilityHealth")
+        .withIndex("by_node_and_capability", (q) => q.eq("nodeId", args.nodeId).eq("capability", capability.capability))
+        .unique();
+      const payload = {
+        nodeId: args.nodeId,
+        capability: capability.capability,
+        status: capability.status,
+        successCount: existing?.successCount ?? 0,
+        failureCount: existing?.failureCount ?? 0,
+        lastVerifiedAt: capability.status === "verified" ? now : existing?.lastVerifiedAt,
+        updatedAt: now,
+      };
+      if (existing) await ctx.db.patch(existing._id, payload);
+      else await ctx.db.insert("nodeCapabilityHealth", payload);
+    }
+    return { ok: true, nodeId: args.nodeId, status: args.status };
+  },
+});
+
+export const getVerifiedV2NodeForTicket = internalQuery({
+  args: {
+    nodeId: v.string(),
+    capability: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (registration?.status !== "verified") return null;
+    const capability = await ctx.db
+      .query("nodeCapabilityHealth")
+      .withIndex("by_node_and_capability", (q) => q.eq("nodeId", args.nodeId).eq("capability", args.capability))
+      .unique();
+    if (capability?.status !== "verified") return null;
+    const heartbeat = await ctx.db
+      .query("nodeHeartbeatsV2")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    return heartbeat && heartbeat.expiresAt > Date.now()
+      ? { nodeId: args.nodeId, protocolVersion: heartbeat.protocolVersion }
+      : null;
+  },
+});
+
+export const getReachablePrivateV2Node = internalQuery({
+  args: { nodeId: v.string() },
+  handler: async (ctx, args) => {
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    if (!registration || ["disabled", "quarantined"].includes(registration.status)) return null;
+    const heartbeat = await ctx.db
+      .query("nodeHeartbeatsV2")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .unique();
+    return heartbeat && heartbeat.expiresAt > Date.now() ? { nodeId: args.nodeId } : null;
   },
 });
 

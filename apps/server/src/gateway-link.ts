@@ -1,0 +1,174 @@
+import { createPublicKey } from "node:crypto";
+import WebSocket from "ws";
+import type {
+  CapabilityTicketV2,
+  EncryptedRequestEnvelopeV2,
+} from "../../../packages/node-protocol/src";
+import type { SpilledCinemaNodeRuntime } from "../../node/src/runtime";
+
+type GatewayFrame = {
+  version: 2;
+  requestId: string;
+  ticketId: string;
+  clientId?: string;
+  ticket: CapabilityTicketV2;
+  body: string;
+};
+
+type GatewayLinkOptions = {
+  gatewayUrl: string;
+  enrollmentCredential: string;
+  jwksUrl: string;
+  runtime: SpilledCinemaNodeRuntime;
+  execute: Parameters<SpilledCinemaNodeRuntime["handleEncryptedRemoteRequest"]>[0]["execute"];
+};
+
+type JwksResponse = {
+  keys: Array<JsonWebKey & { kid?: string }>;
+};
+
+export class ManagedGatewayLink {
+  private socket: WebSocket | null = null;
+  private stopped = true;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempts = 0;
+  private jwksCache: { expiresAt: number; keys: Map<string, string> } | null = null;
+  private readonly options: GatewayLinkOptions;
+
+  constructor(options: GatewayLinkOptions) {
+    this.options = options;
+  }
+
+  start() {
+    if (!this.stopped) return;
+    this.stopped = false;
+    void this.connect();
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.socket?.close(1000, "Node shutting down.");
+    this.socket = null;
+  }
+
+  getStatus() {
+    return {
+      connected: this.socket?.readyState === WebSocket.OPEN,
+      reconnectAttempts: this.reconnectAttempts,
+    };
+  }
+
+  private async connect() {
+    if (this.stopped) return;
+    try {
+      const identity = await this.options.runtime.getTransportIdentityRecord();
+      const base = this.options.gatewayUrl.replace(/\/$/, "").replace(/^http/, "ws");
+      const url = `${base}/v2/nodes/${encodeURIComponent(identity.nodeId)}/connect?role=node`;
+      const socket = new WebSocket(url, ["spilled-v2"], {
+        headers: {
+          "X-Spilled-Node-Enrollment": this.options.enrollmentCredential,
+          "X-Spilled-Protocol-Version": "2",
+        },
+        maxPayload: 1024 * 1024,
+        handshakeTimeout: 15_000,
+      });
+      this.socket = socket;
+      socket.on("open", () => {
+        this.reconnectAttempts = 0;
+      });
+      socket.on("message", (data) => {
+        void this.handleFrame(data.toString()).catch(() => {
+          socket.close(4002, "Invalid or unauthorized RPC frame.");
+        });
+      });
+      socket.on("close", () => {
+        if (this.socket === socket) this.socket = null;
+        this.scheduleReconnect();
+      });
+      socket.on("error", () => {
+        // close schedules the bounded retry.
+      });
+    } catch {
+      this.scheduleReconnect();
+    }
+  }
+
+  private scheduleReconnect() {
+    if (this.stopped || this.reconnectTimer) return;
+    this.reconnectAttempts += 1;
+    const base = Math.min(30_000, 500 * 2 ** Math.min(this.reconnectAttempts, 6));
+    const delay = Math.floor(base * (0.75 + Math.random() * 0.5));
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  private async loadSigningKey(keyId: string) {
+    const now = Date.now();
+    if (!this.jwksCache || this.jwksCache.expiresAt <= now) {
+      const response = await fetch(this.options.jwksUrl, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`JWKS request failed with ${response.status}.`);
+      const payload = await response.json() as JwksResponse;
+      const keys = new Map<string, string>();
+      for (const jwk of payload.keys ?? []) {
+        if (jwk.kid && jwk.kty === "OKP" && jwk.crv === "Ed25519") {
+          keys.set(jwk.kid, createPublicKey({
+            key: jwk as import("node:crypto").JsonWebKey,
+            format: "jwk",
+          }).export({
+            type: "spki",
+            format: "pem",
+          }).toString());
+        }
+      }
+      this.jwksCache = { keys, expiresAt: now + 5 * 60_000 };
+    }
+    const key = this.jwksCache.keys.get(keyId);
+    if (!key) throw new Error(`Control-plane signing key "${keyId}" is unavailable.`);
+    return key;
+  }
+
+  private async handleFrame(raw: string) {
+    const frame = JSON.parse(raw) as Partial<GatewayFrame>;
+    if (
+      frame.version !== 2 ||
+      typeof frame.requestId !== "string" ||
+      typeof frame.ticketId !== "string" ||
+      typeof frame.body !== "string" ||
+      !frame.ticket ||
+      frame.ticket.ticketId !== frame.ticketId
+    ) {
+      throw new Error("Gateway RPC frame is invalid.");
+    }
+    const envelope = JSON.parse(frame.body) as EncryptedRequestEnvelopeV2;
+    if (envelope.requestId !== frame.requestId || envelope.ticketId !== frame.ticketId) {
+      throw new Error("Gateway routing metadata does not match the encrypted envelope.");
+    }
+    const response = await this.options.runtime.handleEncryptedRemoteRequest({
+      ticket: frame.ticket,
+      envelope,
+      controlPlanePublicKey: await this.loadSigningKey(frame.ticket.keyId),
+      execute: this.options.execute,
+    });
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("Gateway disconnected before the RPC response was ready.");
+    }
+    this.socket.send(JSON.stringify({
+      version: 2,
+      requestId: frame.requestId,
+      ticketId: frame.ticketId,
+      clientId: frame.clientId,
+      ticket: frame.ticket,
+      body: JSON.stringify(response),
+    } satisfies GatewayFrame));
+  }
+}

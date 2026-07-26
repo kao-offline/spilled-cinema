@@ -1,5 +1,8 @@
 {
   "name": "@spilledcinema/security",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@node-rs/argon2": "^2.0.2"
+  }
 }

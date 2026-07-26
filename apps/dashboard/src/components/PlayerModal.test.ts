@@ -4,13 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("universal playback modal policy", () => {
-  it("keeps provider playback as a last resort when direct extraction fails", () => {
+  it("never falls back to a provider iframe or raw provider stream", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
-    expect(source).toContain("<iframe");
-    expect(source).toContain("activeProviderFrameUrl");
-    expect(source).toContain("providerInteractionUnlocked");
+    expect(source).not.toContain("<iframe");
+    expect(source).not.toContain("activeProviderFrameUrl");
+    expect(source).not.toContain("providerInteractionUnlocked");
+    expect(source).not.toContain("Open provider page");
+    expect(source).not.toContain("canRetryRawPlaybackUrl");
     expect(source).not.toContain('playback?.streamType === "embed"');
-    expect(source).not.toContain("sandbox=");
   });
 
   it("resolves remote players automatically into the universal player", () => {

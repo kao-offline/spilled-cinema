@@ -339,6 +339,57 @@ describe("library storage imports", () => {
     expect(shared?.metadata?.actors.map((actor) => actor.name)).toEqual(["Local Actor", "Vault Actor"]);
   });
 
+  it("keeps episodes added to a newer vault snapshot when a stale client reconciles", () => {
+    const baseEpisode = showFixture({ slug: "silo", title: "Silo", mediaType: "serial" }).episodes[0];
+    const local = normalizeLibraryStateCandidate({
+      shows: [showFixture({
+        slug: "silo",
+        title: "Silo",
+        mediaType: "serial",
+        episodes: [
+          {
+            ...baseEpisode,
+            id: "silo:s02e10",
+            seasonNumber: 2,
+            episodeNumber: 10,
+            episodeCode: "s02e10",
+          },
+        ],
+      })],
+    });
+    const vault = normalizeLibraryStateCandidate({
+      shows: [showFixture({
+        slug: "silo",
+        title: "Silo",
+        mediaType: "serial",
+        episodes: [
+          {
+            ...baseEpisode,
+            id: "silo:s02e10",
+            seasonNumber: 2,
+            episodeNumber: 10,
+            episodeCode: "s02e10",
+          },
+          {
+            ...baseEpisode,
+            id: "silo:s03e01",
+            seasonNumber: 3,
+            episodeNumber: 1,
+            episodeCode: "s03e01",
+          },
+        ],
+      })],
+    });
+
+    const merged = mergeLibraryStates(local, vault);
+    const silo = merged.shows.find((show) => show.slug === "silo");
+    expect(silo?.episodes.map((episode) => episode.id)).toEqual([
+      "silo:s02e10",
+      "silo:s03e01",
+    ]);
+    expect(silo?.availableSeasons).toEqual([1, 2, 3]);
+  });
+
   it("hydrates legacy fields into unified metadata and artwork", () => {
     upsertImportedShow(showFixture({
       slug: "vidking-movie-2",

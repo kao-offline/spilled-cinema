@@ -2,12 +2,55 @@
   "name": "@spilledcinema/client-native",
   "private": true,
   "version": "0.1.0",
+  "description": "Spilled local companion and private media node",
+  "author": "Overload Studio",
   "main": "main.js",
   "scripts": {
     "dev": "node launch.js",
-    "start": "node launch.js"
+    "start": "node launch.js",
+    "build:resources": "npm run build -w apps/dashboard && npm run build -w @spilledcinema/server",
+    "dist:windows": "npm run build:resources && electron-builder --win nsis"
   },
   "dependencies": {
-    "electron": "^35.5.1"
+    "@node-rs/argon2": "^2.0.2",
+    "node-datachannel": "^0.31.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "studio.overload.spilled",
+    "productName": "Spilled",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../server/dist",
+        "to": "server"
+      },
+      {
+        "from": "../../dashboard/dist",
+        "to": "dashboard"
+      }
+    ],
+    "win": {
+      "icon": "../../icon-dark-rounded.png",
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Spilled-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

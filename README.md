@@ -1,5 +1,7 @@
 # SpilledCinema
 
+Production node and managed gateway setup: [docs/node-v2-setup.md](docs/node-v2-setup.md).
+
 SpilledCinema is now a monorepo, not a single `spilled-library` app.
 
 ## Structure

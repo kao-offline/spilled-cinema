@@ -1,0 +1,12 @@
+services:
+  spilled-verifier:
+    build:
+      context: .
+      dockerfile: apps/verifier/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SPILLED_CONTROL_PLANE_URL: ${SPILLED_CONTROL_PLANE_URL:?required}
+      SPILLED_GATEWAY_URL: ${SPILLED_GATEWAY_URL:?required}
+      SPILLED_CONTROL_PLANE_SECRET: ${SPILLED_CONTROL_PLANE_SECRET:?required}
+      SPILLED_VERIFIER_PROBES_JSON: ${SPILLED_VERIFIER_PROBES_JSON:-{}}

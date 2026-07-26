@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -50,9 +51,14 @@ apps/extractor/.spilledcinema-data/
 
 # local app artifacts
 apps/dashboard/dist/
+apps/server/dist/
 apps/client/extension/dist/
+apps/client/native/dist/
 apps/extractor/.next/
+apps/extractor/.next-build/
 test-results/
+deployment-secrets.json
+node-enrollment.json
 tmp-dashboard-*.log
 tmp-dashboard-home.png
 

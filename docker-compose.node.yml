@@ -1,0 +1,40 @@
+services:
+  spilled-node:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      SPILLED_NODE_MODE: ${SPILLED_NODE_MODE:-local}
+      SPILLED_NODE_DATABASE: /data/database/node.db
+      SPILLED_MASTER_KEY_FILE: /run/secrets/spilled_master_key
+      SPILLED_SECRET_RECORDS_FILE: /data/config/secrets.json
+      SPILLED_VAULT_PATH: /data/vault
+      SPILLED_GATEWAY_URL: ${SPILLED_GATEWAY_URL:-}
+      SPILLED_GATEWAY_ENROLLMENT: ${SPILLED_GATEWAY_ENROLLMENT:-}
+      SPILLED_CONTROL_PLANE_JWKS_URL: ${SPILLED_CONTROL_PLANE_JWKS_URL:-}
+      SPILLED_PASSKEY_ORIGIN: ${SPILLED_PASSKEY_ORIGIN:-}
+      SPILLED_PUBLIC_CAPABILITIES: ${SPILLED_PUBLIC_CAPABILITIES:-}
+      SPILLED_PUBLIC_TEMP_PATH: /data/tmp
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - spilled_database:/data/database
+      - spilled_config:/data/config
+      - spilled_vault:/data/vault
+      - spilled_tmp:/data/tmp
+    secrets:
+      - spilled_master_key
+
+volumes:
+  spilled_database:
+  spilled_config:
+  spilled_vault:
+  spilled_tmp:
+
+secrets:
+  spilled_master_key:
+    file: ${SPILLED_MASTER_KEY_FILE:?SPILLED_MASTER_KEY_FILE is required}

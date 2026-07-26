@@ -377,6 +377,12 @@ export type IntegrationRuntimeManifest = {
   apiVersion: 2;
   entry: string;
   integrity?: string;
+  format?: "builtin" | "wasm" | "javascript";
+  publisherKeyId?: string;
+  signature?: string;
+  allowedMethods?: Array<"GET" | "POST">;
+  maxResponseBytes?: number;
+  timeoutMs?: number;
 };
 
 export type IntegrationConfigSchemaField = {

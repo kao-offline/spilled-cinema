@@ -5,6 +5,10 @@ declare global {
     spilledNative?: {
       kind: "native";
       serverUrl: string;
+      requestRuntime: (
+        path: string,
+        init?: { method?: string; body?: unknown; headers?: Record<string, string> },
+      ) => Promise<{ status: number; data: unknown }>;
       getStatus: () => Promise<unknown>;
       connectVault: () => Promise<{ name: string; path: string }>;
       disconnectVault: () => Promise<{ ok: boolean }>;
