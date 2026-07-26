@@ -8,6 +8,7 @@ import { createFileTransferSource, type RelayOnlyBulkTransferManager } from "./b
 type Handler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
 
 type HandlerSet = {
+  searchHandler: Handler;
   providerSearchHandler: Handler;
   providerFeedHandler: Handler;
   providerImportHandler: Handler;
@@ -73,7 +74,11 @@ export function createV2RpcExecutor(
     const params = asRecord(request.params);
     switch (request.method) {
       case "provider.search":
-        return await invokeJsonHandler(handlers.providerSearchHandler, "POST", params);
+        return await invokeJsonHandler(
+          typeof params.moduleId === "string" ? handlers.providerSearchHandler : handlers.searchHandler,
+          "POST",
+          params,
+        );
       case "provider.feed":
         return await invokeJsonHandler(handlers.providerFeedHandler, "POST", params);
       case "provider.import":

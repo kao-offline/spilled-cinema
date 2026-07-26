@@ -389,30 +389,18 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     : {};
 
   if (path === "/api/search") {
-    const settled = await Promise.allSettled(["bombuj", "svetserialu"].map(async (moduleId) => {
-      return await requestPublicGateway(
-        "provider.search",
-        "search",
-        "provider.search",
-        { ...body, moduleId },
-      );
-    }));
-    const successful = settled.flatMap((entry) =>
-      entry.status === "fulfilled" && entry.value !== null ? [entry.value] : []);
-    if (successful.length === 0) return null;
-    const results = successful.flatMap((entry) => {
-      const data = entry.data as { results?: unknown[] } | null;
-      return Array.isArray(data?.results) ? data.results : [];
-    });
-    const uniqueResults = Array.from(new Map(results.map((entry) => {
-      const result = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
-      return [`${String(result.platform ?? result.moduleId ?? "")}:${String(result.slug ?? result.id ?? result.title ?? "")}`, entry];
-    })).values());
+    const response = await requestPublicGateway(
+      "provider.search",
+      "search",
+      "provider.search",
+      body,
+    );
+    if (!response) return null;
     return {
       ok: true,
       status: 200,
-      data: { results: uniqueResults } as T,
-      origin: successful[0]?.nodeId,
+      data: response.data as T,
+      origin: response.nodeId,
       transport: "gateway",
     };
   }
