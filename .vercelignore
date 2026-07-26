@@ -7,5 +7,17 @@ apps/dashboard/.vercel/output
 apps/dashboard/.vercel/node
 apps/dashboard/.spilledcinema
 apps/dashboard/.env*
+apps/client/native/dist
+apps/server-windows/release
+apps/server-windows/server
+apps/extractor/.next
+apps/extractor/.next-build
+apps/server/dist
+downloads
+.spilledcinema
+**/.spilledcinema
+*.mp4
+*.mkv
+*.webm
 *.tsbuildinfo
 **/*.tsbuildinfo
