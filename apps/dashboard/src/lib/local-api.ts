@@ -1,9 +1,11 @@
+import { requestPublicGateway } from "./v2-gateway-client";
+
 type RuntimeApiResult<T> = {
   ok: boolean;
   status: number;
   data: T;
   origin?: string;
-  transport: "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted";
+  transport: "native" | "extension" | "direct" | "node" | "fetch-server" | "gateway" | "hosted";
 };
 
 type JsonRequestInit = {
@@ -381,6 +383,86 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
   return lastFailure;
 }
 
+async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  const body = init.body && typeof init.body === "object" && !Array.isArray(init.body)
+    ? init.body as Record<string, unknown>
+    : {};
+
+  if (path === "/api/search") {
+    const settled = await Promise.allSettled(["bombuj", "svetserialu"].map(async (moduleId) => {
+      return await requestPublicGateway(
+        "provider.search",
+        "search",
+        "provider.search",
+        { ...body, moduleId },
+      );
+    }));
+    const successful = settled.flatMap((entry) =>
+      entry.status === "fulfilled" && entry.value !== null ? [entry.value] : []);
+    if (successful.length === 0) return null;
+    const results = successful.flatMap((entry) => {
+      const data = entry.data as { results?: unknown[] } | null;
+      return Array.isArray(data?.results) ? data.results : [];
+    });
+    const uniqueResults = Array.from(new Map(results.map((entry) => {
+      const result = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+      return [`${String(result.platform ?? result.moduleId ?? "")}:${String(result.slug ?? result.id ?? result.title ?? "")}`, entry];
+    })).values());
+    return {
+      ok: true,
+      status: 200,
+      data: { results: uniqueResults } as T,
+      origin: successful[0]?.nodeId,
+      transport: "gateway",
+    };
+  }
+
+  const operation = (() => {
+    if (path === "/api/provider-search") {
+      return { capability: "provider.search" as const, action: "search", method: "provider.search", params: body };
+    }
+    if (path === "/api/provider-feed") {
+      return { capability: "provider.feed" as const, action: "feed", method: "provider.feed", params: body };
+    }
+    if (path === "/api/provider-import") {
+      return { capability: "provider.import" as const, action: "import", method: "provider.import", params: body };
+    }
+    if (path === "/api/import-svetserialu") {
+      return {
+        capability: "provider.import" as const,
+        action: "import",
+        method: "provider.import",
+        params: { ...body, moduleId: "svetserialu" },
+      };
+    }
+    if (path === "/api/import-bombuj") {
+      return {
+        capability: "provider.import" as const,
+        action: "import",
+        method: "provider.import",
+        params: { ...body, moduleId: "bombuj" },
+      };
+    }
+    return null;
+  })();
+  if (!operation) return null;
+
+  const response = await requestPublicGateway(
+    operation.capability,
+    operation.action,
+    operation.method,
+    operation.params,
+  );
+  if (!response) return null;
+  return {
+    ok: true,
+    status: 200,
+    data: response.data as T,
+    origin: response.nodeId,
+    transport: "gateway",
+  };
+}
+
 function shouldTryNextRuntime<T>(result: RuntimeApiResult<T>) {
   if (result.ok) {
     return false;
@@ -455,6 +537,15 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     }
   } catch {
     // Fall through to discovered fetch servers.
+  }
+
+  try {
+    const gateway = await fetchViaV2Gateway<T>(path, init);
+    if (gateway) {
+      return gateway;
+    }
+  } catch {
+    // Fall through to legacy public fetch servers.
   }
 
   try {

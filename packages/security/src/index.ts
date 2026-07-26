@@ -1,6 +1,4 @@
 import {
-  createCipheriv,
-  createDecipheriv,
   createHash,
   createPrivateKey,
   createPublicKey,
@@ -13,6 +11,7 @@ import {
   sign as cryptoSign,
   verify as cryptoVerify,
 } from "node:crypto";
+import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
 import type {
   AnonymousSessionGrant,
@@ -171,6 +170,27 @@ function deriveTransportKey(sharedSecret: Buffer, requestId: string, ticketId: s
   ));
 }
 
+function encryptChaCha20Poly1305(key: Buffer, nonce: Buffer, aad: Buffer, plaintext: Buffer) {
+  const sealed = chacha20poly1305(key, nonce, aad).encrypt(plaintext);
+  return {
+    ciphertext: Buffer.from(sealed.subarray(0, -16)),
+    authenticationTag: Buffer.from(sealed.subarray(-16)),
+  };
+}
+
+function decryptChaCha20Poly1305(
+  key: Buffer,
+  nonce: Buffer,
+  aad: Buffer,
+  ciphertext: Buffer,
+  authenticationTag: Buffer,
+) {
+  return Buffer.from(chacha20poly1305(key, nonce, aad).decrypt(Buffer.concat([
+    ciphertext,
+    authenticationTag,
+  ])));
+}
+
 function transportAad(envelope: Pick<
   EncryptedRequestEnvelopeV2,
   "version" | "requestId" | "ticketId" | "issuedAt" | "expiresAt" | "nonce" | "clientEphemeralKey"
@@ -215,17 +235,12 @@ export function createEncryptedNodeRequest(input: {
   });
   const key = deriveTransportKey(sharedSecret, input.requestId, input.ticketId);
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
-  const cipher = createCipheriv("chacha20-poly1305", key, cipherNonce, { authTagLength: 16 });
   const plaintext = typeof input.plaintext === "string" ? Buffer.from(input.plaintext, "utf8") : input.plaintext;
-  cipher.setAAD(transportAad(envelopeHeader), { plaintextLength: plaintext.length });
-  const ciphertext = Buffer.concat([
-    cipher.update(plaintext),
-    cipher.final(),
-  ]);
+  const encrypted = encryptChaCha20Poly1305(key, cipherNonce, transportAad(envelopeHeader), plaintext);
   const envelope: EncryptedRequestEnvelopeV2 = {
     ...envelopeHeader,
-    ciphertext: base64UrlEncode(ciphertext),
-    authenticationTag: base64UrlEncode(cipher.getAuthTag()),
+    ciphertext: base64UrlEncode(encrypted.ciphertext),
+    authenticationTag: base64UrlEncode(encrypted.authenticationTag),
   };
   return {
     envelope,
@@ -251,9 +266,8 @@ export function decryptNodeRequest(
     throw new Error("Encrypted request nonce must be 192 bits.");
   }
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
-  const decipher = createDecipheriv("chacha20-poly1305", key, cipherNonce, { authTagLength: 16 });
   const ciphertext = base64UrlDecode(envelope.ciphertext);
-  decipher.setAAD(transportAad({
+  return decryptChaCha20Poly1305(key, cipherNonce, transportAad({
     version: envelope.version,
     requestId: envelope.requestId,
     ticketId: envelope.ticketId,
@@ -261,12 +275,7 @@ export function decryptNodeRequest(
     expiresAt: envelope.expiresAt,
     nonce: envelope.nonce,
     clientEphemeralKey: envelope.clientEphemeralKey,
-  }), { plaintextLength: ciphertext.length });
-  decipher.setAuthTag(base64UrlDecode(envelope.authenticationTag));
-  return Buffer.concat([
-    decipher.update(ciphertext),
-    decipher.final(),
-  ]);
+  }), ciphertext, base64UrlDecode(envelope.authenticationTag));
 }
 
 function responseAad(response: Pick<
@@ -297,13 +306,11 @@ export function encryptNodeResponse(input: {
   };
   const plaintext = typeof input.plaintext === "string" ? Buffer.from(input.plaintext, "utf8") : input.plaintext;
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
-  const cipher = createCipheriv("chacha20-poly1305", key, cipherNonce, { authTagLength: 16 });
-  cipher.setAAD(responseAad(header), { plaintextLength: plaintext.length });
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const encrypted = encryptChaCha20Poly1305(key, cipherNonce, responseAad(header), plaintext);
   return {
     ...header,
-    ciphertext: base64UrlEncode(ciphertext),
-    authenticationTag: base64UrlEncode(cipher.getAuthTag()),
+    ciphertext: base64UrlEncode(encrypted.ciphertext),
+    authenticationTag: base64UrlEncode(encrypted.authenticationTag),
   };
 }
 
@@ -331,16 +338,13 @@ export function decryptNodeResponse(input: {
   }
   const ciphertext = base64UrlDecode(input.response.ciphertext);
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
-  const decipher = createDecipheriv("chacha20-poly1305", key, cipherNonce, { authTagLength: 16 });
-  decipher.setAAD(responseAad({
+  return decryptChaCha20Poly1305(key, cipherNonce, responseAad({
     version: input.response.version,
     requestId: input.response.requestId,
     ticketId: input.response.ticketId,
     issuedAt: input.response.issuedAt,
     nonce: input.response.nonce,
-  }), { plaintextLength: ciphertext.length });
-  decipher.setAuthTag(base64UrlDecode(input.response.authenticationTag));
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  }), ciphertext, base64UrlDecode(input.response.authenticationTag));
 }
 
 export class TicketReplayWindow {

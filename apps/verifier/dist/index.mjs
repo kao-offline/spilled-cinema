@@ -4,8 +4,6 @@ import WebSocket from "ws";
 
 // ../../packages/security/src/index.ts
 import {
-  createCipheriv,
-  createDecipheriv,
   createHash,
   createPrivateKey,
   createPublicKey,
@@ -18,6 +16,7 @@ import {
   sign as cryptoSign,
   verify as cryptoVerify
 } from "node:crypto";
+import { chacha20poly1305 } from "@noble/ciphers/chacha";
 import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
 function base64UrlEncode(buffer) {
   return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
@@ -45,6 +44,19 @@ function deriveTransportKey(sharedSecret, requestId, ticketId) {
     32
   ));
 }
+function encryptChaCha20Poly1305(key, nonce, aad, plaintext) {
+  const sealed = chacha20poly1305(key, nonce, aad).encrypt(plaintext);
+  return {
+    ciphertext: Buffer.from(sealed.subarray(0, -16)),
+    authenticationTag: Buffer.from(sealed.subarray(-16))
+  };
+}
+function decryptChaCha20Poly1305(key, nonce, aad, ciphertext, authenticationTag) {
+  return Buffer.from(chacha20poly1305(key, nonce, aad).decrypt(Buffer.concat([
+    ciphertext,
+    authenticationTag
+  ])));
+}
 function transportAad(envelope) {
   return Buffer.from(stableStringify(envelope), "utf8");
 }
@@ -67,17 +79,12 @@ function createEncryptedNodeRequest(input) {
   });
   const key = deriveTransportKey(sharedSecret, input.requestId, input.ticketId);
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
-  const cipher = createCipheriv("chacha20-poly1305", key, cipherNonce, { authTagLength: 16 });
   const plaintext = typeof input.plaintext === "string" ? Buffer.from(input.plaintext, "utf8") : input.plaintext;
-  cipher.setAAD(transportAad(envelopeHeader), { plaintextLength: plaintext.length });
-  const ciphertext = Buffer.concat([
-    cipher.update(plaintext),
-    cipher.final()
-  ]);
+  const encrypted = encryptChaCha20Poly1305(key, cipherNonce, transportAad(envelopeHeader), plaintext);
   const envelope = {
     ...envelopeHeader,
-    ciphertext: base64UrlEncode(ciphertext),
-    authenticationTag: base64UrlEncode(cipher.getAuthTag())
+    ciphertext: base64UrlEncode(encrypted.ciphertext),
+    authenticationTag: base64UrlEncode(encrypted.authenticationTag)
   };
   return {
     envelope,
@@ -102,16 +109,13 @@ function decryptNodeResponse(input) {
   }
   const ciphertext = base64UrlDecode(input.response.ciphertext);
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
-  const decipher = createDecipheriv("chacha20-poly1305", key, cipherNonce, { authTagLength: 16 });
-  decipher.setAAD(responseAad({
+  return decryptChaCha20Poly1305(key, cipherNonce, responseAad({
     version: input.response.version,
     requestId: input.response.requestId,
     ticketId: input.response.ticketId,
     issuedAt: input.response.issuedAt,
     nonce: input.response.nonce
-  }), { plaintextLength: ciphertext.length });
-  decipher.setAuthTag(base64UrlDecode(input.response.authenticationTag));
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  }), ciphertext, base64UrlDecode(input.response.authenticationTag));
 }
 function verifyPayload(payload, signature, publicKeyPem) {
   const body = stableStringify(payload);
@@ -127,8 +131,14 @@ if (!baseUrl || !gatewayUrl || !adminSecret) {
 }
 var configuredProbes = JSON.parse(process.env.SPILLED_VERIFIER_PROBES_JSON || "{}");
 var defaultProbes = {
-  "provider.search": { method: "provider.search", params: { query: "Silo", limit: 1 } },
-  "provider.feed": { method: "provider.feed", params: { limit: 1 } }
+  "provider.search": {
+    method: "provider.search",
+    params: { moduleId: "bombuj", query: "Silo", limit: 1 }
+  },
+  "provider.feed": {
+    method: "provider.feed",
+    params: { moduleId: "bombuj", feedId: "latest-movies", limit: 1 }
+  }
 };
 var actions = {
   "provider.search": "search",
@@ -184,7 +194,10 @@ async function probe(candidate, capability) {
     { handshakeTimeout: 15e3, maxPayload: ticket.maxResponseBytes + 64 * 1024 }
   );
   const response = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Capability probe timed out.")), 3e4);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error("Capability probe timed out."));
+    }, 3e4);
     socket.once("open", () => socket.send(JSON.stringify({
       version: 2,
       requestId,
@@ -203,7 +216,14 @@ async function probe(candidate, capability) {
         socket.close();
       }
     });
-    socket.once("error", reject);
+    socket.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    socket.once("close", (code, reason) => {
+      clearTimeout(timeout);
+      reject(new Error(`Gateway closed the probe (${code}: ${reason.toString() || "no reason"}).`));
+    });
   });
   const payload = JSON.parse(decryptNodeResponse({
     response,
@@ -219,19 +239,22 @@ async function verifyCandidate(candidate) {
     transportPublicKey: candidate.identity.x25519PublicKey,
     keyVersion: candidate.identity.keyVersion
   }, candidate.identity.transportKeySignature, candidate.identity.ed25519PublicKey);
-  const results = [];
-  for (const capability of candidate.advertisedCapabilities) {
+  const results = await Promise.all(candidate.advertisedCapabilities.map(async (capability) => {
     let status2 = "degraded";
     if (identityValid && candidate.online) {
       try {
         status2 = await probe(candidate, capability);
-      } catch {
+      } catch (error) {
+        console.error(
+          `[verifier] ${candidate.nodeId} ${capability}:`,
+          error instanceof Error ? error.message : String(error)
+        );
         status2 = "degraded";
       }
     }
-    results.push({ capability, status: status2 });
-  }
-  const status = identityValid && candidate.online && results.length > 0 && results.every((entry) => entry.status === "verified") ? "verified" : identityValid ? "degraded" : "quarantined";
+    return { capability, status: status2 };
+  }));
+  const status = identityValid && candidate.online && results.some((entry) => entry.status === "verified") ? "verified" : identityValid ? "degraded" : "quarantined";
   const response = await controlPlane("/v2/nodes/verification", {
     method: "POST",
     body: JSON.stringify({ nodeId: candidate.nodeId, status, capabilities: results })
@@ -242,9 +265,7 @@ async function runOnce() {
   const response = await controlPlane("/v2/nodes/verification-candidates?limit=20");
   if (!response.ok) throw new Error(`Candidate request failed: ${response.status}.`);
   const payload = await response.json();
-  for (const candidate of payload.candidates ?? []) {
-    await verifyCandidate(candidate);
-  }
+  await Promise.allSettled((payload.candidates ?? []).map((candidate) => verifyCandidate(candidate)));
 }
 await runOnce();
 if (process.env.SPILLED_VERIFIER_ONCE !== "1") {

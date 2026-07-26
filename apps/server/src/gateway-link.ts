@@ -79,20 +79,31 @@ export class ManagedGatewayLink {
       this.socket = socket;
       socket.on("open", () => {
         this.reconnectAttempts = 0;
+        console.log("[managed-gateway] encrypted node link connected");
       });
       socket.on("message", (data) => {
-        void this.handleFrame(data.toString()).catch(() => {
+        void this.handleFrame(data.toString()).catch((error) => {
+          console.error(
+            "[managed-gateway] rejected RPC frame:",
+            error instanceof Error ? error.message : String(error),
+          );
           socket.close(4002, "Invalid or unauthorized RPC frame.");
         });
       });
-      socket.on("close", () => {
+      socket.on("close", (code, reason) => {
+        console.warn(`[managed-gateway] node link closed (${code}: ${reason.toString() || "no reason"})`);
         if (this.socket === socket) this.socket = null;
         this.scheduleReconnect();
       });
-      socket.on("error", () => {
+      socket.on("error", (error) => {
+        console.warn(`[managed-gateway] node link error: ${error.message}`);
         // close schedules the bounded retry.
       });
-    } catch {
+    } catch (error) {
+      console.warn(
+        "[managed-gateway] node link setup failed:",
+        error instanceof Error ? error.message : String(error),
+      );
       this.scheduleReconnect();
     }
   }

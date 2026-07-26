@@ -637,6 +637,26 @@ http.route({
 });
 
 http.route({
+  path: "/server/v2/discovery/nodes",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const url = new URL(req.url);
+    const capability = url.searchParams.get("capability");
+    if (!capability || !V2_CAPABILITIES.includes(capability)) {
+      return json({ error: "Unsupported v2 capability." }, { status: 400 });
+    }
+    const limit = clampLimit(url.searchParams.get("limit"), 10, 50);
+    const candidates = await ctx.runQuery(internal.controlPlane.listVerifiedV2Nodes, {
+      capability,
+      limit,
+    });
+    return json({ capability, candidates }, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }),
+});
+
+http.route({
   path: "/server/v2/tickets",
   method: "POST",
   handler: httpAction(async (ctx, req) => {

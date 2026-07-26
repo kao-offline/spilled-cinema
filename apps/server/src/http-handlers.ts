@@ -577,14 +577,19 @@ export function createHttpHandlers() {
         target.searchParams.append(key, value);
       }
 
+      const requestBody = req.method === "POST"
+        ? JSON.stringify(await readJsonBody(req))
+        : undefined;
       const response = await fetch(target.toString(), {
         method: req.method,
         headers: {
           Accept: "application/json",
+          ...(requestBody ? { "Content-Type": "application/json" } : {}),
           ...(req.headers?.["x-spilled-control-plane-secret"]
             ? { "x-spilled-control-plane-secret": String(req.headers["x-spilled-control-plane-secret"]) }
             : {}),
         },
+        body: requestBody,
       });
       const text = await response.text();
       try {

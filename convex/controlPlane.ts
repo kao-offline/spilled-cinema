@@ -666,6 +666,69 @@ export const getVerifiedV2NodeForTicket = internalQuery({
   },
 });
 
+export const listVerifiedV2Nodes = internalQuery({
+  args: {
+    capability: v.string(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(Math.max(Math.floor(args.limit), 1), 50);
+    const healthRows = await ctx.db
+      .query("nodeCapabilityHealth")
+      .withIndex("by_capability_and_status", (q) =>
+        q.eq("capability", args.capability).eq("status", "verified"))
+      .order("desc")
+      .take(limit * 3);
+    const candidates: Array<{
+      nodeId: string;
+      region?: string;
+      capacityClass: string;
+      protocolVersion: number;
+      identity: {
+        ed25519PublicKey: string;
+        x25519PublicKey: string;
+        transportKeySignature: string;
+        keyVersion: number;
+        protocolVersion: number;
+      };
+    }> = [];
+    for (const health of healthRows) {
+      if (candidates.length >= limit) break;
+      const registration = await ctx.db
+        .query("nodeRegistrations")
+        .withIndex("by_node_id", (q) => q.eq("nodeId", health.nodeId))
+        .unique();
+      if (registration?.status !== "verified") continue;
+      const heartbeat = await ctx.db
+        .query("nodeHeartbeatsV2")
+        .withIndex("by_node_id", (q) => q.eq("nodeId", health.nodeId))
+        .unique();
+      if (!heartbeat || heartbeat.expiresAt <= Date.now()) continue;
+      const identity = await ctx.db
+        .query("nodeIdentities")
+        .withIndex("by_node_id", (q) => q.eq("nodeId", health.nodeId))
+        .unique();
+      if (!identity) continue;
+      candidates.push({
+        nodeId: health.nodeId,
+        ...((registration.region ?? heartbeat.region)
+          ? { region: registration.region ?? heartbeat.region }
+          : {}),
+        capacityClass: heartbeat.capacityClass,
+        protocolVersion: heartbeat.protocolVersion,
+        identity: {
+          ed25519PublicKey: identity.ed25519PublicKey,
+          x25519PublicKey: identity.x25519PublicKey,
+          transportKeySignature: identity.transportKeySignature,
+          keyVersion: identity.keyVersion,
+          protocolVersion: identity.protocolVersion,
+        },
+      });
+    }
+    return candidates;
+  },
+});
+
 export const getReachablePrivateV2Node = internalQuery({
   args: { nodeId: v.string() },
   handler: async (ctx, args) => {

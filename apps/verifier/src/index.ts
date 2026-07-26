@@ -36,8 +36,14 @@ const configuredProbes = JSON.parse(process.env.SPILLED_VERIFIER_PROBES_JSON || 
   { method: string; params: Record<string, unknown>; contentId?: string }
 >;
 const defaultProbes: typeof configuredProbes = {
-  "provider.search": { method: "provider.search", params: { query: "Silo", limit: 1 } },
-  "provider.feed": { method: "provider.feed", params: { limit: 1 } },
+  "provider.search": {
+    method: "provider.search",
+    params: { moduleId: "bombuj", query: "Silo", limit: 1 },
+  },
+  "provider.feed": {
+    method: "provider.feed",
+    params: { moduleId: "bombuj", feedId: "latest-movies", limit: 1 },
+  },
 };
 const actions: Record<string, string> = {
   "provider.search": "search",
@@ -96,7 +102,10 @@ async function probe(candidate: Candidate, capability: Capability) {
     { handshakeTimeout: 15_000, maxPayload: ticket.maxResponseBytes + 64 * 1024 },
   );
   const response = await new Promise<EncryptedResponseEnvelopeV2>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Capability probe timed out.")), 30_000);
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error("Capability probe timed out."));
+    }, 30_000);
     socket.once("open", () => socket.send(JSON.stringify({
       version: 2,
       requestId,
@@ -115,7 +124,14 @@ async function probe(candidate: Candidate, capability: Capability) {
         socket.close();
       }
     });
-    socket.once("error", reject);
+    socket.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    socket.once("close", (code, reason) => {
+      clearTimeout(timeout);
+      reject(new Error(`Gateway closed the probe (${code}: ${reason.toString() || "no reason"}).`));
+    });
   });
   const payload = JSON.parse(decryptNodeResponse({
     response,
@@ -134,19 +150,22 @@ async function verifyCandidate(candidate: Candidate) {
       transportPublicKey: candidate.identity.x25519PublicKey,
       keyVersion: candidate.identity.keyVersion,
     }, candidate.identity.transportKeySignature, candidate.identity.ed25519PublicKey);
-  const results = [];
-  for (const capability of candidate.advertisedCapabilities) {
+  const results = await Promise.all(candidate.advertisedCapabilities.map(async (capability) => {
     let status: "verified" | "degraded" | "quarantined" = "degraded";
     if (identityValid && candidate.online) {
       try {
         status = await probe(candidate, capability);
-      } catch {
+      } catch (error) {
+        console.error(
+          `[verifier] ${candidate.nodeId} ${capability}:`,
+          error instanceof Error ? error.message : String(error),
+        );
         status = "degraded";
       }
     }
-    results.push({ capability, status });
-  }
-  const status = identityValid && candidate.online && results.length > 0 && results.every((entry) => entry.status === "verified")
+    return { capability, status };
+  }));
+  const status = identityValid && candidate.online && results.some((entry) => entry.status === "verified")
     ? "verified"
     : identityValid ? "degraded" : "quarantined";
   const response = await controlPlane("/v2/nodes/verification", {
@@ -160,9 +179,7 @@ async function runOnce() {
   const response = await controlPlane("/v2/nodes/verification-candidates?limit=20");
   if (!response.ok) throw new Error(`Candidate request failed: ${response.status}.`);
   const payload = await response.json() as { candidates?: Candidate[] };
-  for (const candidate of payload.candidates ?? []) {
-    await verifyCandidate(candidate);
-  }
+  await Promise.allSettled((payload.candidates ?? []).map((candidate) => verifyCandidate(candidate)));
 }
 
 await runOnce();
