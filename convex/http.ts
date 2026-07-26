@@ -15,6 +15,7 @@ const PUBLIC_TICKET_ACTIONS = {
   "spillshare.read": "manifest",
   "relay.stream": "stream",
 } as const;
+const V2_CAPABILITIES = Object.keys(PUBLIC_TICKET_ACTIONS);
 
 type PublicTicketCapability = keyof typeof PUBLIC_TICKET_ACTIONS;
 
@@ -302,6 +303,96 @@ http.route({
       advertisedCapabilities: body.advertisedCapabilities as string[],
     });
     return json(result);
+  }),
+});
+
+http.route({
+  path: "/server/v2/nodes/apply",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const body = (await parseJson(req)) as Record<string, unknown>;
+    const required = [
+      "nodeId",
+      "ed25519PublicKey",
+      "x25519PublicKey",
+      "transportKeySignature",
+      "installIdHash",
+      "enrollmentCredential",
+      "applicationSignature",
+    ];
+    if (
+      required.some((key) => typeof body[key] !== "string") ||
+      body.protocolVersion !== 2 ||
+      typeof body.keyVersion !== "number" ||
+      typeof body.issuedAt !== "number" ||
+      Math.abs(Date.now() - body.issuedAt) > 5 * 60_000 ||
+      !Array.isArray(body.advertisedCapabilities) ||
+      body.advertisedCapabilities.length > V2_CAPABILITIES.length ||
+      body.advertisedCapabilities.some((entry) => typeof entry !== "string" || !V2_CAPABILITIES.includes(entry))
+    ) {
+      return json({ error: "Invalid v2 node application." }, { status: 400 });
+    }
+    if (
+      (body.nodeId as string).length > 80 ||
+      (body.installIdHash as string).length > 128 ||
+      (body.enrollmentCredential as string).length < 32 ||
+      (body.enrollmentCredential as string).length > 256 ||
+      (body.ed25519PublicKey as string).length > 2_000 ||
+      (body.x25519PublicKey as string).length > 2_000
+    ) {
+      return json({ error: "Node application fields exceed their limits." }, { status: 400 });
+    }
+    try {
+      const publicKeyPem = body.ed25519PublicKey as string;
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(publicKeyPem));
+      if (body.nodeId !== `node_${toHex(digest).slice(0, 24)}`) {
+        return json({ error: "Node identity does not match its public key." }, { status: 401 });
+      }
+      const publicKey = await crypto.subtle.importKey(
+        "spki",
+        pemToDer(publicKeyPem),
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      const transportValid = await crypto.subtle.verify(
+        { name: "Ed25519" },
+        publicKey,
+        base64UrlToArrayBuffer(body.transportKeySignature as string),
+        new TextEncoder().encode(stableStringify({
+          nodeId: body.nodeId,
+          transportPublicKey: body.x25519PublicKey,
+          keyVersion: body.keyVersion,
+        })),
+      );
+      const { applicationSignature, ...application } = body;
+      const applicationValid = await crypto.subtle.verify(
+        { name: "Ed25519" },
+        publicKey,
+        base64UrlToArrayBuffer(applicationSignature as string),
+        new TextEncoder().encode(stableStringify(application)),
+      );
+      if (!transportValid || !applicationValid) {
+        return json({ error: "Node application signature is invalid." }, { status: 401 });
+      }
+    } catch {
+      return json({ error: "Node application signature is invalid." }, { status: 401 });
+    }
+    const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
+      nodeId: body.nodeId as string,
+      ed25519PublicKey: body.ed25519PublicKey as string,
+      x25519PublicKey: body.x25519PublicKey as string,
+      transportKeySignature: body.transportKeySignature as string,
+      installIdHash: body.installIdHash as string,
+      protocolVersion: 2,
+      keyVersion: body.keyVersion as number,
+      enrollmentCredentialHash: await sha256Base64Url(body.enrollmentCredential as string),
+      advertisedCapabilities: body.advertisedCapabilities as string[],
+    });
+    return json(result, {
+      status: 202,
+      headers: { "Cache-Control": "no-store" },
+    });
   }),
 });
 

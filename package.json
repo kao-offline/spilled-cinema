@@ -39,9 +39,11 @@
     "node:generate-v2-secrets": "node scripts/generate-v2-secrets.mjs",
     "node:enroll-v2": "node scripts/enroll-node-v2.mjs",
     "node:smoke-v2": "node scripts/smoke-server-v2.mjs",
+    "node:smoke-wizard": "node scripts/smoke-server-wizard.mjs",
     "node:smoke-native-v2": "node scripts/smoke-native-pipe-v2.mjs",
     "operator:configure-oidc": "node scripts/configure-operator-oidc.mjs",
     "release:validate-credentials": "node scripts/validate-production-credentials.mjs",
+    "release:server-windows": "npm run dist:windows -w @spilledcinema/server-windows",
     "connector:sign-wasm": "node scripts/sign-wasm-connector.mjs",
     "vault:update": "node scripts/update-vault-metadata.mjs",
     "dev": "concurrently \"npm run dev:extractor\" \"npm run dev:dashboard\""

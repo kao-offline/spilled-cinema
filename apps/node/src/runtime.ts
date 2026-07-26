@@ -702,6 +702,32 @@ export class SpilledCinemaNodeRuntime {
     };
   }
 
+  async createGatewayEnrollmentApplication(input: {
+    enrollmentCredential?: string;
+    advertisedCapabilities?: Capability[];
+    issuedAt?: number;
+  } = {}) {
+    const identity = await this.ensureIdentity();
+    const storedCredential = await this.storage.getProtectedSecret?.("gateway.enrollmentCredential");
+    const enrollmentCredential = input.enrollmentCredential ?? storedCredential ?? base64UrlEncode(randomBytes(32));
+    if (!storedCredential && this.storage.setProtectedSecret) {
+      await this.storage.setProtectedSecret("gateway.enrollmentCredential", enrollmentCredential);
+    }
+    const advertisedCapabilities = [...new Set(
+      input.advertisedCapabilities ?? [...this.getEnabledV2Capabilities()],
+    )].sort();
+    const application = {
+      ...(await this.getTransportIdentityRecord()),
+      enrollmentCredential,
+      advertisedCapabilities,
+      issuedAt: input.issuedAt ?? Date.now(),
+    };
+    return {
+      ...application,
+      applicationSignature: signPayload(application, identity.privateKey),
+    };
+  }
+
   async handleEncryptedRemoteRequest(input: {
     ticket: CapabilityTicketV2;
     envelope: EncryptedRequestEnvelopeV2;

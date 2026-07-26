@@ -56,6 +56,9 @@ apps/client/extension/dist/
 apps/client/native/dist/
 apps/extractor/.next/
 apps/extractor/.next-build/
+apps/server-windows/release/
+apps/server-windows/server/
+apps/server-windows/icon.png
 test-results/
 deployment-secrets.json
 node-enrollment.json

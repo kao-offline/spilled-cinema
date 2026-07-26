@@ -5,6 +5,42 @@ plane, Cloudflare Durable Object gateway, automated verifier, coturn relay,
 operator OIDC, signed WASM connectors, recovery, invitations, and signed
 Windows releases.
 
+## Headless Windows node: normal owner setup
+
+The manual production sections below are for Spilled infrastructure operators.
+An owner installing only the server on a spare Windows PC uses the release:
+
+1. Open this repository's GitHub Releases page.
+2. Download `Spilled-Server-Setup-<version>-x64.exe`.
+3. Run the installer and choose the installation directory if desired.
+4. Complete the local setup page that opens automatically.
+
+The wizard asks only for:
+
+- a recognizable server name;
+- the owner name and password;
+- whether the PC may help with search/catalog refresh, player resolution,
+  temporary download acceleration, or SpillShare.
+
+It does not ask for a port, database file, vault path, server URL, setup code,
+gateway credential, or Windows startup settings. The installer already
+contains the compiled server, Electron host, and native runtime dependencies;
+the spare PC does not need the repository, Git, Node.js, or npm. The server
+binds to loopback and stores its SQLite database, DPAPI-protected secrets,
+vault, temporary files, and logs under the Spilled Server user-data directory.
+
+To reopen the wizard, visit `http://127.0.0.1:8787/setup` on the server PC. To
+start the server manually, use the **Spilled Server** Start Menu shortcut. The
+tray menu provides setup, health, logs, restart, start-with-Windows, and quit
+controls.
+
+Release maintainers build the installer with:
+
+```powershell
+npm ci
+npm run release:server-windows
+```
+
 ## 1. What you must own
 
 The repository cannot create trusted credentials on your behalf. Obtain:

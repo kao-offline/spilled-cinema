@@ -217,6 +217,8 @@ function delay(ms: number) {
 export interface NodeStorage {
   read(): Promise<NodeStateFile>;
   write(state: NodeStateFile): Promise<void>;
+  getProtectedSecret?(key: string): Promise<string | null>;
+  setProtectedSecret?(key: string, value: string): Promise<void>;
 }
 
 export interface SecretStore {
@@ -583,6 +585,14 @@ export class SqliteNodeStorage implements NodeStorage {
     } catch (error) {
       throw new NodeStateRecoveryError(dbPath, error);
     }
+  }
+
+  async getProtectedSecret(key: string) {
+    return await this.secrets.get(key);
+  }
+
+  async setProtectedSecret(key: string, value: string) {
+    await this.secrets.set(key, value);
   }
 
   private initialize() {
