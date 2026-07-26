@@ -1083,8 +1083,8 @@ export async function searchSvetSerialu(query: string, credentials?: SvetSerialu
   }
 
   const [algoliaFinal, legacyFinal] = await Promise.all([
-    algoliaFast ?? waitForSearch(algoliaSearch, 500),
-    legacyFast ?? waitForSearch(legacySearch, 500),
+    algoliaFast ?? waitForSearch(algoliaSearch, 2_000),
+    legacyFast ?? waitForSearch(legacySearch, 2_000),
   ]);
 
   return mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);

@@ -120,8 +120,8 @@ async function runParallelProviderSearch(
   query: string,
   options: { svetserialuCredentials?: SvetSerialuCredentials | null },
 ) {
-  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "850", 10);
-  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "2200", 10);
+  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "3500", 10);
+  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "3500", 10);
   const withSearchBudget = async <T>(search: Promise<T[]>, budgetMs = timeoutMs) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -147,13 +147,15 @@ async function runParallelProviderSearch(
     ...(vidking.status === "fulfilled" ? vidking.value : []),
     ...(svet.status === "fulfilled" ? svet.value : []),
     ...(bomb.status === "fulfilled" ? bomb.value : []),
-  ].map<RemoteSearchItem>((item, index) => ({
-    ...item,
-    matchScore: Math.max(
-      typeof item.matchScore === "number" ? item.matchScore : 0,
-      scoreSearchCandidate(query, [item.title, item.slug, item.year], index),
-    ),
-  }));
+  ]
+    .filter((item) => hasProviderSearchTokenCoverage(query, item))
+    .map<RemoteSearchItem>((item, index) => ({
+      ...item,
+      matchScore: Math.max(
+        typeof item.matchScore === "number" ? item.matchScore : 0,
+        scoreSearchCandidate(query, [item.title, item.slug, item.year], index),
+      ),
+    }));
 
   // Apply confidence pruning inside each provider. A perfect match from one
   // catalog must not erase a valid, playable match from another catalog.
@@ -203,6 +205,27 @@ function normalizeBridgeText(value: string | null | undefined) {
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+export function hasProviderSearchTokenCoverage(
+  query: string,
+  item: Pick<RemoteSearchItem, "title" | "slug" | "alternateTitles">,
+) {
+  const queryTokens = normalizeBridgeText(query).split(" ").filter(Boolean);
+  if (queryTokens.length === 0) return false;
+  const fieldTokens = [
+    item.title,
+    item.slug,
+    ...(item.alternateTitles ?? []),
+  ].flatMap((field) => normalizeBridgeText(field).split(" ").filter(Boolean));
+
+  return queryTokens.every((queryToken) =>
+    fieldTokens.some((fieldToken) =>
+      fieldToken === queryToken ||
+      fieldToken.startsWith(queryToken) ||
+      (queryToken.length >= 4 && fieldToken.length >= 4 && queryToken.startsWith(fieldToken)),
+    ),
+  );
 }
 
 export async function verifySvetSerialuCredentials(credentials?: SvetSerialuCredentials | null) {
