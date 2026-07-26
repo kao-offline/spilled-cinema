@@ -44,6 +44,10 @@
     "operator:configure-oidc": "node scripts/configure-operator-oidc.mjs",
     "release:validate-credentials": "node scripts/validate-production-credentials.mjs",
     "release:server-windows": "npm run dist:windows -w @spilledcinema/server-windows",
+    "verifier:start": "powershell -ExecutionPolicy Bypass -File scripts/verifier.ps1 start",
+    "verifier:status": "powershell -ExecutionPolicy Bypass -File scripts/verifier.ps1 status",
+    "verifier:logs": "powershell -ExecutionPolicy Bypass -File scripts/verifier.ps1 logs",
+    "verifier:stop": "powershell -ExecutionPolicy Bypass -File scripts/verifier.ps1 stop",
     "connector:sign-wasm": "node scripts/sign-wasm-connector.mjs",
     "vault:update": "node scripts/update-vault-metadata.mjs",
     "dev": "concurrently \"npm run dev:extractor\" \"npm run dev:dashboard\""
