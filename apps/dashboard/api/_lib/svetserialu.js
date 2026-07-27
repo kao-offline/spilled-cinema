@@ -9,7 +9,28 @@ const PLAYER_ALIASES = {
   vidmoly: { alias: "monozip", label: "MonoZip" },
   streamtape: { alias: "steamtag", label: "SteamTag" },
   mixdrop: { alias: "nextdrop", label: "NextDrop" },
+  vidking: { alias: "vidking", label: "VidKing" },
+  svetserialu: { alias: "svetserialu", label: "SvetSerialu" },
+  svetserialov: { alias: "svetserialu", label: "SvetSerialu" },
+  bombuj: { alias: "bombuj", label: "Bombuj" },
 };
+
+function getPlayerProviderConfig(provider) {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (!normalizedProvider) {
+    return null;
+  }
+
+  return (
+    PLAYER_ALIASES[normalizedProvider] || {
+      alias: normalizedProvider,
+      label: normalizedProvider
+        .replace(/[-_]+/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase())
+        .trim(),
+    }
+  );
+}
 
 function decodeHtml(value) {
   return String(value || "")
@@ -229,7 +250,7 @@ async function extractPlayers(episodeHtml, episodeUrl) {
         .split(/\s+/)
         .map((token) => token.trim().toLowerCase())
         .filter(Boolean);
-      const provider = classTokens.find((token) => token !== "source_link" && PLAYER_ALIASES[token]);
+      const provider = classTokens.find((token) => token !== "source_link");
       const encoded = matchOne(attributes, /\bdata-iframe="([^"]+)"/i);
 
       if (!provider || !encoded) {
@@ -331,7 +352,7 @@ async function resolvePlayers(players, episodeUrl) {
         return null;
       }
 
-      const providerConfig = PLAYER_ALIASES[player.provider];
+      const providerConfig = getPlayerProviderConfig(player.provider);
       if (!providerConfig) {
         return null;
       }
