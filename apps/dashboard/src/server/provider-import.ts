@@ -15,22 +15,23 @@ export async function importProviderModuleItem(input: {
     mediaType: input.mediaType ?? show.mediaType,
   });
 
-  if (!(input.moduleId === "svetserialu" && input.svetserialuCredentials)) {
-    const remoteAdapter = await getRemoteProviderModuleAdapter({
-      moduleId: input.moduleId,
-      repositoryUrls: input.repositoryUrls,
-    });
-    if (remoteAdapter?.import) {
-      return attachMediaType(await remoteAdapter.import(input.slug, input.mediaType) as ImportedShow);
-    }
-  }
-
+  // Production connectors are compiled into the node. Repository manifests
+  // may describe versions and metadata, but must never replace a built-in
+  // adapter with remote executable JavaScript.
   const adapter = getProviderModuleAdapter(input.moduleId);
-  if (!adapter?.import) {
-    throw new Error(`Provider module "${input.moduleId}" does not expose import.`);
+  if (adapter?.import) {
+    return attachMediaType(await adapter.import(input.slug, input.mediaType, {
+      svetserialuCredentials: input.svetserialuCredentials,
+    }) as ImportedShow);
   }
 
-  return attachMediaType(await adapter.import(input.slug, input.mediaType, {
-    svetserialuCredentials: input.svetserialuCredentials,
-  }) as ImportedShow);
+  const remoteAdapter = await getRemoteProviderModuleAdapter({
+    moduleId: input.moduleId,
+    repositoryUrls: input.repositoryUrls,
+  });
+  if (remoteAdapter?.import) {
+    return attachMediaType(await remoteAdapter.import(input.slug, input.mediaType) as ImportedShow);
+  }
+
+  throw new Error(`Provider module "${input.moduleId}" does not expose import.`);
 }

@@ -28,9 +28,13 @@ type JwksResponse = {
 };
 
 export class ManagedGatewayLink {
+  private static readonly PING_INTERVAL_MS = 20_000;
+  private static readonly PONG_TIMEOUT_MS = 50_000;
   private socket: WebSocket | null = null;
   private stopped = true;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private pingTimer: NodeJS.Timeout | null = null;
+  private lastPongAt = 0;
   private reconnectAttempts = 0;
   private jwksCache: { expiresAt: number; keys: Map<string, string> } | null = null;
   private readonly options: GatewayLinkOptions;
@@ -51,6 +55,7 @@ export class ManagedGatewayLink {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHeartbeat();
     this.socket?.close(1000, "Node shutting down.");
     this.socket = null;
   }
@@ -79,7 +84,11 @@ export class ManagedGatewayLink {
       this.socket = socket;
       socket.on("open", () => {
         this.reconnectAttempts = 0;
+        this.startHeartbeat(socket);
         console.log("[managed-gateway] encrypted node link connected");
+      });
+      socket.on("pong", () => {
+        if (this.socket === socket) this.lastPongAt = Date.now();
       });
       socket.on("message", (data) => {
         void this.handleFrame(data.toString()).catch((error) => {
@@ -92,7 +101,10 @@ export class ManagedGatewayLink {
       });
       socket.on("close", (code, reason) => {
         console.warn(`[managed-gateway] node link closed (${code}: ${reason.toString() || "no reason"})`);
-        if (this.socket === socket) this.socket = null;
+        if (this.socket === socket) {
+          this.stopHeartbeat();
+          this.socket = null;
+        }
         this.scheduleReconnect();
       });
       socket.on("error", (error) => {
@@ -106,6 +118,30 @@ export class ManagedGatewayLink {
       );
       this.scheduleReconnect();
     }
+  }
+
+  private startHeartbeat(socket: WebSocket) {
+    this.stopHeartbeat();
+    this.lastPongAt = Date.now();
+    this.pingTimer = setInterval(() => {
+      if (this.stopped || this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat();
+        return;
+      }
+      if (Date.now() - this.lastPongAt > ManagedGatewayLink.PONG_TIMEOUT_MS) {
+        console.warn("[managed-gateway] node link heartbeat timed out; reconnecting");
+        socket.terminate();
+        return;
+      }
+      socket.ping();
+    }, ManagedGatewayLink.PING_INTERVAL_MS);
+    this.pingTimer.unref?.();
+  }
+
+  private stopHeartbeat() {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    this.lastPongAt = 0;
   }
 
   private scheduleReconnect() {

@@ -99,10 +99,15 @@ export async function searchNode(query: string, options: { svetserialuCredential
 
   const search = runParallelProviderSearch(normalizedQuery, options)
     .then((results) => {
-      remoteSearchCache.set(cacheKey, { expiresAt: Date.now() + REMOTE_SEARCH_CACHE_TTL_MS, results });
-      if (remoteSearchCache.size > REMOTE_SEARCH_CACHE_MAX) {
-        const oldestKey = remoteSearchCache.keys().next().value as string | undefined;
-        if (oldestKey) remoteSearchCache.delete(oldestKey);
+      // Do not turn a temporary provider timeout into 45 seconds of guaranteed
+      // "0 found" responses. Successful searches are safe to cache; empty
+      // searches must be allowed to retry immediately.
+      if (results.length > 0) {
+        remoteSearchCache.set(cacheKey, { expiresAt: Date.now() + REMOTE_SEARCH_CACHE_TTL_MS, results });
+        if (remoteSearchCache.size > REMOTE_SEARCH_CACHE_MAX) {
+          const oldestKey = remoteSearchCache.keys().next().value as string | undefined;
+          if (oldestKey) remoteSearchCache.delete(oldestKey);
+        }
       }
       return results;
     })
@@ -120,8 +125,11 @@ async function runParallelProviderSearch(
   query: string,
   options: { svetserialuCredentials?: SvetSerialuCredentials | null },
 ) {
-  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "3500", 10);
-  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "3500", 10);
+  // Public provider pages regularly need more than 3.5 seconds even when they
+  // are healthy. The old budget returned and cached an empty result while the
+  // successful provider request was still in flight.
+  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "20000", 10);
+  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "20000", 10);
   const withSearchBudget = async <T>(search: Promise<T[]>, budgetMs = timeoutMs) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {

@@ -1083,8 +1083,11 @@ export async function searchSvetSerialu(query: string, credentials?: SvetSerialu
   }
 
   const [algoliaFinal, legacyFinal] = await Promise.all([
-    algoliaFast ?? waitForSearch(algoliaSearch, 2_000),
-    legacyFast ?? waitForSearch(legacySearch, 2_000),
+    algoliaFast ?? waitForSearch(algoliaSearch, 10_000),
+    // The public SvetSerialu page commonly answers in 3-7 seconds. A two
+    // second race returned an empty result while the healthy request later
+    // logged 200 OK, which made command search appear randomly broken.
+    legacyFast ?? waitForSearch(legacySearch, 10_000),
   ]);
 
   return mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);

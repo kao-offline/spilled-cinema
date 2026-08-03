@@ -361,7 +361,7 @@ Docker refuses private/public mode without a 0600 master-key secret.
 Start the node and select only the public capabilities the owner wants:
 
 ```powershell
-$env:SPILLED_PUBLIC_CAPABILITIES='provider.search,provider.feed,player.resolve'
+$env:SPILLED_PUBLIC_CAPABILITIES='provider.search,provider.feed,provider.import,player.resolve'
 $env:SPILLED_LOCAL_NODE_URL='http://127.0.0.1:8787'
 $env:SPILLED_CONTROL_PLANE_URL='https://<deployment>.convex.site/server'
 $env:SPILLED_CONTROL_PLANE_SECRET='<controlPlaneAdminSecret>'
@@ -376,7 +376,7 @@ SPILLED_GATEWAY_URL=https://nodes.spilled.overload.studio
 SPILLED_GATEWAY_ENROLLMENT=<enrollmentCredential>
 SPILLED_CONTROL_PLANE_JWKS_URL=https://<deployment>.convex.site/server/v2/jwks
 SPILLED_PASSKEY_ORIGIN=https://<node-id>.nodes.spilled.overload.studio
-SPILLED_PUBLIC_CAPABILITIES=provider.search,provider.feed,player.resolve
+SPILLED_PUBLIC_CAPABILITIES=provider.search,provider.feed,provider.import,player.resolve
 ```
 
 Restart the node. It connects outbound; no port forwarding is required.

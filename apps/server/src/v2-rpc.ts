@@ -12,6 +12,8 @@ type HandlerSet = {
   providerSearchHandler: Handler;
   providerFeedHandler: Handler;
   providerImportHandler: Handler;
+  playerResolveHandler: Handler;
+  cleanPlayerResolveHandler: Handler;
   playbackResolveHandler: Handler;
   startDownloadHandler: Handler;
   downloadStatusHandler: Handler;
@@ -83,6 +85,11 @@ export function createV2RpcExecutor(
         return await invokeJsonHandler(handlers.providerFeedHandler, "POST", params);
       case "provider.import":
         return await invokeJsonHandler(handlers.providerImportHandler, "POST", params);
+      case "player.embed.resolve":
+        return await invokeJsonHandler(handlers.playerResolveHandler, "POST", params);
+      case "player.clean.resolve":
+        return await invokeJsonHandler(handlers.cleanPlayerResolveHandler, "POST", params);
+      case "player.playback.resolve":
       case "player.resolve":
         return await invokeJsonHandler(handlers.playbackResolveHandler, "POST", params);
       case "download.transient.create":

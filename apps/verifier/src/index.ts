@@ -44,6 +44,14 @@ const defaultProbes: typeof configuredProbes = {
     method: "provider.feed",
     params: { moduleId: "bombuj", feedId: "latest-movies", limit: 1 },
   },
+  "provider.import": {
+    method: "provider.import",
+    params: { moduleId: "svetserialu", slug: "silo" },
+  },
+  "player.resolve": {
+    method: "player.embed.resolve",
+    params: { embedUrl: "https://example.com/spilled-verifier", provider: "verifier" },
+  },
 };
 const actions: Record<string, string> = {
   "provider.search": "search",
@@ -150,7 +158,14 @@ async function verifyCandidate(candidate: Candidate) {
       transportPublicKey: candidate.identity.x25519PublicKey,
       keyVersion: candidate.identity.keyVersion,
     }, candidate.identity.transportKeySignature, candidate.identity.ed25519PublicKey);
-  const results = await Promise.all(candidate.advertisedCapabilities.map(async (capability) => {
+  const results: Array<{
+    capability: Capability;
+    status: "verified" | "degraded" | "quarantined";
+  }> = [];
+  // Probes are deliberately sequential. Import probes can perform substantial
+  // provider I/O; running every capability simultaneously caused lightweight
+  // player and search checks to time out behind the import workload.
+  for (const capability of candidate.advertisedCapabilities) {
     let status: "verified" | "degraded" | "quarantined" = "degraded";
     if (identityValid && candidate.online) {
       try {
@@ -163,8 +178,8 @@ async function verifyCandidate(candidate: Candidate) {
         status = "degraded";
       }
     }
-    return { capability, status };
-  }));
+    results.push({ capability, status });
+  }
   const status = identityValid && candidate.online && results.some((entry) => entry.status === "verified")
     ? "verified"
     : identityValid ? "degraded" : "quarantined";

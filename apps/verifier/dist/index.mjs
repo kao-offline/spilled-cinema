@@ -138,6 +138,14 @@ var defaultProbes = {
   "provider.feed": {
     method: "provider.feed",
     params: { moduleId: "bombuj", feedId: "latest-movies", limit: 1 }
+  },
+  "provider.import": {
+    method: "provider.import",
+    params: { moduleId: "svetserialu", slug: "silo" }
+  },
+  "player.resolve": {
+    method: "player.embed.resolve",
+    params: { embedUrl: "https://example.com/spilled-verifier", provider: "verifier" }
   }
 };
 var actions = {
@@ -239,7 +247,8 @@ async function verifyCandidate(candidate) {
     transportPublicKey: candidate.identity.x25519PublicKey,
     keyVersion: candidate.identity.keyVersion
   }, candidate.identity.transportKeySignature, candidate.identity.ed25519PublicKey);
-  const results = await Promise.all(candidate.advertisedCapabilities.map(async (capability) => {
+  const results = [];
+  for (const capability of candidate.advertisedCapabilities) {
     let status2 = "degraded";
     if (identityValid && candidate.online) {
       try {
@@ -252,8 +261,8 @@ async function verifyCandidate(candidate) {
         status2 = "degraded";
       }
     }
-    return { capability, status: status2 };
-  }));
+    results.push({ capability, status: status2 });
+  }
   const status = identityValid && candidate.online && results.some((entry) => entry.status === "verified") ? "verified" : identityValid ? "degraded" : "quarantined";
   const response = await controlPlane("/v2/nodes/verification", {
     method: "POST",

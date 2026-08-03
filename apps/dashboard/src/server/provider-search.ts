@@ -69,28 +69,23 @@ export async function searchProviderModule(input: {
   repositoryUrls?: string[];
   svetserialuCredentials?: SvetSerialuCredentials | null;
 }): Promise<ExploreItem[]> {
-  if (!(input.moduleId === "svetserialu" && input.svetserialuCredentials)) {
-    const remoteAdapter = await getRemoteProviderModuleAdapter({
-      moduleId: input.moduleId,
-      repositoryUrls: input.repositoryUrls,
-    });
-    if (remoteAdapter?.search) {
-      const results = await remoteAdapter.search(input.query);
-      return input.moduleId === "svetserialu"
-        ? await enrichSvetSearchWithFreshEpisodes(results, remoteAdapter)
-        : results;
-    }
-  }
-
   const adapter = getProviderModuleAdapter(input.moduleId);
-  if (!adapter?.search) {
-    throw new Error(`Provider module "${input.moduleId}" does not expose search.`);
+  if (adapter?.search) {
+    const results = await adapter.search(input.query, {
+      svetserialuCredentials: input.svetserialuCredentials,
+    });
+    return input.moduleId === "svetserialu"
+      ? await enrichSvetSearchWithFreshEpisodes(results, adapter, input.svetserialuCredentials)
+      : results;
   }
 
-  const results = await adapter.search(input.query, {
-    svetserialuCredentials: input.svetserialuCredentials,
+  const remoteAdapter = await getRemoteProviderModuleAdapter({
+    moduleId: input.moduleId,
+    repositoryUrls: input.repositoryUrls,
   });
-  return input.moduleId === "svetserialu"
-    ? await enrichSvetSearchWithFreshEpisodes(results, adapter, input.svetserialuCredentials)
-    : results;
+  if (remoteAdapter?.search) {
+    return await remoteAdapter.search(input.query);
+  }
+
+  throw new Error(`Provider module "${input.moduleId}" does not expose search.`);
 }

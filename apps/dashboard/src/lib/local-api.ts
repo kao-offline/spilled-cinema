@@ -431,6 +431,15 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
         params: { ...body, moduleId: "bombuj" },
       };
     }
+    if (path === "/api/player/resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.embed.resolve", params: body };
+    }
+    if (path === "/api/player/clean-resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.clean.resolve", params: body };
+    }
+    if (path === "/api/player/playback-resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.playback.resolve", params: body };
+    }
     return null;
   })();
   if (!operation) return null;

@@ -484,7 +484,18 @@ export const listV2VerificationCandidates = internalQuery({
           .withIndex("by_status", (q) => q.eq("status", "degraded"))
           .take(remaining)
       : [];
-    const registrations = pending.concat(degraded);
+    const verifiedRemaining = Math.max(0, remaining - degraded.length);
+    const verified = verifiedRemaining
+      ? await ctx.db
+          .query("nodeRegistrations")
+          .withIndex("by_status", (q) => q.eq("status", "verified"))
+          .take(verifiedRemaining)
+      : [];
+    // Verified nodes must remain eligible for periodic capability probes. A
+    // node can be globally verified while one advertised capability is stale
+    // or degraded; excluding it here made that capability impossible to
+    // recover without manually changing the whole node status.
+    const registrations = pending.concat(degraded, verified);
     const candidates: Array<{
       nodeId: string;
       advertisedCapabilities: string[];
