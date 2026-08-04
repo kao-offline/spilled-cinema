@@ -871,17 +871,32 @@ function AppContent() {
 
   const handleCheckShowNewEpisodes = async (show: ImportedShow) => {
     if (!localRuntimeStatus.available) return;
-    const svetMatch = show.providerMatches?.find((match) => match.integrationId === "svetserialu");
-    if (!svetMatch) {
-      setNewEpisodeCheckState({ checking: false, message: "This show has no svetserialu source linked.", error: true });
-      return;
-    }
     setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
+      let slug = show.providerMatches?.find((match) => match.integrationId === "svetserialu")?.providerItemId;
+      if (!slug) {
+        for (const episode of show.episodes) {
+          const url = episode.episodeUrl && /svetserialu/i.test(episode.episodeUrl) ? episode.episodeUrl : episode.players.map((player) => player.sourcePageUrl).find((candidate) => /svetserialu/i.test(candidate));
+          const pageMatch = url?.match(/\/serial\/([^/?#]+)/i);
+          if (pageMatch?.[1]) {
+            slug = decodeURIComponent(pageMatch[1]).trim().toLowerCase();
+            break;
+          }
+        }
+      }
+      if (!slug) {
+        const results = await searchRemotes(show.title);
+        const hit = results.find((result) => result.platform === "svetserialu" && result.mediaType === "serial") ?? results.find((result) => result.platform === "svetserialu");
+        slug = hit?.slug;
+      }
+      if (!slug) {
+        setNewEpisodeCheckState({ checking: false, message: "Couldn't find this show on svetserialu.", error: true });
+        return;
+      }
       const existingCodes = new Set(
         show.episodes.map((episode) => episode.episodeCode?.trim().toLowerCase()).filter(Boolean),
       );
-      const imported = await importProviderItem("svetserialu", svetMatch.providerItemId, "serial", stateRef.current.settings.artworkSources);
+      const imported = await importProviderItem("svetserialu", slug, "serial", stateRef.current.settings.artworkSources);
       const newCodes = imported.episodes
         .map((episode) => episode.episodeCode?.trim().toLowerCase())
         .filter((code): code is string => Boolean(code) && !existingCodes.has(code!));
