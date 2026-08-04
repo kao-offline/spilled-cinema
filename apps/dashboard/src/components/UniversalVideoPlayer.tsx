@@ -504,6 +504,36 @@ export function UniversalVideoPlayer({
 
   useEffect(() => {
     const video = videoRef.current;
+    if (!video) return undefined;
+    const createdUrls: string[] = [];
+    let canceled = false;
+    const trackElements = Array.from(video.querySelectorAll("track"));
+    trackElements.forEach((trackElement, index) => {
+      const definition = subtitleTracks[index];
+      if (!definition || definition.src.startsWith("blob:")) return;
+      void fetch(definition.src, { credentials: "omit" })
+        .then((response) => {
+          if (!response.ok) throw new Error(`Subtitle track failed (${response.status}).`);
+          return response.text();
+        })
+        .then((text) => {
+          if (canceled || !trackElement.isConnected) return;
+          const url = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+          createdUrls.push(url);
+          trackElement.src = url;
+        })
+        .catch(() => {
+          // Keep the original URL; the browser may still attempt to load it.
+        });
+    });
+    return () => {
+      canceled = true;
+      for (const url of createdUrls) URL.revokeObjectURL(url);
+    };
+  }, [subtitleTrackSignature, src]);
+
+  useEffect(() => {
+    const video = videoRef.current;
     if (!video) return;
     for (const [index, track] of Array.from(video.textTracks).entries()) {
       track.mode = captionsEnabled && index === selectedSubtitleTrack ? "showing" : "disabled";

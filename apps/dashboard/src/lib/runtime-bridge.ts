@@ -44,7 +44,10 @@ function nextRequestId() {
 }
 
 function canUseDirectLocalFetch() {
-  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  // Browsers treat 127.0.0.1/localhost as potentially trustworthy, so even an
+  // https dashboard may reach the user's local node directly. If no node is
+  // running the connection is refused quickly and we fall through.
+  return true;
 }
 
 function requestExtension(message: {
