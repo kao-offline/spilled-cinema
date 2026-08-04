@@ -1499,17 +1499,41 @@ export function createHttpHandlers() {
       const parsed = new URL(target);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return sendJson(res, 400, { error: "Unsupported protocol." });
 
-      const response = await fetch(parsed.toString(), {
-        redirect: "follow",
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Accept: "text/vtt,text/plain,application/json,*/*",
-          Referer: "https://svetserialu.to/",
-        },
-      });
-      if (!response.ok) return sendJson(res, response.status, { error: "Failed to fetch subtitle file." });
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0",
+        Accept: "text/vtt,text/plain,application/json,*/*",
+        Referer: "https://svetserialu.to/",
+      };
 
-      const body = await response.text();
+      const fetchBody = async (url: string): Promise<{ status: number; body: string }> => {
+        const response = await fetch(url, { redirect: "follow", headers });
+        if (!response.ok) return { status: response.status, body: "" };
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
+        if (contentType.includes("application/json") || contentType.includes("text/json")) {
+          const payload = await response.json().catch(() => null);
+          if (Array.isArray(payload)) {
+            const entry = payload.find((item) => item && item.default) ?? payload[0];
+            if (entry && typeof entry.file === "string") {
+              const safeFile = (() => {
+                try {
+                  return new URL(entry.file).toString();
+                } catch {
+                  return null;
+                }
+              })();
+              if (safeFile) {
+                const vtt = await fetch(safeFile, { redirect: "follow", headers });
+                return { status: vtt.ok ? vtt.status : 502, body: vtt.ok ? await vtt.text() : "" };
+              }
+            }
+          }
+        }
+        return { status: response.status, body: await response.text() };
+      };
+
+      const { status, body } = await fetchBody(parsed.toString());
+      if (status !== 200) return sendJson(res, status, { error: "Failed to fetch subtitle file." });
+
       const normalized = normalizeSubtitleText(body);
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/vtt; charset=utf-8");

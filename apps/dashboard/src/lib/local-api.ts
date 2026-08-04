@@ -15,6 +15,7 @@ type JsonRequestInit = {
 };
 
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
+const DIRECT_LOCAL_TIMEOUT_MS = 3000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
 const PLAYBACK_RUNTIME_TIMEOUT_MS = 90000;
 
@@ -202,7 +203,7 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
           ...(init.headers ?? {}),
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      }, getRuntimeTimeoutMs(path));
+      }, DIRECT_LOCAL_TIMEOUT_MS);
 
       return {
         ok: response.ok,
@@ -220,7 +221,10 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
 }
 
 function canUseDirectLocalFetch() {
-  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  // Browsers treat 127.0.0.1/localhost as potentially trustworthy, so even an
+  // https dashboard may fetch the user's local node directly. If no node is
+  // running the connection is refused quickly and we fall through.
+  return true;
 }
 
 async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
