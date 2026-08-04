@@ -52,6 +52,7 @@ import {
   mergeLibraryStates,
   normalizeLibraryStateCandidate,
   updateShowCast,
+  mergeImportedShowIntoState,
 } from "./lib/storage";
 import type { DownloadEngine, EpisodePlayer, ImportedShow, LibraryEpisode, LibraryState, PlayerAlias } from "./lib/types";
 import { clearOfflineCache } from "./lib/offline";
@@ -865,6 +866,38 @@ function AppContent() {
       }
     } catch {
       setNewEpisodeCheckState({ checking: false, message: "Check failed.", error: true });
+    }
+  };
+
+  const handleCheckShowNewEpisodes = async (show: ImportedShow) => {
+    if (!localRuntimeStatus.available) return;
+    const svetMatch = show.providerMatches?.find((match) => match.integrationId === "svetserialu");
+    if (!svetMatch) {
+      setNewEpisodeCheckState({ checking: false, message: "This show has no svetserialu source linked.", error: true });
+      return;
+    }
+    setNewEpisodeCheckState({ checking: true, message: null, error: false });
+    try {
+      const existingCodes = new Set(
+        show.episodes.map((episode) => episode.episodeCode?.trim().toLowerCase()).filter(Boolean),
+      );
+      const imported = await importProviderItem("svetserialu", svetMatch.providerItemId, "serial", stateRef.current.settings.artworkSources);
+      const newCodes = imported.episodes
+        .map((episode) => episode.episodeCode?.trim().toLowerCase())
+        .filter((code): code is string => Boolean(code) && !existingCodes.has(code!));
+      const newCount = newCodes.length;
+
+      if (newCount > 0) {
+        const nextState = mergeLibraryStates(stateRef.current, mergeImportedShowIntoState(stateRef.current, imported, show.slug));
+        writeLibraryState(nextState);
+        stateRef.current = nextState;
+        setState(nextState);
+        setNewEpisodeCheckState({ checking: false, message: `Found ${newCount} new ${newCount === 1 ? "episode" : "episodes"} for this show.`, error: false });
+      } else {
+        setNewEpisodeCheckState({ checking: false, message: "No new episodes found for this show.", error: false });
+      }
+    } catch (error) {
+      setNewEpisodeCheckState({ checking: false, message: `Check failed: ${error instanceof Error ? error.message : String(error)}`, error: true });
     }
   };
 
@@ -3626,7 +3659,7 @@ function AppContent() {
               onCancelFullDownload={handleCancelFullDownload}
               downloadedEpisodeIds={downloadedEpisodeIds}
               onDeleteFullDownload={handleDeleteFullDownload}
-              onCheckNewEpisodes={activeShowSlug ? () => void handleCheckNewEpisodes(activeShowSlug) : undefined}
+              onCheckNewEpisodes={activeShowWithLocal ? () => void handleCheckShowNewEpisodes(activeShowWithLocal) : undefined}
               checkNewEpisodesState={newEpisodeCheckState}
             />
           ) : activeView === "import" ? (
