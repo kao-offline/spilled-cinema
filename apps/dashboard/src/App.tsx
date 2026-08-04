@@ -834,7 +834,7 @@ function AppContent() {
     }
   };
 
-  const handleCheckNewEpisodes = async () => {
+  const handleCheckNewEpisodes = async (forSlug?: string) => {
     if (!localRuntimeStatus.available) return;
     setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
@@ -845,6 +845,14 @@ function AppContent() {
       }
       if (result.failures.length > 0 && result.checkedFeeds === 0) {
         setNewEpisodeCheckState({ checking: false, message: "Check failed — is your server running?", error: true });
+        return;
+      }
+      if (forSlug && result.changedTitles.includes(forSlug)) {
+        setNewEpisodeCheckState({ checking: false, message: "New episodes found for this show.", error: false });
+        return;
+      }
+      if (forSlug) {
+        setNewEpisodeCheckState({ checking: false, message: "No new episodes found for this show.", error: false });
         return;
       }
       const updated = result.changedTitles.length;
@@ -3618,6 +3626,8 @@ function AppContent() {
               onCancelFullDownload={handleCancelFullDownload}
               downloadedEpisodeIds={downloadedEpisodeIds}
               onDeleteFullDownload={handleDeleteFullDownload}
+              onCheckNewEpisodes={activeShowSlug ? () => void handleCheckNewEpisodes(activeShowSlug) : undefined}
+              checkNewEpisodesState={newEpisodeCheckState}
             />
           ) : activeView === "import" ? (
             <ImportView 

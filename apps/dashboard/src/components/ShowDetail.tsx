@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
-import { ArrowLeft, ChevronDown, Download, ExternalLink, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, Trash2, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Download, ExternalLink, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
@@ -36,6 +36,8 @@ type ShowDetailProps = {
   onCancelFullDownload: (episode: LibraryEpisode) => void;
   downloadedEpisodeIds: Set<string>;
   onDeleteFullDownload: (episode: LibraryEpisode) => void;
+  onCheckNewEpisodes?: () => void;
+  checkNewEpisodesState?: { checking: boolean; message: string | null; error: boolean };
 };
 
 function isBusy(job: FullDownloadJob | undefined) {
@@ -147,6 +149,8 @@ export function ShowDetail({
   onCancelFullDownload,
   downloadedEpisodeIds,
   onDeleteFullDownload,
+  onCheckNewEpisodes,
+  checkNewEpisodesState,
 }: ShowDetailProps) {
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [episodeMenuOpen, setEpisodeMenuOpen] = useState(false);
@@ -608,8 +612,33 @@ export function ShowDetail({
                 <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
                 Episodes
               </div>
-              <span className="text-xs font-bold text-white/32">{sortedEpisodes.length} available</span>
+              <div className="flex shrink-0 items-center gap-3">
+                {onCheckNewEpisodes ? (
+                  <button
+                    type="button"
+                    onClick={() => onCheckNewEpisodes()}
+                    disabled={Boolean(checkNewEpisodesState?.checking)}
+                    className={clsx(
+                      "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-bold uppercase tracking-wide transition",
+                      checkNewEpisodesState?.checking
+                        ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
+                        : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
+                    )}
+                    aria-label="Check for new episodes"
+                    title="Scan svetserialu for episodes you don't have yet"
+                  >
+                    <RefreshCw className={clsx("h-3.5 w-3.5", checkNewEpisodesState?.checking && "animate-spin")} />
+                    {checkNewEpisodesState?.checking ? "Checking…" : "Check for new episodes"}
+                  </button>
+                ) : null}
+                <span className="text-xs font-bold text-white/32">{sortedEpisodes.length} available</span>
+              </div>
             </div>
+            {checkNewEpisodesState?.message ? (
+              <div className={clsx("mb-4 text-xs font-semibold", checkNewEpisodesState.error ? "text-red-300" : "text-emerald-300")}>
+                {checkNewEpisodesState.message}
+              </div>
+            ) : null}
             <div className="no-scrollbar mb-4 flex gap-2 overflow-x-auto pb-1">
               {seasons.map(([seasonNumber, episodes]) => (
                 <button key={seasonNumber} type="button" onClick={() => setSelectedSeason(seasonNumber)} className={clsx("shrink-0 rounded-full border px-4 py-2 text-xs font-black transition", activeSeason === seasonNumber ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.035] text-white/52 hover:bg-white/[0.08] hover:text-white")}>
