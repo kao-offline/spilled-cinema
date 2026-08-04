@@ -615,6 +615,8 @@ const activeOutputPaths = new Map<string, { outputPath: string; temporaryOutputP
 const cancelRequestedJobs = new Set<string>();
 const seekableRepairLocks = new Map<string, Promise<string>>();
 const seekableRepairCache = new Map<string, string>();
+const VALIDATED_STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+const validatedStreamCache = new Map<string, { expiresAt: number; streamType: PlaybackStreamType }>();
 const DOWNLOAD_INDEX_FILE = "index.json";
 const SUBTITLE_INDEX_FILE = "subtitles.json";
 
@@ -1289,7 +1291,15 @@ async function validateHlsResources(
   return { ok: true, streamType: "hls" };
 }
 
-async function validateResolvedStream(target: ResolvedStreamTarget): Promise<StreamValidationResult> {
+async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache = false): Promise<StreamValidationResult> {
+  const cacheKey = `${target.streamUrl}|${target.refererUrl}`;
+  if (!bypassCache) {
+    const cached = validatedStreamCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { ok: true, streamType: cached.streamType };
+    }
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
@@ -1297,9 +1307,20 @@ async function validateResolvedStream(target: ResolvedStreamTarget): Promise<Str
   );
   const host = new URL(target.streamUrl).hostname;
 
+  const finish = (result: StreamValidationResult): StreamValidationResult => {
+    if (result.ok) {
+      validatedStreamCache.set(cacheKey, { expiresAt: Date.now() + VALIDATED_STREAM_CACHE_TTL_MS, streamType: result.streamType });
+      if (validatedStreamCache.size > 512) {
+        const oldestKey = validatedStreamCache.keys().next().value as string | undefined;
+        if (oldestKey) validatedStreamCache.delete(oldestKey);
+      }
+    }
+    return result;
+  };
+
   try {
     if (isClearlyNonMediaStreamUrl(target.streamUrl)) {
-      return { ok: false, reason: `Resolved URL on ${host} points to artwork instead of playable media.` };
+      return finish({ ok: false, reason: `Resolved URL on ${host} points to artwork instead of playable media.` });
     }
     const streamType = inferStreamType(target.streamUrl);
     const response = await fetch(target.streamUrl, {
@@ -1317,24 +1338,25 @@ async function validateResolvedStream(target: ResolvedStreamTarget): Promise<Str
       const contentType = response.headers.get("content-type") ?? "";
       if (/^(?:image|font)\//i.test(contentType) || /text\/html|application\/(?:xhtml\+xml|json)/i.test(contentType)) {
         await response.body?.cancel().catch(() => undefined);
-        return { ok: false, reason: `Resolved URL on ${host} returned ${contentType || "non-media content"} instead of playable media.` };
+        return finish({ ok: false, reason: `Resolved URL on ${host} returned ${contentType || "non-media content"} instead of playable media.` });
       }
       const detectedType = streamTypeFromContentType(contentType);
       if (streamType === "hls" || detectedType === "hls") {
-        return await validateHlsResources(response, target, controller.signal);
+        const validated = await validateHlsResources(response, target, controller.signal);
+        return finish(validated);
       }
       await response.body?.cancel().catch(() => undefined);
-      return { ok: true, streamType: detectedType !== "unknown" ? detectedType : streamType };
+      return finish({ ok: true, streamType: detectedType !== "unknown" ? detectedType : streamType });
     }
     await response.body?.cancel().catch(() => undefined);
-    return { ok: false, reason: `Resolved stream host ${host} returned HTTP ${response.status}.` };
+    return finish({ ok: false, reason: `Resolved stream host ${host} returned HTTP ${response.status}.` });
   } catch (error) {
     const cause = error instanceof Error && "cause" in error ? error.cause : null;
     const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : null;
-    return {
+    return finish({
       ok: false,
       reason: `Resolved stream host ${host} is not reachable by the playback proxy${code ? ` (${code})` : ""}.`,
-    };
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -1987,7 +2009,7 @@ async function resolveVidkingStream(provider: string | undefined, embedUrl: stri
   const cacheKey = `${route.mediaType}:${route.tmdbId}:${route.seasonId}:${route.episodeId}`;
   const cached = vidkingResolvedStreamCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    const validation = await validateResolvedStream(cached.target).catch((error): StreamValidationResult => ({
+    const validation = await validateResolvedStream(cached.target, true).catch((error): StreamValidationResult => ({
       ok: false,
       reason: error instanceof Error ? error.message : String(error),
     }));
@@ -3275,102 +3297,160 @@ function orderPlaybackPlayers(input: PlaybackResolveInput) {
   return [active, ...withDirect, ...sameLanguage, ...remainingPreferred, ...crossLanguageFallbacks].filter(Boolean) as typeof remotePlayers;
 }
 
+function runFirstSuccess<T, U>(items: T[], concurrency: number, worker: (item: T) => Promise<U>): Promise<U> {
+  return new Promise<U>((resolve, reject) => {
+    let index = 0;
+    let pending = 0;
+    let settled = 0;
+    let done = false;
+
+    const runWorker = () => {
+      while (!done && pending < concurrency && index < items.length) {
+        const item = items[index];
+        index += 1;
+        pending += 1;
+        worker(item).then(
+          (result) => {
+            if (done) return;
+            done = true;
+            resolve(result);
+          },
+          () => {
+            pending -= 1;
+            settled += 1;
+            if (settled >= items.length) {
+              done = true;
+              reject(new Error("No player attempt succeeded."));
+            } else {
+              runWorker();
+            }
+          },
+        );
+      }
+    };
+
+    runWorker();
+  });
+}
+
 export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
   const orderedPlayers = orderPlaybackPlayers(input);
   const failures: PlaybackResolveFailure[] = [];
   const activePlayer = orderedPlayers.find((player) => player.alias === input.activePlayerAlias);
   const activeSubtitleUrl = activePlayer ? await resolveSubtitleUrlFromPlayer(activePlayer) : undefined;
 
-  for (const player of orderedPlayers) {
-    try {
-      const candidateEmbedUrl = (await resolveCandidateEmbedUrl(player)) ?? player.embedUrl;
-      const rawDirectUrl = getDirectStreamUrl({
-        embedUrl: player.embedUrl,
-        streamUrl: player.streamUrl,
-        resolvedUrl: player.resolvedUrl,
-      });
-      const directUrlIsFresh = rawDirectUrl && canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl);
-      const directUrl = directUrlIsFresh ? rawDirectUrl : null;
-      const equivalentVidkingUrl = buildVidkingEquivalentUrl(candidateEmbedUrl);
-      const equivalentVidking = equivalentVidkingUrl && !directUrl
-        ? await resolveVidkingStream("vidking", equivalentVidkingUrl).catch(() => null)
-        : null;
-      let resolved = directUrl
-        ? {
-            streamUrl: toValidatedHttpUrl(directUrl),
-            refererUrl: player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl,
-          }
-        : equivalentVidking
-          ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl).catch(() => null))
-          ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+  const attemptPlayer = async (player: PlaybackResolveInput["players"][number]): Promise<PlaybackResolveResult> => {
+    const candidateEmbedUrl = (await resolveCandidateEmbedUrl(player)) ?? player.embedUrl;
+    const rawDirectUrl = getDirectStreamUrl({
+      embedUrl: player.embedUrl,
+      streamUrl: player.streamUrl,
+      resolvedUrl: player.resolvedUrl,
+    });
+    const directUrlIsFresh = rawDirectUrl && canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl);
+    const directUrl = directUrlIsFresh ? rawDirectUrl : null;
 
-      if (!resolved && !directUrl && isVidkingPlayer(player.provider, candidateEmbedUrl)) {
-        const twoEmbedFallbackUrl = await getTwoEmbedFallbackUrlFromVidking(candidateEmbedUrl);
-        if (twoEmbedFallbackUrl) {
-          resolved = await resolveStreamTarget(twoEmbedFallbackUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-        }
-      }
-
-      if (!resolved && !directUrl) {
-        for (const alternateEmbedUrl of getAlternateProviderUrls(candidateEmbedUrl)) {
-          resolved = await resolveStreamTarget(alternateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-          if (resolved) {
-            break;
-          }
-        }
-      }
-
-      if (!resolved) {
-        failures.push({
+    if (directUrl) {
+      const fastStreamType = inferStreamType(directUrl);
+      if (fastStreamType === "hls" || fastStreamType === "mp4" || fastStreamType === "dash") {
+        const refererUrl = player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl;
+        return {
           playerAlias: player.alias,
-          provider: player.provider,
-          reason: "No validated MP4/HLS/DASH source found after following provider wrappers.",
-        });
-        continue;
+          playbackUrl: buildPlaybackProxyPath(toValidatedHttpUrl(directUrl), refererUrl, input.episodeId, fastStreamType),
+          resolvedUrl: toValidatedHttpUrl(directUrl),
+          refererUrl,
+          streamType: fastStreamType,
+          subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
+        };
       }
+    }
 
-      const validation = await validateResolvedStream(resolved);
-      if (!validation.ok) {
-        if (directUrl) {
-          const refreshed = equivalentVidking
-            ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl))
-            ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-          if (refreshed) {
-            const refreshedValidation = await validateResolvedStream(refreshed);
-            if (refreshedValidation.ok) {
-              return {
-                playerAlias: player.alias,
-                playbackUrl: buildPlaybackProxyPath(refreshed.streamUrl, refreshed.refererUrl, input.episodeId, refreshedValidation.streamType),
-                resolvedUrl: refreshed.streamUrl,
-                refererUrl: refreshed.refererUrl,
-                streamType: refreshedValidation.streamType,
-                subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
-              };
-            }
-          }
+    const equivalentVidkingUrl = buildVidkingEquivalentUrl(candidateEmbedUrl);
+    const equivalentVidking = equivalentVidkingUrl && !directUrl
+      ? await resolveVidkingStream("vidking", equivalentVidkingUrl).catch(() => null)
+      : null;
+    let resolved = directUrl
+      ? {
+          streamUrl: toValidatedHttpUrl(directUrl),
+          refererUrl: player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl,
         }
-        failures.push({
-          playerAlias: player.alias,
-          provider: player.provider,
-          reason: "reason" in validation ? validation.reason : "Stream validation failed.",
-        });
-        continue;
-      }
+      : equivalentVidking
+        ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl).catch(() => null))
+        ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
 
-      return {
-        playerAlias: player.alias,
-        playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId, validation.streamType),
-        resolvedUrl: resolved.streamUrl,
-        refererUrl: resolved.refererUrl,
-        streamType: validation.streamType,
-        subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
-      };
-    } catch (error) {
+    if (!resolved && !directUrl && isVidkingPlayer(player.provider, candidateEmbedUrl)) {
+      const twoEmbedFallbackUrl = await getTwoEmbedFallbackUrlFromVidking(candidateEmbedUrl);
+      if (twoEmbedFallbackUrl) {
+        resolved = await resolveStreamTarget(twoEmbedFallbackUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+      }
+    }
+
+    if (!resolved && !directUrl) {
+      for (const alternateEmbedUrl of getAlternateProviderUrls(candidateEmbedUrl)) {
+        resolved = await resolveStreamTarget(alternateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+        if (resolved) {
+          break;
+        }
+      }
+    }
+
+    if (!resolved) {
       failures.push({
         playerAlias: player.alias,
         provider: player.provider,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: "No validated MP4/HLS/DASH source found after following provider wrappers.",
       });
+      throw new Error("No validated MP4/HLS/DASH source found after following provider wrappers.");
+    }
+
+    const validation = await validateResolvedStream(resolved);
+    if (!validation.ok) {
+      if (directUrl) {
+        const refreshed = equivalentVidking
+          ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl))
+          ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+        if (refreshed) {
+          const refreshedValidation = await validateResolvedStream(refreshed);
+          if (refreshedValidation.ok) {
+            return {
+              playerAlias: player.alias,
+              playbackUrl: buildPlaybackProxyPath(refreshed.streamUrl, refreshed.refererUrl, input.episodeId, refreshedValidation.streamType),
+              resolvedUrl: refreshed.streamUrl,
+              refererUrl: refreshed.refererUrl,
+              streamType: refreshedValidation.streamType,
+              subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
+            };
+          }
+        }
+      }
+      failures.push({
+        playerAlias: player.alias,
+        provider: player.provider,
+        reason: "reason" in validation ? validation.reason : "Stream validation failed.",
+      });
+      throw new Error("reason" in validation ? validation.reason : "Stream validation failed.");
+    }
+
+    return {
+      playerAlias: player.alias,
+      playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId, validation.streamType),
+      resolvedUrl: resolved.streamUrl,
+      refererUrl: resolved.refererUrl,
+      streamType: validation.streamType,
+      subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
+    };
+  };
+
+  try {
+    return await attemptPlayer(orderedPlayers[0]);
+  } catch {
+    // Prefer the active player; on failure fall back to the remaining players in parallel.
+  }
+
+  if (orderedPlayers.length > 1) {
+    try {
+      return await runFirstSuccess(orderedPlayers.slice(1), 2, attemptPlayer);
+    } catch {
+      // All fallbacks failed; report the combined error below.
     }
   }
 

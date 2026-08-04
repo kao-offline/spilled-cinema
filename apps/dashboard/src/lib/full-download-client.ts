@@ -77,6 +77,16 @@ function shouldResolvePlayerUrl(provider: string | undefined, embedUrl: string |
   return /(?:^|[^a-z])(2embed|multiembed|moviesclub|primewire)(?:[^a-z]|$)/i.test(signature);
 }
 
+function mediaOriginFromRuntime(origin: string | undefined, transport: string | undefined) {
+  // Gateway-transport responses carry the node id as origin when the node has no
+  // inbound HTTP endpoint. Media URLs can't be fetched from that origin, so route
+  // them through the hosted dashboard proxy (same origin as the page).
+  if (transport === "gateway" && origin && !/^https?:\/\//i.test(origin)) {
+    return window.location.origin;
+  }
+  return origin ?? window.location.origin;
+}
+
 function absoluteUrl(value: string, base: string) {
   try {
     return new URL(value, base).toString();
@@ -387,7 +397,7 @@ export async function startBrowserResolvedDownload(episode: LibraryEpisode): Pro
 
     if (response.ok && response.data?.downloadUrl && response.data?.resolvedUrl && response.data?.refererUrl) {
       return {
-        downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, response.origin),
+        downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport)),
         resolvedUrl: response.data.resolvedUrl,
         refererUrl: response.data.refererUrl,
       };
@@ -471,7 +481,7 @@ export async function resolveCleanPlayback(episode: LibraryEpisode): Promise<Cle
   }
 
   return {
-    downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, response.origin),
+    downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport)),
     resolvedUrl: response.data.resolvedUrl,
     refererUrl: response.data.refererUrl,
   };
@@ -565,5 +575,5 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     throw error;
   }
 
-  return handlePayload(response.data ?? null, response.origin ?? window.location.origin);
+  return handlePayload(response.data ?? null, mediaOriginFromRuntime(response.origin, response.transport));
 }
