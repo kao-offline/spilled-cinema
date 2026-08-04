@@ -128,7 +128,12 @@ function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId
     referer: refererUrl,
     playback: "1",
   });
-  return `/api/download-full/browser-file?${params.toString()}`;
+  const relative = `/api/download-full/browser-file?${params.toString()}`;
+  const endpointUrl = process.env.SPILLED_NODE_ENDPOINT_URL;
+  if (endpointUrl && /^https?:\/\//i.test(endpointUrl)) {
+    return `${endpointUrl.replace(/\/$/, "")}${relative}`;
+  }
+  return relative;
 }
 
 function extractSubtitleUrlFromPlayerUrl(value: string | undefined) {

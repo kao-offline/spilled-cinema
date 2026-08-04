@@ -148,11 +148,30 @@ function playerSourceToEpisodePlayer(source: PlayerSource, index: number, episod
   };
 }
 
-function createSubtitleTrack(player: EpisodePlayer | null) {
+function extractServerBaseUrl(playbackUrl: string | undefined): string | null {
+  if (!playbackUrl) return null;
+  try {
+    const parsed = new URL(playbackUrl, window.location.origin);
+    if (parsed.origin !== window.location.origin && /^https?:$/i.test(parsed.protocol)) {
+      return parsed.origin;
+    }
+  } catch {
+    // Not an absolute URL or not a remote server.
+  }
+  return null;
+}
+
+function createSubtitleTrack(player: EpisodePlayer | null, serverBaseUrl: string | null) {
   if (!player?.subtitlesUrl) return [];
   const presentation = getLanguagePresentation(player.language || player.label || "Subtitles");
+  let src: string;
+  if (serverBaseUrl) {
+    src = `${serverBaseUrl}/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`;
+  } else {
+    src = buildRuntimeUrl(`/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`);
+  }
   return [{
-    src: buildRuntimeUrl(`/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`),
+    src,
     label: presentation.labelWithFlags,
     srclang: (player.language || "en").slice(0, 5).toLowerCase(),
     default: true,
@@ -614,13 +633,14 @@ export function PlayerModal({
     if (downloadedSubtitleTracks.length > 0) {
       return downloadedSubtitleTracks.map((track, index) => ({ ...track, default: index === 0 }));
     }
-    return createSubtitleTrack(activePlayer);
+    return createSubtitleTrack(activePlayer, null);
   }, [activeIsLocal, activePlayer, downloadedSubtitleTracks, episode]);
   const remoteSubtitleTracks = useMemo(
     () => createSubtitleTrack(
       visiblePlayback?.subtitlesUrl && selectedResolvedPlayer
         ? { ...selectedResolvedPlayer, subtitlesUrl: visiblePlayback.subtitlesUrl }
         : selectedResolvedPlayer ?? activePlayer,
+      extractServerBaseUrl(visiblePlayback?.playbackUrl),
     ),
     [activePlayer, selectedResolvedPlayer, visiblePlayback],
   );

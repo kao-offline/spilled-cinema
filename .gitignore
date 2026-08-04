@@ -46,6 +46,7 @@ next-env.d.ts
 downloads/
 server.err
 server.out
+secrets/
 apps/dashboard/.spilledcinema/
 apps/extractor/.spilledcinema-data/
 

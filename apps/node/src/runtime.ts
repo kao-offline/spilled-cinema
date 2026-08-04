@@ -723,6 +723,7 @@ export class SpilledCinemaNodeRuntime {
       ...(await this.getTransportIdentityRecord()),
       enrollmentCredential,
       advertisedCapabilities,
+      endpointUrl: this.options.endpointUrl ?? null,
       issuedAt: input.issuedAt ?? Date.now(),
     };
     return {

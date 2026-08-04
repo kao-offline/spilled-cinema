@@ -423,6 +423,7 @@ export const enrollV2Node = internalMutation({
     keyVersion: v.number(),
     enrollmentCredentialHash: v.string(),
     advertisedCapabilities: v.array(v.string()),
+    endpointUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -453,6 +454,7 @@ export const enrollV2Node = internalMutation({
       await ctx.db.patch(registration._id, {
         enrollmentCredentialHash: args.enrollmentCredentialHash,
         advertisedCapabilities: args.advertisedCapabilities,
+        endpointUrl: args.endpointUrl,
         status: registration.status === "verified" ? "verified" : "pending",
         updatedAt: now,
       });
@@ -462,6 +464,7 @@ export const enrollV2Node = internalMutation({
         status: "pending",
         enrollmentCredentialHash: args.enrollmentCredentialHash,
         advertisedCapabilities: args.advertisedCapabilities,
+        endpointUrl: args.endpointUrl,
         registeredAt: now,
         updatedAt: now,
       });
@@ -693,6 +696,7 @@ export const listVerifiedV2Nodes = internalQuery({
     const candidates: Array<{
       nodeId: string;
       region?: string;
+      endpointUrl?: string;
       capacityClass: string;
       protocolVersion: number;
       identity: {
@@ -724,6 +728,9 @@ export const listVerifiedV2Nodes = internalQuery({
         nodeId: health.nodeId,
         ...((registration.region ?? heartbeat.region)
           ? { region: registration.region ?? heartbeat.region }
+          : {}),
+        ...(registration.endpointUrl
+          ? { endpointUrl: registration.endpointUrl }
           : {}),
         capacityClass: heartbeat.capacityClass,
         protocolVersion: heartbeat.protocolVersion,

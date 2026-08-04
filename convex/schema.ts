@@ -182,6 +182,7 @@ export default defineSchema({
     status: nodeVerificationStatusValidator,
     enrollmentCredentialHash: v.optional(v.string()),
     advertisedCapabilities: v.optional(v.array(v.string())),
+    endpointUrl: v.optional(v.string()),
     gatewayConnectionId: v.optional(v.string()),
     region: v.optional(v.string()),
     registeredAt: v.number(),

@@ -400,7 +400,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
       ok: true,
       status: 200,
       data: response.data as T,
-      origin: response.nodeId,
+      origin: response.endpointUrl ?? response.nodeId,
       transport: "gateway",
     };
   }
@@ -455,7 +455,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     ok: true,
     status: 200,
     data: response.data as T,
-    origin: response.nodeId,
+    origin: response.endpointUrl ?? response.nodeId,
     transport: "gateway",
   };
 }

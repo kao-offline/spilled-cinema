@@ -328,7 +328,8 @@ http.route({
       Math.abs(Date.now() - body.issuedAt) > 5 * 60_000 ||
       !Array.isArray(body.advertisedCapabilities) ||
       body.advertisedCapabilities.length > V2_CAPABILITIES.length ||
-      body.advertisedCapabilities.some((entry) => typeof entry !== "string" || !V2_CAPABILITIES.includes(entry))
+      body.advertisedCapabilities.some((entry) => typeof entry !== "string" || !V2_CAPABILITIES.includes(entry)) ||
+      (body.endpointUrl != null && (typeof body.endpointUrl !== "string" || body.endpointUrl.length > 2_000))
     ) {
       return json({ error: "Invalid v2 node application." }, { status: 400 });
     }
@@ -388,6 +389,7 @@ http.route({
       keyVersion: body.keyVersion as number,
       enrollmentCredentialHash: await sha256Base64Url(body.enrollmentCredential as string),
       advertisedCapabilities: body.advertisedCapabilities as string[],
+      endpointUrl: typeof body.endpointUrl === "string" ? body.endpointUrl : undefined,
     });
     return json(result, {
       status: 202,

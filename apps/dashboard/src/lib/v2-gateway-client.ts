@@ -24,6 +24,7 @@ type CapabilityTicketV2 = {
 
 type V2Candidate = {
   nodeId: string;
+  endpointUrl?: string;
   identity: {
     x25519PublicKey: string;
   };
@@ -297,6 +298,7 @@ async function sendGatewayRpc(
   return payload.result;
 }
 
+
 export async function requestPublicGateway(
   capability: Capability,
   action: string,
@@ -310,12 +312,12 @@ export async function requestPublicGateway(
       const ticket = await issueTicket(candidate, capability, action);
       return {
         nodeId: candidate.nodeId,
+        endpointUrl: candidate.endpointUrl ?? null,
         data: await sendGatewayRpc(candidate, ticket, method, params),
       };
     } catch (error) {
       lastError = error;
       console.warn(`[gateway] ${candidate.nodeId} ${method} failed:`, error);
-      // A public node may disappear between discovery and execution.
     }
   }
   if (lastError) throw lastError;
