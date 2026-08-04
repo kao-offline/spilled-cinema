@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import type { SidebarFeedLink, ViewState } from "./components/Sidebar";
@@ -587,6 +588,11 @@ function AppContent() {
     sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), initialProviderModules),
   );
   const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>({});
+  const [newEpisodeCheckState, setNewEpisodeCheckState] = useState<{ checking: boolean; message: string | null; error: boolean }>({
+    checking: false,
+    message: null,
+    error: false,
+  });
   const stateRef = useRef(state);
   const downloadedLanguageMapRef = useRef(downloadedEpisodeLanguageById);
   const downloadQueueRef = useRef(downloadQueue);
@@ -777,6 +783,83 @@ function AppContent() {
     };
   }, [providerRepositoryUrls]);
 
+  const performLibraryWatcherScan = async (modules: ProviderModuleManifest[]) => {
+    if (libraryWatcherActiveRef.current) {
+      return { skipped: true, checkedFeeds: 0, refreshedTitles: 0, changedTitles: [] as string[], failures: [] as string[] };
+    }
+    libraryWatcherActiveRef.current = true;
+    try {
+      const result = await scanProviderFeeds(
+        stateRef.current,
+        modules,
+        stateRef.current.settings.artworkSources,
+      );
+
+      if (result.changedTitles.length > 0) {
+        const nextState = mergeLibraryStates(stateRef.current, result.state);
+        writeLibraryState(nextState);
+        stateRef.current = nextState;
+        setState(nextState);
+      }
+
+      if (result.feedResponses.length > 0) {
+        setProviderFeedStates((current) => {
+          const next = { ...current };
+          for (const feedResponse of result.feedResponses) {
+            const viewId = createProviderFeedViewId(feedResponse.moduleId, feedResponse.feedId);
+            const page = next[viewId];
+            if (!page) continue;
+            next[viewId] = {
+              ...page,
+              feed: {
+                ...feedResponse,
+                items: mergeProviderFeedItems(feedResponse.items, page.feed?.items ?? []),
+              },
+              feedError: null,
+            };
+          }
+          return next;
+        });
+      }
+
+      return {
+        skipped: false,
+        checkedFeeds: result.checkedFeeds,
+        refreshedTitles: result.refreshedTitles,
+        changedTitles: result.changedTitles,
+        failures: result.failures,
+      };
+    } finally {
+      libraryWatcherActiveRef.current = false;
+    }
+  };
+
+  const handleCheckNewEpisodes = async () => {
+    if (!localRuntimeStatus.available) return;
+    setNewEpisodeCheckState({ checking: true, message: null, error: false });
+    try {
+      const result = await performLibraryWatcherScan(providerModules);
+      if (result.skipped) {
+        setNewEpisodeCheckState({ checking: false, message: "A check is already running.", error: false });
+        return;
+      }
+      if (result.failures.length > 0 && result.checkedFeeds === 0) {
+        setNewEpisodeCheckState({ checking: false, message: "Check failed — is your server running?", error: true });
+        return;
+      }
+      const updated = result.changedTitles.length;
+      if (updated > 0) {
+        setNewEpisodeCheckState({ checking: false, message: `Updated ${updated} ${updated === 1 ? "title" : "titles"} with new episodes.`, error: false });
+      } else if (result.refreshedTitles > 0) {
+        setNewEpisodeCheckState({ checking: false, message: "Checked — no new episodes, your library is up to date.", error: false });
+      } else {
+        setNewEpisodeCheckState({ checking: false, message: "No new episodes found.", error: false });
+      }
+    } catch {
+      setNewEpisodeCheckState({ checking: false, message: "Check failed.", error: true });
+    }
+  };
+
   useEffect(() => {
     if (providerModules.length === 0 || !localRuntimeStatus.available) return;
     let canceled = false;
@@ -784,51 +867,14 @@ function AppContent() {
 
     const poll = async () => {
       if (canceled) return;
-      if (libraryWatcherActiveRef.current) {
-        timer = window.setTimeout(() => void poll(), 1_000);
-        return;
-      }
-      libraryWatcherActiveRef.current = true;
       let retrySoon = false;
       try {
-        const result = await scanProviderFeeds(
-          stateRef.current,
-          providerModules,
-          stateRef.current.settings.artworkSources,
-        );
+        const result = await performLibraryWatcherScan(providerModules);
         if (canceled) return;
-
-        if (result.changedTitles.length > 0) {
-          const nextState = mergeLibraryStates(stateRef.current, result.state);
-          writeLibraryState(nextState);
-          stateRef.current = nextState;
-          setState(nextState);
-        }
-
-        if (result.feedResponses.length > 0) {
-          setProviderFeedStates((current) => {
-            const next = { ...current };
-            for (const feedResponse of result.feedResponses) {
-              const viewId = createProviderFeedViewId(feedResponse.moduleId, feedResponse.feedId);
-              const page = next[viewId];
-              if (!page) continue;
-              next[viewId] = {
-                ...page,
-                feed: {
-                  ...feedResponse,
-                  items: mergeProviderFeedItems(feedResponse.items, page.feed?.items ?? []),
-                },
-                feedError: null,
-              };
-            }
-            return next;
-          });
-        }
         retrySoon = result.failures.length > 0 && result.checkedFeeds === 0;
       } catch {
         retrySoon = true;
       } finally {
-        libraryWatcherActiveRef.current = false;
         if (!canceled) {
           const delay = retrySoon
             ? 15_000
@@ -3720,15 +3766,41 @@ function AppContent() {
               )}
 
               <div className="px-4 pb-16 sm:px-6 lg:mt-2 lg:px-10">
-                <div className="mb-5 flex items-end justify-between border-b border-white/[0.07] pb-4 lg:mb-7 lg:pb-5">
+                <div className="mb-5 flex items-end justify-between gap-3 border-b border-white/[0.07] pb-4 lg:mb-7 lg:pb-5">
                   <div>
                     <div className="mb-1.5 hidden text-[10px] font-black uppercase tracking-[0.3em] text-white/28 lg:block">Your collection</div>
                     <h2 className="text-xl font-black tracking-[-0.035em] text-white capitalize sm:text-3xl">
                     {state.query ? "Local Vault" : activeView === "favorites" ? "Favorites" : "All Library"}
                     </h2>
                   </div>
-                  <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {!state.query && (activeView === "home" || activeView === "favorites") ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleCheckNewEpisodes()}
+                        disabled={newEpisodeCheckState.checking || !localRuntimeStatus.available}
+                        className={clsx(
+                          "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-bold uppercase tracking-wide transition",
+                          newEpisodeCheckState.checking || !localRuntimeStatus.available
+                            ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
+                            : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
+                        )}
+                        aria-label="Check for new episodes"
+                        title={localRuntimeStatus.available ? "Scan svetserialu for episodes you don't have yet" : "Start your server to check for new episodes"}
+                      >
+                        <RefreshCw className={clsx("h-3.5 w-3.5", newEpisodeCheckState.checking && "animate-spin")} />
+                        {newEpisodeCheckState.checking ? "Checking…" : "Check for new episodes"}
+                      </button>
+                    ) : null}
+                    <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>
+                  </div>
                 </div>
+
+                {newEpisodeCheckState.message ? (
+                  <div className={clsx("-mt-4 mb-5 text-xs font-semibold lg:-mt-5 lg:mb-6", newEpisodeCheckState.error ? "text-red-300" : "text-emerald-300")}>
+                    {newEpisodeCheckState.message}
+                  </div>
+                ) : null}
 
                 <div
                   className="animate-fade-in grid grid-cols-3 gap-2.5 opacity-0 sm:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] sm:gap-5 xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
