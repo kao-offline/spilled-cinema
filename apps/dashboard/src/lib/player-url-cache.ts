@@ -1,3 +1,5 @@
+import { isAppleTouchDevice } from "./hls-buffering";
+
 const CACHE_PREFIX = "spilled.player-url-cache.v3";
 const DEFAULT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PLAYBACK_CACHE_TTL_MS = 20 * 60 * 1000;
@@ -12,25 +14,70 @@ type CachedPlayerFailure = {
   cachedAt: number;
 };
 
+const BROWSER_FILE_PATH = "/api/download-full/browser-file";
+
+function isMobilePlaybackDevice() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+  return isAppleTouchDevice({
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints,
+  });
+}
+
+function findBrowserFileSegment(url: string) {
+  const searchIndex = url.indexOf("?");
+  const pathPart = searchIndex === -1 ? url : url.slice(0, searchIndex);
+  const markerIndex = pathPart.indexOf(BROWSER_FILE_PATH);
+  if (markerIndex === -1) {
+    return null;
+  }
+  return {
+    search: searchIndex === -1 ? "" : url.slice(searchIndex),
+  };
+}
+
+export function normalizePlaybackUrlForClient(url: string) {
+  if (typeof window === "undefined") {
+    return url;
+  }
+
+  const segment = findBrowserFileSegment(url);
+  if (!segment) {
+    return url;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url, window.location.origin);
+  } catch {
+    return url;
+  }
+
+  const isCanonicalPath = parsed.pathname === BROWSER_FILE_PATH;
+  if (isCanonicalPath && parsed.origin === window.location.origin) {
+    return url;
+  }
+
+  const localRuntimeHost = ["127.0.0.1", "localhost"].includes(parsed.hostname);
+  if (!localRuntimeHost && !isMobilePlaybackDevice()) {
+    return url;
+  }
+
+  // On mobile the native HLS stack can only fetch segments from the dashboard
+  // origin. Local-runtime hosts (127.0.0.1/localhost) are never reachable from a
+  // hosted page, so route those through the same-origin proxy on every device.
+  return `${window.location.origin}${BROWSER_FILE_PATH}${segment.search}`;
+}
+
 function normalizeRuntimePlaybackUrl(kind: string, url: string) {
   if (kind !== "playback" || typeof window === "undefined") {
     return url;
   }
 
-  try {
-    const parsed = new URL(url, window.location.origin);
-    if (
-      parsed.pathname === "/api/download-full/browser-file" &&
-      ["127.0.0.1", "localhost"].includes(parsed.hostname) &&
-      parsed.origin !== window.location.origin
-    ) {
-      return `${window.location.origin}${parsed.pathname}${parsed.search}`;
-    }
-  } catch {
-    return url;
-  }
-
-  return url;
+  return normalizePlaybackUrlForClient(url);
 }
 
 function cacheKey(kind: string, key: string) {

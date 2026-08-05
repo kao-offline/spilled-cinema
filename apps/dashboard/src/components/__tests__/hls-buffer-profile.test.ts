@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
+import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAppleTouchDevice, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../../lib/hls-buffering";
 
 describe("HLS buffer profile", () => {
   it("keeps a substantial rolling buffer on phones", () => {
@@ -77,6 +77,24 @@ describe("native mobile HLS selection", () => {
       userAgent: "Mozilla/5.0 (Linux; Android 15; Pixel 9)",
       platform: "Linux armv8l",
       maxTouchPoints: 5,
+    })).toBe(false);
+  });
+
+  it("detects Apple touch devices without requiring native HLS", () => {
+    expect(isAppleTouchDevice({
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    })).toBe(true);
+    expect(isAppleTouchDevice({
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)",
+      platform: "MacIntel",
+      maxTouchPoints: 5,
+    })).toBe(true);
+    expect(isAppleTouchDevice({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      platform: "Win32",
+      maxTouchPoints: 0,
     })).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import type { LibraryEpisode } from "./types";
 import { formatEpisodeTitle } from "./episode-title";
 import { requestRuntimeJson, resolveRuntimeUrl } from "./local-api";
+import { normalizePlaybackUrlForClient } from "./player-url-cache";
 
 const UNIVERSAL_PLAYBACK_TIMEOUT_MS = 90_000;
 
@@ -481,7 +482,7 @@ export async function resolveCleanPlayback(episode: LibraryEpisode): Promise<Cle
   }
 
   return {
-    downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport)),
+    downloadUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport))),
     resolvedUrl: response.data.resolvedUrl,
     refererUrl: response.data.refererUrl,
   };
@@ -512,7 +513,7 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     }
     return {
       playerAlias: data.playerAlias,
-      playbackUrl: resolveRuntimeUrl(data.playbackUrl, origin),
+      playbackUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(data.playbackUrl, origin)),
       resolvedUrl: data.resolvedUrl,
       refererUrl: data.refererUrl,
       streamType: data.streamType ?? "unknown",

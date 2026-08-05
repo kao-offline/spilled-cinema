@@ -17,11 +17,18 @@ type NativeHlsOptions = {
   maxTouchPoints?: number;
 };
 
+export function isAppleTouchDevice(options: {
+  userAgent?: string;
+  platform?: string;
+  maxTouchPoints?: number;
+}) {
+  return /iPad|iPhone|iPod/i.test(options.userAgent ?? "")
+    || (options.platform === "MacIntel" && (options.maxTouchPoints ?? 0) > 1);
+}
+
 export function shouldPreferNativeHls(options: NativeHlsOptions) {
   if (!options.canPlayNativeHls) return false;
-  const appleMobile = /iPad|iPhone|iPod/i.test(options.userAgent ?? "")
-    || (options.platform === "MacIntel" && (options.maxTouchPoints ?? 0) > 1);
-  return appleMobile;
+  return isAppleTouchDevice(options);
 }
 
 export function selectHlsBufferProfile(options: {

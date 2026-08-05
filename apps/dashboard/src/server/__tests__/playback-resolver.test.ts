@@ -1046,4 +1046,67 @@ describe("playback resolver", () => {
       message: expect.stringContaining("No validated MP4/HLS/DASH source"),
     });
   });
+
+  it("runs fallback players concurrently and returns the first success", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://active.example/player") {
+        return new Response("<html><body>provider player</body></html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://www.2embed.cc/embed/slow-test") {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return new Response('file: "https://cdn-slow.example/slow.mp4"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://www.2embed.cc/embed/fast-test") {
+        return new Response('file: "https://cdn-fast.example/fast.mp4"', {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      if (url === "https://cdn-slow.example/slow.mp4") {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
+      if (url === "https://cdn-fast.example/fast.mp4") {
+        return new Response("video", {
+          status: 206,
+          headers: { "Content-Type": "video/mp4", "Content-Range": "bytes 0-4/100" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const resolved = await resolvePlaybackStream({
+      episodeId: "episode-parallel-fallback",
+      activePlayerAlias: "active",
+      players: [
+        {
+          alias: "active",
+          provider: "embed",
+          embedUrl: "https://active.example/player",
+        },
+        {
+          alias: "slow-fallback",
+          provider: "2embed",
+          embedUrl: "https://www.2embed.cc/embed/slow-test",
+        },
+        {
+          alias: "fast-fallback",
+          provider: "2embed",
+          embedUrl: "https://www.2embed.cc/embed/fast-test",
+        },
+      ],
+    });
+
+    expect(resolved.playerAlias).toBe("fast-fallback");
+    expect(resolved.resolvedUrl).toBe("https://cdn-fast.example/fast.mp4");
+  });
 });
