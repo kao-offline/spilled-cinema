@@ -257,7 +257,7 @@ binary. It provides:
 npm run release:verifier-windows
 ```
 
-This produces `apps/verifier-windows/release/Spilled-Verifier-Setup-1.1.0-x64.exe`
+This produces `apps/verifier-windows/release/Spilled-Verifier-Setup-1.1.1-x64.exe`
 and `latest.yml` for auto-update.
 
 ### First run
