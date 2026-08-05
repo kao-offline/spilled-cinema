@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+  <title>Spilled Verifier</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <h1>Spilled Verifier</h1>
+      <span id="status-pill" class="pill pill-stopped">stopped</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-logs-folder" class="ghost">Open logs</button>
+      <button id="btn-restart" class="primary">Restart verifier</button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats">
+    <div class="stat"><span class="stat-value" id="stat-nodes">–</span><span class="stat-label">nodes checked</span></div>
+    <div class="stat stat-ok"><span class="stat-value" id="stat-verified">–</span><span class="stat-label">verified</span></div>
+    <div class="stat stat-warn"><span class="stat-value" id="stat-degraded">–</span><span class="stat-label">degraded</span></div>
+    <div class="stat stat-bad"><span class="stat-value" id="stat-quarantined">–</span><span class="stat-label">quarantined</span></div>
+    <div class="stat"><span class="stat-value" id="stat-capabilities">–</span><span class="stat-label">capabilities verified</span></div>
+    <div class="stat"><span class="stat-value stat-time" id="stat-last">–</span><span class="stat-label">last pass</span></div>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="logs">Logs</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="maintenance">Maintenance</button>
+  </nav>
+
+  <main>
+    <section id="tab-logs" class="tab-panel active">
+      <div class="logs-toolbar">
+        <label class="check"><input type="checkbox" id="follow-log" checked /> follow</label>
+        <span id="log-state" class="muted">–</span>
+        <button id="btn-clear-log" class="ghost">Clear view</button>
+      </div>
+      <pre id="log-output"></pre>
+    </section>
+
+    <section id="tab-settings" class="tab-panel">
+      <div class="settings-form">
+        <label>Control plane URL
+          <input id="set-control-plane-url" type="text" spellcheck="false" />
+        </label>
+        <label>Gateway URL
+          <input id="set-gateway-url" type="text" spellcheck="false" />
+        </label>
+        <label>Control plane secret
+          <input id="set-secret" type="password" spellcheck="false" autocomplete="off" />
+        </label>
+        <label>Probes JSON (SPILLED_VERIFIER_PROBES_JSON)
+          <textarea id="set-probes" rows="7" spellcheck="false"></textarea>
+        </label>
+        <div class="checks">
+          <label class="check"><input id="set-once" type="checkbox" /> run once, then stop</label>
+          <label class="check"><input id="set-autostart" type="checkbox" /> start with Windows</label>
+          <label class="check"><input id="set-replace-legacy" type="checkbox" /> auto-replace legacy verifier on start</label>
+        </div>
+        <div class="settings-actions">
+          <span id="settings-saved" class="muted"></span>
+          <button id="btn-save-settings" class="primary">Save settings</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-maintenance" class="tab-panel">
+      <div class="card">
+        <h2>Updates</h2>
+        <p class="muted" id="update-state">Checking for updates…</p>
+        <button id="btn-check-updates" class="primary">Check for updates</button>
+      </div>
+      <div class="card">
+        <h2>Replace legacy verifier</h2>
+        <p class="muted">
+          Stops the old Docker container and any running <code>spilled-verifier-windows-x64.exe</code>
+          processes so this version owns the verification loop.
+        </p>
+        <pre id="legacy-scan" class="legacy-scan muted"></pre>
+        <button id="btn-replace-legacy" class="danger">Replace legacy verifier</button>
+      </div>
+      <div class="card">
+        <h2>Spilled Verifier</h2>
+        <p class="muted">The verifier probes pending, degraded, and verified nodes every minute and reports back to the control plane.</p>
+        <button id="btn-quit" class="ghost">Quit Spilled Verifier</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+{
+  "name": "@spilledcinema/verifier-windows",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Native Spilled Verifier tray app with logs, restart, and self-update",
+  "author": "Overload Studio",
+  "main": "main.js",
+  "scripts": {
+    "prepare:payload": "npm run build -w @spilledcinema/verifier && node ../../scripts/prepare-verifier-windows-payload.mjs",
+    "dist:windows": "npm run prepare:payload && electron-builder --win nsis",
+    "pack:windows": "npm run prepare:payload && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "studio.overload.spilled.verifier",
+    "productName": "Spilled Verifier",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "package.json",
+      "verifier/**",
+      "ui/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "../icon-dark-rounded.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Spilled-Verifier-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kao-offline",
+        "repo": "spilled-cinema",
+        "releaseType": "release"
+      }
+    ]
+  }
+}
