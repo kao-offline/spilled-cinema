@@ -237,7 +237,64 @@ Do this in order and confirm each step before moving on.
    `/server/v2/discovery/nodes?capability=<capability>` and can receive
    tickets.
 
-## 6. Troubleshooting
+## 6. Native Windows verifier app
+
+`apps/verifier-windows` is a native (Electron) tray application that runs the
+verifier in the Windows notification area instead of Docker or a headless
+binary. It provides:
+
+- a tray icon with live status, last-pass summary, restart, logs, update, and
+  quit actions;
+- a console window with a live log tail, verification stats, settings, and
+  maintenance panels;
+- automatic restart if the verifier process crashes;
+- self-update from GitHub Releases (`latest.yml` via `electron-updater`);
+- one-click replacement of an older verifier deployment.
+
+### Build
+
+```powershell
+npm run release:verifier-windows
+```
+
+This produces `apps/verifier-windows/release/Spilled-Verifier-Setup-1.0.0-x64.exe`
+and `latest.yml` for auto-update.
+
+### First run
+
+1. Install the executable. The app starts with Windows by default (toggle in
+   the Settings tab).
+2. Open the console from the tray icon and fill in the Settings tab:
+   - control plane URL (`SPILLED_CONTROL_PLANE_URL`);
+   - gateway URL (`SPILLED_GATEWAY_URL`);
+   - control plane secret (`SPILLED_CONTROL_PLANE_SECRET`);
+   - probes JSON (`SPILLED_VERIFIER_PROBES_JSON`).
+3. Click **Save settings** and **Restart verifier**.
+
+The verifier writes a JSON status file after every pass; the console and tray
+render it live. It also respects `SPILLED_VERIFIER_ONCE=1` via the **run once**
+setting for a single probe pass.
+
+### Replacing an older verifier
+
+The app can take over from a previous deployment:
+
+- **Standalone binaries** (`spilled-verifier-windows-x64.exe`) are detected and
+  stopped.
+- **Docker deployment** (`docker-compose.verifier.yml`) containers are detected
+  and stopped/removed.
+
+Use **Replace legacy verifier** in the Maintenance tab or tray menu, or enable
+**auto-replace legacy verifier on start** in Settings. Only one verifier should
+own the verification loop at a time.
+
+### Publishing an update
+
+Upload the installer, `latest.yml`, and the `.exe.blockmap` to the
+`kao-offline/spilled-cinema` GitHub release for the new version tag; the app
+then updates itself on start or from **Check for updates**.
+
+## 7. Troubleshooting
 
 | Symptom | Likely cause and fix |
 |---|---|

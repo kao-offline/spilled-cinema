@@ -247,6 +247,17 @@ again before bytes are sent. There is no direct-IP fallback.
 The verifier checks identity signatures, v2 protocol, gateway reachability,
 encrypted signed responses, and independent advertised capabilities.
 
+On Windows operators can use the native tray app instead of Docker — it bundles
+the verifier, shows live logs and verification stats, restarts on crash,
+replaces an older verifier deployment, and self-updates from GitHub Releases.
+See `docs/verification-system.md` section 6. To build it:
+
+```powershell
+npm run release:verifier-windows
+```
+
+The container deployment is documented below.
+
 Configure capability-safe probes. Search/feed have built-in probes. Operations
 requiring provider-specific identifiers need explicit templates:
 

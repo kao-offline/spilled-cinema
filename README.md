@@ -29,6 +29,9 @@ UI.
   Local/server runtime, auth surface, discovery, relay control-plane integration.
 - `apps/server-windows`
   Self-contained Windows installer and tray host for the headless server.
+- `apps/verifier-windows`
+  Native Windows tray app for the automated verifier: logs, restart, legacy
+  replacement, and self-update.
 - `apps/client/extension`
   Chrome extension bridge from the web app to a local runtime.
 - `apps/client/native`
