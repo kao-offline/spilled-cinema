@@ -3,7 +3,8 @@ import { createServer as createNetServer, type Server as NetServer } from "node:
 import { Readable } from "node:stream";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
 import { hostname } from "node:os";
 import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-handlers";
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
@@ -133,6 +134,11 @@ const backupManager = handlers.runtime.storage instanceof SqliteNodeStorage && p
   : null;
 let publicTunnel: { url: string; close: () => void } | null = null;
 let publicTunnelMonitor: NodeJS.Timeout | null = null;
+let restartingPublicTunnel: Promise<void> | null = null;
+let publicTunnelFailureCount = 0;
+
+const PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT || "3", 10);
+const PUBLIC_TUNNEL_START_TIMEOUT_MS = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_START_TIMEOUT_MS || "15000", 10);
 let nativePipeServer: NetServer | null = null;
 
 const routes: Array<{ path: string; handler: RouteHandler }> = [
@@ -437,10 +443,177 @@ server.listen(port, host, () => {
   void startServerServices();
 });
 
+function withStartTimeout<T>(promise: Promise<T>, label: string) {
+  let timeout: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} did not return a tunnel URL within ${PUBLIC_TUNNEL_START_TIMEOUT_MS}ms`));
+    }, PUBLIC_TUNNEL_START_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
+function sanitizeTunnelSubdomain(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63);
+}
+
+async function getPreferredTunnelSubdomain() {
+  const explicit = process.env.SPILLED_PUBLIC_TUNNEL_SUBDOMAIN?.trim();
+  if (explicit) {
+    return sanitizeTunnelSubdomain(explicit);
+  }
+
+  const record = await handlers.runtime.getNodeRecord();
+  return sanitizeTunnelSubdomain(`spilled-${record.nodeId.slice(0, 18)}`);
+}
+
 async function startPublicTunnel(): Promise<{ url: string; close: () => void } | null> {
-  // v2 remote access always uses the authenticated outbound managed-gateway
-  // link. Ad-hoc inbound tunnels are intentionally unsupported.
+  if (process.env.SPILLED_NODE_ENDPOINT_URL || process.env.SPILLED_DISABLE_AUTO_TUNNEL === "1") {
+    return null;
+  }
+
+  const providers = process.env.SPILLED_PUBLIC_TUNNEL_PROVIDERS?.split(",").map((provider) => provider.trim().toLowerCase()).filter(Boolean) ?? ["cloudflared", "localtunnel"];
+
+  for (const provider of providers) {
+    try {
+      if (provider === "cloudflared" || provider === "cloudflare") {
+        return await startCloudflaredTunnel();
+      }
+      if (provider === "localtunnel") {
+        return await startLocalTunnel();
+      }
+      console.warn(`[spilledcinema-server] unknown public tunnel provider ${provider}`);
+    } catch (error) {
+      console.warn(`[spilledcinema-server] ${provider} public fetch tunnel failed`, error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return null;
+}
+
+async function startLocalTunnel() {
+  const localtunnelModule = await import("localtunnel");
+  const createTunnel = localtunnelModule.default ?? localtunnelModule;
+
+  async function openTunnel(subdomain?: string) {
+    const label = subdomain ? `localtunnel subdomain ${subdomain}` : "localtunnel random subdomain";
+    return await withStartTimeout(createTunnel({
+      port,
+      local_host: "127.0.0.1",
+      ...(subdomain ? { subdomain } : {}),
+    }), label);
+  }
+
+  const subdomain = await getPreferredTunnelSubdomain();
+  let tunnel: Awaited<ReturnType<typeof openTunnel>>;
+  try {
+    tunnel = await openTunnel(subdomain);
+  } catch (error) {
+    console.warn("[spilledcinema-server] preferred localtunnel fetch tunnel failed", error instanceof Error ? error.message : String(error));
+    tunnel = await openTunnel();
+  }
+  const tunnelUrl = String(tunnel.url).replace(/\/$/, "");
+
+  tunnel.on?.("close", () => {
+    console.warn("[spilledcinema-server] public fetch tunnel closed");
+    if (publicTunnel?.url === tunnelUrl) {
+      void restartPublicTunnel();
+    }
+  });
+  tunnel.on?.("error", (error: unknown) => {
+    console.warn("[spilledcinema-server] public fetch tunnel error", error instanceof Error ? error.message : String(error));
+  });
+
+  return {
+    url: tunnelUrl,
+    close: () => tunnel.close(),
+  };
+}
+
+function resolveCloudflaredCliPath() {
+  try {
+    const resolved = createRequire(import.meta.url).resolve("cloudflared/lib/cloudflared.js");
+    // Inside an Electron asar archive the native binary cannot be spawned
+    // directly; point at the unpacked copy electron-builder provides.
+    return resolved.replace(/\.asar([\\/]|$)/, ".asar.unpacked$1");
+  } catch {
+    // Fall back to the workspace layout used by the legacy dev scripts.
+    return resolve(process.cwd(), "..", "..", "node_modules", "cloudflared", "lib", "cloudflared.js");
+  }
+}
+
+async function startCloudflaredTunnel() {
+  const cloudflaredCliPath = resolveCloudflaredCliPath();
+  const child = spawn(process.execPath, [cloudflaredCliPath, "tunnel", "--url", `http://127.0.0.1:${port}`, "--no-autoupdate"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let resolved = false;
+  let stderrBuffer = "";
+
+  const tunnel = await withStartTimeout(new Promise<{ url: string; child: ChildProcess }>((resolvePromise, rejectPromise) => {
+    child.once("error", rejectPromise);
+    child.once("exit", (code, signal) => {
+      if (!resolved) {
+        rejectPromise(new Error(`cloudflared exited before publishing a tunnel URL (${signal ?? code ?? "unknown"})`));
+      }
+    });
+
+    function inspectOutput(chunk: Buffer) {
+      const text = chunk.toString("utf8");
+      stderrBuffer = `${stderrBuffer}${text}`.slice(-8_000);
+      const match = stderrBuffer.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+      if (!match) {
+        return;
+      }
+      resolved = true;
+      resolvePromise({ url: match[0].replace(/\/$/, ""), child });
+    }
+
+    child.stdout?.on("data", inspectOutput);
+    child.stderr?.on("data", inspectOutput);
+  }), "cloudflared");
+
+  child.on("exit", (code, signal) => {
+    console.warn(`[spilledcinema-server] public fetch tunnel closed (${signal ?? code ?? "unknown"})`);
+    if (publicTunnel?.url === tunnel.url) {
+      void restartPublicTunnel();
+    }
+  });
+
+  return {
+    url: tunnel.url,
+    close: () => {
+      if (!child.killed) {
+        child.kill();
+      }
+    },
+  };
+}
+
+async function checkPublicTunnel(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(`${url}/api/status`, {
+      headers: { "bypass-tunnel-reminder": "true" },
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function stopPublicTunnelMonitor() {
@@ -452,6 +625,69 @@ function stopPublicTunnelMonitor() {
 
 function startPublicTunnelMonitor() {
   stopPublicTunnelMonitor();
+  if (process.env.SPILLED_NODE_ENDPOINT_URL || process.env.SPILLED_DISABLE_AUTO_TUNNEL === "1") {
+    return;
+  }
+
+  publicTunnelMonitor = setInterval(() => {
+    if (!publicTunnel) {
+      void restartPublicTunnel();
+      return;
+    }
+
+    void checkPublicTunnel(publicTunnel.url).then((healthy) => {
+      if (healthy) {
+        publicTunnelFailureCount = 0;
+        return;
+      }
+
+      publicTunnelFailureCount += 1;
+      console.warn(`[spilledcinema-server] public fetch tunnel unhealthy ${publicTunnel?.url ?? ""} (${publicTunnelFailureCount}/${PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT})`);
+      if (publicTunnelFailureCount >= PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT) {
+        publicTunnelFailureCount = 0;
+        void restartPublicTunnel();
+      }
+    });
+  }, 30_000);
+}
+
+async function restartPublicTunnel() {
+  if (restartingPublicTunnel) {
+    return restartingPublicTunnel;
+  }
+
+  restartingPublicTunnel = (async () => {
+    const previous = publicTunnel;
+    publicTunnel = null;
+    handlers.runtime.setEndpointUrl(undefined);
+    try {
+      previous?.close();
+    } catch {
+      // The tunnel may already be closed.
+    }
+
+    const nextTunnel = await startPublicTunnel();
+    if (!nextTunnel) {
+      console.warn("[spilledcinema-server] no public fetch tunnel available; this node is local-only");
+      return;
+    }
+
+    publicTunnel = nextTunnel;
+    publicTunnelFailureCount = 0;
+    handlers.runtime.setEndpointUrl(nextTunnel.url);
+    setNodeEndpointUrl(nextTunnel.url);
+    console.log(`[spilledcinema-server] public fetch server ${nextTunnel.url}`);
+    void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
+      if (setup?.setupCode) {
+        console.log(`[spilledcinema-server] setup URL: https://spilled.overload.studio/node/setup?node=${encodeURIComponent(nextTunnel.url)}`);
+      }
+    });
+    void refreshManagedGatewayApplication?.();
+  })().finally(() => {
+    restartingPublicTunnel = null;
+  });
+
+  return restartingPublicTunnel;
 }
 
 async function startServerServices() {

@@ -1,5 +1,3 @@
-import { isAppleTouchDevice } from "./hls-buffering";
-
 const CACHE_PREFIX = "spilled.player-url-cache.v3";
 const DEFAULT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PLAYBACK_CACHE_TTL_MS = 20 * 60 * 1000;
@@ -15,17 +13,6 @@ type CachedPlayerFailure = {
 };
 
 const BROWSER_FILE_PATH = "/api/download-full/browser-file";
-
-function isMobilePlaybackDevice() {
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return false;
-  }
-  return isAppleTouchDevice({
-    userAgent: navigator.userAgent,
-    platform: navigator.platform,
-    maxTouchPoints: navigator.maxTouchPoints,
-  });
-}
 
 function findBrowserFileSegment(url: string) {
   const searchIndex = url.indexOf("?");
@@ -62,13 +49,16 @@ export function normalizePlaybackUrlForClient(url: string) {
   }
 
   const localRuntimeHost = ["127.0.0.1", "localhost"].includes(parsed.hostname);
-  if (!localRuntimeHost && !isMobilePlaybackDevice()) {
+  if (isCanonicalPath && !localRuntimeHost) {
+    // A reachable node endpoint (e.g. a public fetch tunnel) proxies media from
+    // the source IP and rewrites the playlist to its own origin, so it works on
+    // every device, including Apple mobile. Keep it as-is.
     return url;
   }
 
-  // On mobile the native HLS stack can only fetch segments from the dashboard
-  // origin. Local-runtime hosts (127.0.0.1/localhost) are never reachable from a
-  // hosted page, so route those through the same-origin proxy on every device.
+  // Local-runtime hosts (127.0.0.1/localhost) are never reachable from a hosted
+  // page, and stale node-id-prefixed cache entries are not resolvable; route
+  // those through the same-origin dashboard proxy.
   return `${window.location.origin}${BROWSER_FILE_PATH}${segment.search}`;
 }
 

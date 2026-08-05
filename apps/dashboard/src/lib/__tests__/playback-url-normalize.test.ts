@@ -44,21 +44,18 @@ describe("normalizePlaybackUrlForClient", () => {
     )).toBe(`${DASHBOARD_ORIGIN}/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1`);
   });
 
-  it("keeps remote tunnel playback URLs on desktop (node origin is reachable)", () => {
+  it("keeps reachable node-tunnel playback URLs on desktop (node origin is reachable)", () => {
     const url = "https://node-abc.loca.lt/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1";
     expect(normalizePlaybackUrlForClient(url)).toBe(url);
   });
 
-  it("routes remote gateway playback URLs through the dashboard proxy on mobile", () => {
+  it("keeps reachable node-tunnel playback URLs on mobile (do not reroute tunneled media through the Vercel proxy)", () => {
     stubClient(true);
-    const url = "https://node-abc.loca.lt/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1";
-    expect(normalizePlaybackUrlForClient(url)).toBe(
-      `${DASHBOARD_ORIGIN}/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1`,
-    );
+    const url = "https://node-abc.trycloudflare.com/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1";
+    expect(normalizePlaybackUrlForClient(url)).toBe(url);
   });
 
-  it("repairs stale node-id-prefixed browser-file URLs on mobile", () => {
-    stubClient(true);
+  it("repairs stale node-id-prefixed browser-file URLs on any device", () => {
     const stale = "spillednode_abc/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1";
     expect(normalizePlaybackUrlForClient(stale)).toBe(
       `${DASHBOARD_ORIGIN}/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1`,
