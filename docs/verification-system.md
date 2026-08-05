@@ -257,7 +257,7 @@ binary. It provides:
 npm run release:verifier-windows
 ```
 
-This produces `apps/verifier-windows/release/Spilled-Verifier-Setup-1.0.0-x64.exe`
+This produces `apps/verifier-windows/release/Spilled-Verifier-Setup-1.1.0-x64.exe`
 and `latest.yml` for auto-update.
 
 ### First run
@@ -291,7 +291,7 @@ own the verification loop at a time.
 ### Publishing an update
 
 Upload the installer, `latest.yml`, and the `.exe.blockmap` to the
-`kao-offline/spilled-cinema` GitHub release for the new version tag; the app
+`kao-offline/spilled-black-box` GitHub release for the new version tag; the app
 then updates itself on start or from **Check for updates**.
 
 ## 7. Troubleshooting
