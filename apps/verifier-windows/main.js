@@ -81,7 +81,7 @@ function sendToWindow(channel, payload) {
 
 function emitUpdateState(state) {
   lastUpdateState = state;
-  emitUpdateState(state);
+  sendToWindow("update:state", state);
 }
 
 function verifierState() {

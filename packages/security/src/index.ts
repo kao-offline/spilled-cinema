@@ -12,7 +12,6 @@ import {
   verify as cryptoVerify,
 } from "node:crypto";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
-import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
 import type {
   AnonymousSessionGrant,
   PairingApproval,
@@ -102,6 +101,7 @@ export function randomId(prefix: string) {
 }
 
 export async function hashPassword(password: string): Promise<PasswordHash> {
+  const { hash: hashArgon2 } = await import("@node-rs/argon2");
   return {
     algorithm: "argon2id",
     encoded: await hashArgon2(password, {
@@ -115,6 +115,7 @@ export async function hashPassword(password: string): Promise<PasswordHash> {
 
 export async function verifyPassword(password: string, hash: PasswordHash): Promise<boolean> {
   if (hash.algorithm === "argon2id") {
+    const { verify: verifyArgon2 } = await import("@node-rs/argon2");
     return await verifyArgon2(hash.encoded, password);
   }
   if (hash.algorithm !== "scrypt") {

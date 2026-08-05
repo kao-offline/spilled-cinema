@@ -18,7 +18,6 @@ import {
   verify as cryptoVerify
 } from "node:crypto";
 import { chacha20poly1305 } from "@noble/ciphers/chacha";
-import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
 function base64UrlEncode(buffer) {
   return buffer.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
