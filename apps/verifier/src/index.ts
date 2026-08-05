@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rename, writeFile } from "node:fs/promises";
 import WebSocket from "ws";
 import {
   createEncryptedNodeRequest,
@@ -150,7 +151,30 @@ async function probe(candidate: Candidate, capability: Capability) {
   return payload.ok ? "verified" as const : "degraded" as const;
 }
 
-async function verifyCandidate(candidate: Candidate) {
+type PassSummary = {
+  lastRunAt: number;
+  nodes: number;
+  verified: number;
+  degraded: number;
+  quarantined: number;
+  capabilitiesVerified: number;
+  capabilitiesTotal: number;
+  errors: string[];
+};
+
+async function writeStatusFile(summary: PassSummary) {
+  const target = process.env.SPILLED_VERIFIER_STATUS_FILE;
+  if (!target) return;
+  const temporary = `${target}.tmp`;
+  await writeFile(temporary, JSON.stringify(summary, null, 2));
+  await rename(temporary, target);
+}
+
+async function verifyCandidate(candidate: Candidate): Promise<{
+  nodeId: string;
+  status: "verified" | "degraded" | "quarantined";
+  capabilities: Array<{ capability: Capability; status: "verified" | "degraded" | "quarantined" }>;
+}> {
   const identityValid =
     candidate.identity.protocolVersion === 2 &&
     verifyPayload({
@@ -188,16 +212,67 @@ async function verifyCandidate(candidate: Candidate) {
     body: JSON.stringify({ nodeId: candidate.nodeId, status, capabilities: results }),
   });
   if (!response.ok) throw new Error(`Verification update failed: ${response.status}.`);
+  return { nodeId: candidate.nodeId, status, capabilities: results };
 }
 
 async function runOnce() {
   const response = await controlPlane("/v2/nodes/verification-candidates?limit=20");
   if (!response.ok) throw new Error(`Candidate request failed: ${response.status}.`);
   const payload = await response.json() as { candidates?: Candidate[] };
-  await Promise.allSettled((payload.candidates ?? []).map((candidate) => verifyCandidate(candidate)));
+  const candidates = payload.candidates ?? [];
+  const settled = await Promise.allSettled(candidates.map((candidate) => verifyCandidate(candidate)));
+  const errors: string[] = [];
+  let verified = 0;
+  let degraded = 0;
+  let quarantined = 0;
+  let capabilitiesVerified = 0;
+  let capabilitiesTotal = 0;
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+      continue;
+    }
+    const candidate = result.value;
+    if (candidate.status === "verified") verified += 1;
+    else if (candidate.status === "degraded") degraded += 1;
+    else quarantined += 1;
+    for (const capability of candidate.capabilities) {
+      capabilitiesTotal += 1;
+      if (capability.status === "verified") capabilitiesVerified += 1;
+    }
+  }
+  await writeStatusFile({
+    lastRunAt: Date.now(),
+    nodes: candidates.length,
+    verified,
+    degraded,
+    quarantined,
+    capabilitiesVerified,
+    capabilitiesTotal,
+    errors,
+  });
 }
 
-await runOnce();
-if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
-  setInterval(() => void runOnce().catch((error) => console.error("[verifier]", error)), 60_000);
+async function main() {
+  try {
+    await runOnce();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[verifier] pass failed:", message);
+    await writeStatusFile({
+      lastRunAt: Date.now(),
+      nodes: 0,
+      verified: 0,
+      degraded: 0,
+      quarantined: 0,
+      capabilitiesVerified: 0,
+      capabilitiesTotal: 0,
+      errors: [message],
+    });
+  }
+  if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
+    setInterval(() => void main().catch((error) => console.error("[verifier]", error)), 60_000);
+  }
 }
+
+await main();
