@@ -244,9 +244,13 @@ async function probe(candidate, capability) {
 async function writeStatusFile(summary) {
   const target = process.env.SPILLED_VERIFIER_STATUS_FILE;
   if (!target) return;
-  const temporary = `${target}.tmp`;
-  await writeFile(temporary, JSON.stringify(summary, null, 2));
-  await rename(temporary, target);
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(summary, null, 2));
+    await rename(temporary, target);
+  } catch (error) {
+    console.error("[verifier] status write failed:", error instanceof Error ? error.message : String(error));
+  }
 }
 async function verifyCandidate(candidate) {
   const identityValid = candidate.identity.protocolVersion === 2 && verifyPayload({
@@ -315,7 +319,10 @@ async function runOnce() {
     errors
   });
 }
+var passInFlight = false;
 async function main() {
+  if (passInFlight) return;
+  passInFlight = true;
   try {
     await runOnce();
   } catch (error) {
@@ -331,6 +338,8 @@ async function main() {
       capabilitiesTotal: 0,
       errors: [message]
     });
+  } finally {
+    passInFlight = false;
   }
   if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
     setInterval(() => void main().catch((error) => console.error("[verifier]", error)), 6e4);
