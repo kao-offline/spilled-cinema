@@ -172,6 +172,7 @@ type ArtworkBundle = {
   backdropUrl?: string | null;
   bannerUrl?: string | null;
   clearLogoUrl?: string | null;
+  bannerWithLogoUrl?: string | null;
 };
 
 function inferArtworkMediaType(show: ImportedShow): ArtworkMediaType {
@@ -194,6 +195,7 @@ function scoreArtworkBundle(artwork: ArtworkBundle, show: ImportedShow) {
   if (artwork.backdropUrl && artwork.backdropUrl !== show.backdropUrl) score += 1;
   if (artwork.bannerUrl && artwork.bannerUrl !== show.bannerUrl) score += 1;
   if (artwork.clearLogoUrl && artwork.clearLogoUrl !== show.clearLogoUrl) score += 1;
+  if (artwork.bannerWithLogoUrl && artwork.bannerWithLogoUrl !== (show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl)) score += 1;
   return score;
 }
 
@@ -234,6 +236,15 @@ async function refreshArtworkForImportedShow(input: {
     backdropUrl: artwork.backdropUrl ?? input.show.backdropUrl ?? null,
     bannerUrl: artwork.bannerUrl ?? input.show.bannerUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? input.show.clearLogoUrl ?? null,
+    homepageBannerUrl: artwork.bannerWithLogoUrl ?? input.show.homepageBannerUrl ?? null,
+    artwork: {
+      ...(input.show.artwork ?? {}),
+      posterUrl: artwork.posterUrl ?? input.show.artwork?.posterUrl ?? input.show.posterUrl ?? null,
+      backdropUrl: artwork.backdropUrl ?? input.show.artwork?.backdropUrl ?? input.show.backdropUrl ?? null,
+      bannerUrl: artwork.bannerUrl ?? input.show.artwork?.bannerUrl ?? input.show.bannerUrl ?? null,
+      clearLogoUrl: artwork.clearLogoUrl ?? input.show.artwork?.clearLogoUrl ?? input.show.clearLogoUrl ?? null,
+      bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? input.show.artwork?.bannerWithLogoUrl ?? input.show.homepageBannerUrl ?? null,
+    },
   };
 }
 
