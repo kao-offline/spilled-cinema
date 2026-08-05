@@ -2,6 +2,9 @@
 
 Production node and managed gateway setup: [docs/node-v2-setup.md](docs/node-v2-setup.md).
 
+How nodes are verified, version compatibility, and adding a new server:
+[docs/verification-system.md](docs/verification-system.md).
+
 SpilledCinema is now a monorepo, not a single `spilled-library` app.
 
 ## Easiest Windows server setup
