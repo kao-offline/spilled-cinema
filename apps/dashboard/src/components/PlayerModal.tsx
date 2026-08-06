@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, ChevronRight, LoaderCircle, MoreHorizontal, RotateCw } from "lucide-react";
+import { ArrowLeft, ChevronDown, LoaderCircle, RotateCw } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -286,42 +286,6 @@ export function PlayerModal({
     : instantPlayback?.playerAlias
       ? effectiveEpisode?.players.find((player) => player.alias === instantPlayback.playerAlias) ?? activePlayer
       : activePlayer;
-
-  function toggleLang(lang: string) {
-    setExpandedLangs((prev) => {
-      const next = new Set(prev);
-      if (next.has(lang)) next.delete(lang);
-      else next.add(lang);
-      return next;
-    });
-  }
-
-  function handleChoosePlayer(player: EpisodePlayer) {
-    if (!episode) return;
-    const shouldRetry = player.alias === activePlayer?.alias
-      || playerStatuses[player.alias]?.status === "failed"
-      || player.resolutionStatus === "failed";
-    if (shouldRetry && !isLocalPlayer(player)) {
-      const key = playbackCacheKey(player);
-      removeCachedPlayerUrl("playback", key);
-      removeCachedPlayerFailure("playback", key);
-      playbackErrorRetryRef.current = key;
-      setPlayback(null);
-      setPlaybackError(null);
-      setPlaybackFailures([]);
-      setPlayerStatuses((current) => ({
-        ...current,
-        [player.alias]: { status: "unresolved" },
-      }));
-      setPlaybackRetryNonce((value) => value + 1);
-    }
-    if (episode.players.some((entry) => entry.alias === player.alias)) {
-      setLocalSelectedAlias(null);
-      onSelectPlayer(episode.id, player.alias);
-      return;
-    }
-    setLocalSelectedAlias(player.alias);
-  }
 
   useEffect(() => {
     setExpandedPlayers([]);

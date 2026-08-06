@@ -57,33 +57,6 @@ export function normalizeRepositoryManifestUrl(input: string) {
   }
 }
 
-function githubRawUrlToContentsApiUrl(input: string) {
-  try {
-    const url = new URL(input);
-    if (url.hostname !== "raw.githubusercontent.com") {
-      return null;
-    }
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length < 4) {
-      return null;
-    }
-    const [owner, repo, branch, ...pathParts] = parts;
-    return `https://api.github.com/repos/${owner}/${repo}/contents/${pathParts.join("/")}?ref=${encodeURIComponent(branch)}`;
-  } catch {
-    return null;
-  }
-}
-
-function decodeBase64Content(value: string) {
-  const normalized = value.replace(/\s+/g, "");
-  if (typeof atob === "function") {
-    return decodeURIComponent(
-      Array.from(atob(normalized), (char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`).join(""),
-    );
-  }
-  throw new Error("Base64 decoding is unavailable in this runtime.");
-}
-
 export async function fetchProviderRepositoryText(url: string, accept: string) {
   const response = await fetch(url, {
     cache: "no-store",

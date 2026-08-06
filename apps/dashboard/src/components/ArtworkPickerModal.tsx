@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
-  Image as ImageIcon,
   LoaderCircle,
   RefreshCw,
   X,
@@ -157,30 +156,21 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
         aria-modal="true"
         aria-label={`Edit artwork for ${show.title}`}
       >
-        <header className="flex items-center justify-between border-b border-white/10 px-6 py-4">
-          <div className="flex items-center gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10">
-              <ImageIcon className="h-5 w-5 text-white/70" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-white">{show.title}</h2>
-              <p className="text-xs text-white/50">Choose artwork for your library</p>
-            </div>
+        <nav className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <div className="flex gap-2">
+            {artworkTabs.map(({ key, label }) => (
+              <button key={key} type="button" onClick={() => setArtworkTab(key)} className={clsx("flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition", artworkTab === key ? "bg-white text-black" : "text-white/50 hover:bg-white/10 hover:text-white")}>
+                <span className={clsx("h-2 w-2 rounded-full", artworkTab === key ? "bg-red-500" : "bg-white/30")} />
+                {label}
+              </button>
+            ))}
           </div>
-          <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/60 transition hover:bg-white/20 hover:text-white" aria-label="Close">
+          <button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white/60 transition hover:bg-white/20 hover:text-white" aria-label="Close">
             <X className="h-4 w-4" />
           </button>
-        </header>
-
-        <nav className="flex gap-1 border-b border-white/10 px-6 py-3" aria-label="Artwork type">
-          {artworkTabs.map(({ key, label }) => (
-            <button key={key} type="button" onClick={() => setArtworkTab(key)} className={clsx("rounded-xl px-4 py-2 text-sm font-semibold transition", artworkTab === key ? "bg-white text-black" : "text-white/50 hover:bg-white/10 hover:text-white")}>
-              {label}
-            </button>
-          ))}
         </nav>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {artworkLoading ? (
             <div className="flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/5">
               <LoaderCircle className="mb-3 h-6 w-6 animate-spin text-white/50" />
@@ -199,9 +189,6 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
             </div>
           ) : (
             <>
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-xs text-white/40">{filteredArtworkAssets.length} options</span>
-              </div>
               <div className={clsx("grid gap-3", artworkTab === "poster" ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" : "grid-cols-1 sm:grid-cols-2")}>
                 {visibleAssets.map((asset) => {
                   const selected = selectedAsset?.url === asset.url && selectedAsset.kind === asset.kind;
@@ -211,7 +198,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
                       <div className="flex items-center justify-between px-3 py-2">
                         <div className="min-w-0">
                           <div className="truncate text-xs font-semibold text-white/80">{asset.label}</div>
-                          <div className="text-[10px] text-white/40">{asset.source}{asset.language ? ` · ${asset.language}` : ""}</div>
+                          <div className="text-[10px] text-white/40">{asset.source}</div>
                         </div>
                         {selected ? <Check className="h-4 w-4 text-white" /> : null}
                       </div>
@@ -228,7 +215,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
           )}
         </div>
 
-        <footer className="flex items-center justify-between border-t border-white/10 px-6 py-4">
+        <footer className="flex items-center justify-between border-t border-white/10 px-4 py-3">
           <div className="min-w-0 flex-1">
             {selectedAsset ? (
               <div className="truncate text-sm font-semibold text-white/80">{selectedAsset.label}</div>
