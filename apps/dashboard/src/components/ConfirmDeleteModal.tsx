@@ -1,5 +1,6 @@
 import { Trash2, X } from "lucide-react";
 import type { LibraryEpisode } from "../lib/types";
+import { formatEpisodeTitle } from "../lib/episode-title";
 
 type ConfirmDeleteModalProps = {
   episode: LibraryEpisode | null;
@@ -12,7 +13,7 @@ export function ConfirmDeleteModal({ episode, onCancel, onConfirm }: ConfirmDele
     return null;
   }
 
-  const label = episode.episodeTitle ?? episode.episodeCode ?? "this episode";
+  const label = formatEpisodeTitle(episode);
 
   return (
     <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/80 px-4 sm:px-6 backdrop-blur-md">

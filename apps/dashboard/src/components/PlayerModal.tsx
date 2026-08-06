@@ -296,7 +296,7 @@ export function PlayerModal({
   const modalHeading = isMovieEntry
     ? effectiveEpisode?.showTitle ?? "Movie"
     : effectiveEpisode
-      ? effectiveEpisode.episodeTitle?.trim() || formatEpisodeTitle(effectiveEpisode)
+      ? formatEpisodeTitle(effectiveEpisode)
       : "Episode";
   const modalSubheading = isMovieEntry ? effectiveEpisode?.showTitle ?? "" : `${effectiveEpisode?.showTitle} - Season ${effectiveEpisode?.seasonNumber} - Episode ${effectiveEpisode?.episodeNumber ?? "?"}`;
   const pageTitle = modalHeading;
@@ -690,7 +690,7 @@ export function PlayerModal({
     const nonSubtitlePlayers = effectiveEpisode.players.filter((p) =>
       p.alias !== active.alias &&
       !/titulky|subtitles|subbed/i.test(p.language ?? "") &&
-      !Boolean(p.subtitlesUrl) &&
+      !p.subtitlesUrl &&
       p.resolutionStatus !== "failed" &&
       !playbackFailures.some((f) => f.playerAlias === p.alias),
     );

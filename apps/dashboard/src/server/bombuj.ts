@@ -665,7 +665,7 @@ async function fetchBombujSerial(rawSlug: string): Promise<ImportedShow> {
       seasonNumber: episode.seasonNumber,
       episodeNumber: episode.episodeNumber,
       episodeCode: episode.episodeCode,
-      episodeTitle: `${title} - ${episode.episodeCode.toUpperCase()}${episode.language && episode.language !== "Unknown Lang" ? ` - ${episode.language}` : ""}`,
+      episodeTitle: null,
       episodeUrl: episode.episodeUrl,
       players,
       selectedPlayerAlias: players[0].alias,

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import type { ExploreItem, ProviderFeedManifest, ProviderModuleManifest } from "../lib/types";
+import { formatEpisodeTitle } from "../lib/episode-title";
 
 type ProviderFeedPageProps = {
   module: ProviderModuleManifest;
@@ -32,10 +33,13 @@ type AnimeFilterMode = "all" | "anime" | "no-anime";
 const FEED_CHUNK_SIZE = 8;
 
 function buildEpisodeLabel(item: ExploreItem) {
-  const parts = [item.episode?.episodeCode?.toUpperCase(), item.episode?.episodeTitle]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-  return parts.join(" - ");
+  if (!item.episode) return "";
+  return formatEpisodeTitle({
+    showTitle: item.title,
+    episodeTitle: item.episode.episodeTitle ?? null,
+    episodeCode: item.episode.episodeCode ?? null,
+    episodeNumber: item.episode.episodeNumber ?? null,
+  });
 }
 
 function isAnimeItem(item: ExploreItem) {
@@ -177,8 +181,12 @@ function ProviderFeedItemModal({
 
   const artwork = getFeedArtwork(item);
   const metadata = [
-    item.episode?.episodeCode?.toUpperCase(),
-    item.episode?.episodeTitle,
+    item.episode ? formatEpisodeTitle({
+      showTitle: item.title,
+      episodeTitle: item.episode.episodeTitle ?? null,
+      episodeCode: item.episode.episodeCode ?? null,
+      episodeNumber: item.episode.episodeNumber ?? null,
+    }) : null,
     item.yearLabel,
     providerLabel,
   ]

@@ -31,6 +31,7 @@ export type LibraryEpisode = {
   episodeUrl: string;
   players: EpisodePlayer[];
   selectedPlayerAlias: PlayerAlias;
+  directors?: CastMember[];
   durationSeconds?: number;
   playbackPositionSeconds?: number;
   playbackDurationSeconds?: number;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
-import { ArrowLeft, ChevronDown, Download, ExternalLink, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
@@ -434,9 +434,15 @@ export function ShowDetail({
                                   title={episodeTitle}
                                 >
                                   <span className="spilled-episode-code">{episodeShortLabel(episode)}</span>
-                                  <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
-                                  {hasCzSubs ? <span className="spilled-subtitle-tag" title="Czech subtitles">CZ TIT</span> : null}
-                                </button>
+                                   <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
+                                   {hasCzSubs ? <span className="spilled-subtitle-tag" title="Czech subtitles">CZ TIT</span> : null}
+                                 </button>
+                                 {episode.directors?.length ? (
+                                   <div className="flex min-w-0 items-center gap-1 text-xs text-white/40 mt-0.5 pl-11">
+                                     <Film className="h-3 w-3 shrink-0 opacity-60" />
+                                     <span className="truncate">{episode.directors.map((d) => d.name).join(", ")}</span>
+                                   </div>
+                                 ) : null}
 
                                 <div className="flex shrink-0 items-center gap-1.5">
                                   <button

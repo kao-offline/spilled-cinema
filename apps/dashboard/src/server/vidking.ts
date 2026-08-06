@@ -50,6 +50,11 @@ type TmdbDetails = {
       profile_path?: string | null;
       order?: number;
     }>;
+    crew?: Array<{
+      name?: string;
+      job?: string;
+      profile_path?: string | null;
+    }>;
   };
   seasons?: Array<{
     season_number?: number;
@@ -114,6 +119,17 @@ function tmdbCast(details: TmdbDetails): CastMember[] {
         .filter(([name]) => Boolean(name)),
     ).values(),
   ).slice(0, 12);
+}
+
+function tmdbDirectors(details: TmdbDetails): CastMember[] {
+  return (details.credits?.crew ?? [])
+    .filter((person) => person.job === "Director")
+    .map((person) => ({
+      name: person.name?.trim() ?? "",
+      role: "Director",
+      profileUrl: tmdbImage(person.profile_path, "w342"),
+    }))
+    .filter((d) => Boolean(d.name));
 }
 
 function parseYear(value: string | null | undefined) {
@@ -469,7 +485,7 @@ async function buildTvEpisodes(input: {
         seasonNumber,
         episodeNumber,
         episodeCode,
-        episodeTitle: episode.name ? `${input.title} - ${episodeCode.toUpperCase()} - ${episode.name}` : `${input.title} - ${episodeCode.toUpperCase()}`,
+        episodeTitle: episode.name || null,
         episodeUrl: detailUrl,
         players: [player],
         selectedPlayerAlias: player.alias,
@@ -542,6 +558,7 @@ export async function fetchVidkingTitle(slug: string, mediaType?: "movie" | "ser
     bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
     actors: tmdbCast(details),
+    directors: tmdbDirectors(details),
     availableSeasons: [...new Set(episodes.map((episode) => episode.seasonNumber))].sort((a, b) => a - b),
     importedAt,
     episodes,

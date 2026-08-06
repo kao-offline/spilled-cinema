@@ -657,15 +657,8 @@ async function resolvePlayers(
   return resolved.filter(Boolean) as ParsedPlayer[];
 }
 
-function buildEpisodeTitle(showTitle: string, episode: ParsedEpisode) {
-  const parts = [showTitle];
-  if (episode.episodeCode) {
-    parts.push(episode.episodeCode.toUpperCase());
-  }
-  if (episode.episodeTitle) {
-    parts.push(episode.episodeTitle);
-  }
-  return parts.join(" - ");
+function buildEpisodeTitle(_showTitle: string, episode: ParsedEpisode) {
+  return episode.episodeTitle || null;
 }
 
 // Keep legacy deep-scrape helpers available for quick rollback/debugging.
