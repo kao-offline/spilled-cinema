@@ -152,15 +152,10 @@ function extractServerBaseUrl(playbackUrl: string | undefined): string | null {
   return null;
 }
 
-function createSubtitleTrack(player: EpisodePlayer | null, serverBaseUrl: string | null) {
+function createSubtitleTrack(player: EpisodePlayer | null, _serverBaseUrl: string | null) {
   if (!player?.subtitlesUrl) return [];
   const presentation = getLanguagePresentation(player.language || player.label || "Subtitles");
-  let src: string;
-  if (serverBaseUrl) {
-    src = `${serverBaseUrl}/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`;
-  } else {
-    src = buildRuntimeUrl(`/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`);
-  }
+  const src = buildRuntimeUrl(`/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`);
   return [{
     src,
     label: presentation.labelWithFlags,
@@ -224,7 +219,6 @@ export function PlayerModal({
   const [expandedPlayers, setExpandedPlayers] = useState<EpisodePlayer[]>([]);
   const [localSelectedAlias, setLocalSelectedAlias] = useState<PlayerAlias | null>(null);
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
-  const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
@@ -333,7 +327,6 @@ export function PlayerModal({
     setExpandedPlayers([]);
     setLocalSelectedAlias(null);
     setSourceDiscoveryState("idle");
-    setEpisodeSelectorOpen(false);
     setSelectedSelectorSeason(null);
     setPlaybackRetryNonce(0);
     playbackErrorRetryRef.current = null;
@@ -786,24 +779,13 @@ export function PlayerModal({
           <img src="/Spilled.svg" alt="Spilled" className="hidden h-9 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
         </div>
 
-        <div className="pointer-events-auto absolute left-16 right-16 top-[max(1.25rem,env(safe-area-inset-top))] sm:left-1/2 sm:right-auto sm:w-[min(74vw,22rem)] sm:-translate-x-1/2 lg:top-5">
-          <button
-            type="button"
-            onClick={() => setEpisodeSelectorOpen((value) => !value)}
-            className="spilled-glass-trigger mx-auto h-10 max-w-full px-2.5 pl-4"
-            aria-expanded={episodeSelectorOpen}
-            aria-label="Select episode"
-          >
-            <span className="shrink-0 text-[11px] font-black uppercase text-white/36">{episodeShortLabel(effectiveEpisode)}</span>
-            <span className="min-w-0 truncate text-base font-black leading-none text-white">{modalHeading}</span>
-            <span className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/8 ring-1 ring-white/10">
-              <ChevronDown className={clsx("h-4 w-4 text-white/70 transition-transform duration-200", episodeSelectorOpen && "rotate-180")} />
-            </span>
+        <div className="pointer-events-auto relative">
+          <button type="button" onClick={() => setPlayerMenuOpen((value) => !value)} className="spilled-glass-icon h-10 w-10" aria-label="Player options">
+            <ChevronDown className={clsx("h-4 w-4 transition-transform duration-200", playerMenuOpen && "rotate-180")} />
           </button>
-
-          {episodeSelectorOpen ? (
-            <div className="glass-panel absolute left-1/2 mt-3 w-[min(92vw,36rem)] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/10 p-4" style={{ maxHeight: "70vh" }}>
-              <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-2" style={{ scrollbarWidth: "none" }}>
+          {playerMenuOpen ? (
+            <div className="glass-panel absolute right-0 top-12 flex max-h-[80vh] w-[min(92vw,32rem)] flex-col overflow-hidden rounded-2xl border border-white/10">
+              <div className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 py-2" style={{ scrollbarWidth: "none" }}>
                 {selectorSeasons.map(([seasonNumber]) => (
                   <button
                     key={seasonNumber}
@@ -816,95 +798,43 @@ export function PlayerModal({
                 ))}
               </div>
 
-              <div className="custom-scrollbar min-h-0 space-y-2 overflow-y-auto" style={{ maxHeight: "calc(70vh - 4rem)" }}>
+              <div className="custom-scrollbar min-h-0 overflow-y-auto p-3">
                 {activeSelectorEpisodes.map((entry) => {
-                  const selected = entry.id === episode.id;
+                  const selected = entry.id === effectiveEpisode.id;
                   const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
                   return (
                     <button
                       key={entry.id}
                       type="button"
                       onClick={() => {
-                        setEpisodeSelectorOpen(false);
+                        setPlayerMenuOpen(false);
                         onSelectEpisode?.(entry);
                       }}
-                      className={clsx("glass-episode-card w-full text-left", selected && "glass-episode-card-active")}
+                      className={clsx("mb-3 w-full overflow-hidden rounded-xl border transition", selected ? "border-orange-500/60" : "border-white/10 hover:border-white/25")}
                     >
-                      {episodeArtwork ? (
-                        <div className="h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-white/10">
-                          <img src={episodeArtwork} alt="" className="h-full w-full object-cover" />
+                      <div className="relative aspect-video w-full bg-white/5">
+                        {episodeArtwork ? (
+                          <img src={episodeArtwork} alt="" className="h-full w-full object-cover" loading="lazy" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-white/20">No image</div>
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+                        <div className="absolute bottom-0 left-0 right-0 p-4">
+                          <div className="text-lg font-bold text-white">{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
+                          <div className="mt-1 flex items-center gap-2 text-sm text-white/70">
+                            {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
+                          </div>
                         </div>
-                      ) : null}
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-bold text-white/50">{episodeShortLabel(entry)}</div>
-                        <div className="truncate text-sm font-bold text-white">{formatEpisodeTitle(entry)}</div>
-                        {entry.durationSeconds ? (
-                          <div className="text-xs text-white/40">{Math.round(entry.durationSeconds / 60)} min</div>
+                        {selected ? (
+                          <div className="absolute top-3 right-3 flex h-6 w-6 items-center justify-center rounded-full bg-orange-500">
+                            <div className="h-2 w-2 rounded-full bg-white" />
+                          </div>
                         ) : null}
                       </div>
-                      {selected ? <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20"><div className="h-2 w-2 rounded-full bg-white" /></div> : <ChevronRight className="h-4 w-4 shrink-0 text-white/30" />}
                     </button>
                   );
                 })}
               </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="pointer-events-auto relative">
-          <button type="button" onClick={() => setPlayerMenuOpen((value) => !value)} className="spilled-glass-icon h-10 w-10" aria-label="Player options">
-            <MoreHorizontal className="h-4 w-4" />
-          </button>
-          {playerMenuOpen ? (
-            <div className="glass-panel absolute right-0 top-12 w-[min(92vw,28rem)] overflow-hidden rounded-2xl border border-white/10" style={{ maxHeight: "70vh" }}>
-              <div className="border-b border-white/10 px-5 py-4">
-                <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Episode"}</div>
-                <div className="mt-1 truncate text-base font-bold text-white">{modalHeading}</div>
-              </div>
-
-              <div className="custom-scrollbar overflow-y-auto p-3" style={{ maxHeight: "calc(70vh - 5rem)" }}>
-                {groupedPlayers.map((group) => {
-                  const isOpen = expandedLangs.has(group.key);
-                  return (
-                    <div key={group.key} className="mb-2">
-                      <button type="button" onClick={() => toggleLang(group.key)} className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-white/10">
-                        <span className="text-sm font-semibold text-white/80">{group.label}</span>
-                        <ChevronDown className={clsx("h-4 w-4 text-white/40 transition-transform duration-200", isOpen && "rotate-180")} />
-                      </button>
-                      {isOpen ? (
-                        <div className="mt-1 space-y-1.5 pl-2">
-                          {group.players.map((player) => {
-                            const active = player.alias === activePlayer.alias;
-                            const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
-                            return (
-                              <button
-                                key={player.alias}
-                                type="button"
-                                onClick={() => handleChoosePlayer(player)}
-                                className={clsx("glass-settings-item w-full text-left", active && "bg-white/15")}
-                              >
-                                <div className="min-w-0 flex-1">
-                                  <div className="truncate text-sm font-medium text-white/80">{player.label}</div>
-                                  <div className="text-xs text-white/40">{player.provider}</div>
-                                </div>
-                                {status === "resolving" ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : status === "resolved" ? <div className="h-2 w-2 rounded-full bg-emerald-400" /> : status === "failed" ? <div className="h-2 w-2 rounded-full bg-red-400" /> : null}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {playbackFailures.length > 0 ? (
-                <div className="border-t border-white/10 px-4 py-3">
-                  {playbackFailures.map((failure) => (
-                    <div key={`${failure.playerAlias}:${failure.reason}`} className="text-xs text-red-300/80"><strong>{failure.provider}</strong>: {failure.reason}</div>
-                  ))}
-                </div>
-              ) : null}
             </div>
           ) : null}
         </div>

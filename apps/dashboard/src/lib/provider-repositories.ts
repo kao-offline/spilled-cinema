@@ -85,24 +85,6 @@ function decodeBase64Content(value: string) {
 }
 
 export async function fetchProviderRepositoryText(url: string, accept: string) {
-  const githubApiUrl = githubRawUrlToContentsApiUrl(url);
-  if (githubApiUrl) {
-    try {
-      const response = await fetch(githubApiUrl, {
-        cache: "no-store",
-      });
-      if (response.ok) {
-        const payload = await response.json() as { content?: string; encoding?: string };
-        if (payload.encoding === "base64" && typeof payload.content === "string") {
-          return decodeBase64Content(payload.content);
-        }
-      }
-    } catch {
-      // Fall through to the raw URL. This keeps repository loading working when
-      // the GitHub Contents API is rate-limited or unavailable.
-    }
-  }
-
   const response = await fetch(url, {
     cache: "no-store",
     headers: accept === "application/json" ? { Accept: accept } : undefined,
