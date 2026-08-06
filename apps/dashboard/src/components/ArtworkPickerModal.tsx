@@ -117,16 +117,6 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
     [artworkAssets, artworkTab],
   );
 
-  const sourceCounts = useMemo(() => {
-    const matching = artworkAssets.filter((asset) => asset.kind === artworkTab);
-    return {
-      all: matching.length,
-      tmdb: matching.filter((asset) => asset.source === "tmdb").length,
-      fanart: matching.filter((asset) => asset.source === "fanart").length,
-      tvdb: matching.filter((asset) => asset.source === "tvdb").length,
-    };
-  }, [artworkAssets, artworkTab]);
-
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
     setSelectedAsset(null);
@@ -143,7 +133,6 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
   if (!open || !show) return null;
 
   const visibleAssets = filteredArtworkAssets.slice(0, visibleCount);
-  const heroArtwork = show.artwork?.bannerUrl ?? show.backdropUrl ?? show.bannerUrl ?? show.posterUrl ?? null;
 
   const applySelection = (event: React.MouseEvent) => {
     event.stopPropagation();

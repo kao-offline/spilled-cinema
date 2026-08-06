@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, ChevronRight, LoaderCircle, MoreHorizontal, RotateCw, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, LoaderCircle, MoreHorizontal, RotateCw } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -13,14 +13,6 @@ import { prewarmPlaybackUrl } from "../lib/playback-prewarm";
 import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
 import { resolveTitleItem, searchTitleItems } from "../lib/provider-modules-client";
 import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
-
-const DURATION_TOLERANCE_PERCENT = 15;
-
-function isDurationCompatible(playerDuration: number | undefined, expectedDuration: number | undefined): boolean {
-  if (!playerDuration || !expectedDuration || expectedDuration <= 0) return true;
-  const diff = Math.abs(playerDuration - expectedDuration) / expectedDuration;
-  return diff <= DURATION_TOLERANCE_PERCENT / 100;
-}
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -231,7 +223,7 @@ export function PlayerModal({
   const [playerStatuses, setPlayerStatuses] = useState<Record<string, PlayerResolutionStatus>>({});
   const [expandedPlayers, setExpandedPlayers] = useState<EpisodePlayer[]>([]);
   const [localSelectedAlias, setLocalSelectedAlias] = useState<PlayerAlias | null>(null);
-  const [sourceDiscoveryState, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
+  const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
