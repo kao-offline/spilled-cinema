@@ -17,13 +17,14 @@ export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings }: H
         <button
           type="button"
           onClick={onOpenSearch}
-          className="flex h-10 items-center gap-1.5 rounded-xl bg-white/8 px-2.5 text-white shadow-[0_12px_30px_rgba(0,0,0,0.25)] ring-1 ring-white/10 backdrop-blur-md transition hover:bg-white/14"
+          className="group flex h-10 items-center gap-2.5 rounded-full border border-white/[0.08] bg-white/[0.045] px-4 text-white shadow-[0_12px_30px_rgba(0,0,0,0.25)] backdrop-blur-md transition hover:border-white/15 hover:bg-white/[0.08]"
           aria-label="Open search"
         >
-          <Search className="h-4 w-4" />
-          <span className="hidden items-center gap-1 sm:flex">
-            <img src="/cmd-icon.svg" alt="" className="h-5 w-5 brightness-0 invert" />
-            <img src="/k-icon.svg" alt="" className="h-5 w-5 brightness-0 invert" />
+          <Search className="h-4 w-4 text-white/40 transition-colors group-hover:text-white/60" />
+          <span className="hidden text-sm text-white/32 transition-colors group-hover:text-white/50 sm:inline">Search…</span>
+          <span className="hidden items-center gap-1 pl-1 sm:flex">
+            <img src="/cmd-icon.svg" alt="" className="h-5 w-5 brightness-0 invert opacity-40" />
+            <img src="/k-icon.svg" alt="" className="h-5 w-5 brightness-0 invert opacity-40" />
           </span>
         </button>
 
