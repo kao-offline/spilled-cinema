@@ -61,6 +61,7 @@ export type PlaybackResolveInput = {
   seasonNumber?: number;
   episodeNumber?: number | null;
   activePlayerAlias: string;
+  expectedDurationSeconds?: number;
   players: Array<{
     alias: string;
     provider: string;
@@ -90,6 +91,7 @@ export type PlaybackResolveResult = {
   refererUrl: string;
   streamType: "hls" | "mp4" | "dash" | "embed" | "unknown";
   subtitlesUrl?: string;
+  duration?: number;
 };
 
 type PlaybackStreamType = PlaybackResolveResult["streamType"];
@@ -3295,23 +3297,41 @@ function orderPlaybackPlayers(input: PlaybackResolveInput) {
         (activeIsSubtitleOnly && /english|en\b|dab\/tit/i.test(player.language ?? "")),
       )
     : remotePlayers;
-  const withDirect = preferredLanguagePool.filter((player) => player.alias !== active?.alias && Boolean(player.streamUrl ?? player.resolvedUrl));
+
+  const isNonSubtitle = (p: typeof remotePlayers[0]) => !/titulky|subtitles|subbed/i.test(p.language ?? "");
+  const hasSubtitles = (p: typeof remotePlayers[0]) => Boolean(p.subtitlesUrl);
+  const hasDirect = (p: typeof remotePlayers[0]) => Boolean(p.streamUrl ?? p.resolvedUrl);
+
+  const withDirect = preferredLanguagePool.filter((player) =>
+    player.alias !== active?.alias &&
+    hasDirect(player) &&
+    isNonSubtitle(player),
+  );
   const sameLanguage = preferredLanguagePool.filter((player) =>
     player.alias !== active?.alias &&
     !withDirect.some((direct) => direct.alias === player.alias) &&
     activeLanguage &&
-    player.language === activeLanguage
+    player.language === activeLanguage &&
+    isNonSubtitle(player),
+  );
+  const subtitleFallbacks = preferredLanguagePool.filter((player) =>
+    player.alias !== active?.alias &&
+    !withDirect.some((direct) => direct.alias === player.alias) &&
+    !sameLanguage.some((same) => same.alias === player.alias) &&
+    isNonSubtitle(player) &&
+    !hasSubtitles(player),
   );
   const remainingPreferred = preferredLanguagePool.filter((player) =>
     player.alias !== active?.alias &&
     !withDirect.some((direct) => direct.alias === player.alias) &&
-    !sameLanguage.some((same) => same.alias === player.alias)
+    !sameLanguage.some((same) => same.alias === player.alias) &&
+    !subtitleFallbacks.some((sub) => sub.alias === player.alias)
   );
   const crossLanguageFallbacks = remotePlayers.filter((player) =>
     player.alias !== active?.alias &&
     !preferredLanguagePool.some((preferred) => preferred.alias === player.alias)
   );
-  return [active, ...withDirect, ...sameLanguage, ...remainingPreferred, ...crossLanguageFallbacks].filter(Boolean) as typeof remotePlayers;
+  return [active, ...withDirect, ...sameLanguage, ...subtitleFallbacks, ...remainingPreferred, ...crossLanguageFallbacks].filter(Boolean) as typeof remotePlayers;
 }
 
 function runFirstSuccess<T, U>(items: T[], concurrency: number, worker: (item: T) => Promise<U>): Promise<U> {

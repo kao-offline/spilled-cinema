@@ -15,6 +15,21 @@ import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
 import { resolveTitleItem, searchTitleItems } from "../lib/provider-modules-client";
 import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 
+const DURATION_TOLERANCE_PERCENT = 15;
+
+function isDurationCompatible(playerDuration: number | undefined, expectedDuration: number | undefined): boolean {
+  if (!playerDuration || !expectedDuration || expectedDuration <= 0) return true;
+  const diff = Math.abs(playerDuration - expectedDuration) / expectedDuration;
+  return diff <= DURATION_TOLERANCE_PERCENT / 100;
+}
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
   show?: ImportedShow | null;
@@ -665,6 +680,34 @@ export function PlayerModal({
     setPlaybackRetryNonce((value) => value + 1);
   }, [activeIsLocal, activePlayer, playback]);
 
+  useEffect(() => {
+    if (!playbackError || !effectiveEpisode || activeIsLocal) return;
+    const active = effectiveEpisode.players.find((p) => p.alias === effectiveEpisode.selectedPlayerAlias) ?? effectiveEpisode.players[0];
+    if (!active) return;
+    const activeHasSubtitles = /titulky|subtitles|subbed/i.test(active.language ?? "") || Boolean(active.subtitlesUrl);
+    if (!activeHasSubtitles) return;
+
+    const nonSubtitlePlayers = effectiveEpisode.players.filter((p) =>
+      p.alias !== active.alias &&
+      !/titulky|subtitles|subbed/i.test(p.language ?? "") &&
+      !Boolean(p.subtitlesUrl) &&
+      p.resolutionStatus !== "failed" &&
+      !playbackFailures.some((f) => f.playerAlias === p.alias),
+    );
+    if (nonSubtitlePlayers.length === 0) return;
+
+    const fallback = nonSubtitlePlayers[0];
+    const fallbackKey = playbackCacheKey(fallback);
+    removeCachedPlayerUrl("playback", fallbackKey);
+    removeCachedPlayerFailure("playback", fallbackKey);
+    playbackErrorRetryRef.current = fallbackKey;
+    setPlayback(null);
+    setPlaybackError(null);
+    setPlaybackFailures([]);
+    setLocalSelectedAlias(fallback.alias);
+    setPlaybackRetryNonce((value) => value + 1);
+  }, [playbackError, effectiveEpisode, activeIsLocal, playbackFailures]);
+
   if (!episode || !effectiveEpisode || !activePlayer) return null;
 
   const sourceLabel = activeIsLocal
@@ -858,6 +901,10 @@ export function PlayerModal({
                             {group.players.map((player) => {
                               const active = player.alias === activePlayer.alias;
                               const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
+                              const hasSubs = /titulky|subtitles|subbed/i.test(player.language ?? "") || Boolean(player.subtitlesUrl);
+                              const expectedDuration = episode?.durationSeconds ?? episode?.playbackDurationSeconds;
+                              const playerDuration = playerStatuses[player.alias]?.playback?.duration;
+                              const durationOk = isDurationCompatible(playerDuration, expectedDuration);
                               return (
                                 <button
                                   key={player.alias}
@@ -868,6 +915,12 @@ export function PlayerModal({
                                   <div className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] font-black uppercase">
                                     {player.provider === "spillsave" ? <Star className="h-4 w-4 text-yellow-300" /> : null}
                                     <span className="truncate">{player.label}</span>
+                                    {hasSubs ? <span className="shrink-0 rounded-full bg-white/[0.08] px-1.5 py-0.5 text-[7px] text-white/50">SUB</span> : null}
+                                    {playerDuration && expectedDuration ? (
+                                      <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[7px]", durationOk ? "bg-emerald-400/10 text-emerald-300/70" : "bg-amber-400/10 text-amber-300/70")}>
+                                        {formatDuration(playerDuration)}{!durationOk ? " !" : ""}
+                                      </span>
+                                    ) : null}
                                     <span className={clsx("ml-auto rounded-full px-2 py-1 text-[8px] tracking-[0.05em]", active ? status === "failed" ? "bg-red-500/12 text-red-700" : "bg-black/[0.06] text-black/45" : status === "resolved" ? "bg-emerald-400/12 text-emerald-100/80" : status === "failed" ? "bg-red-400/12 text-red-100/75" : status === "resolving" ? "bg-white/[0.08] text-white/60" : "bg-white/[0.04] text-white/30")}>{status}</span>
                                   </div>
                                   <div className="mt-0.5 text-xs opacity-70">{player.provider.toUpperCase()}</div>

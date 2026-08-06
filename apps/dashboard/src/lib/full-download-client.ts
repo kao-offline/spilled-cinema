@@ -43,6 +43,7 @@ export type PlaybackResolveResult = {
   refererUrl: string;
   streamType: "hls" | "mp4" | "dash" | "embed" | "unknown";
   subtitlesUrl?: string;
+  duration?: number;
   failures?: PlaybackResolveFailure[];
 };
 

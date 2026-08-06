@@ -178,27 +178,28 @@ async function fetchBombujSuggestionResults(
   const mediaType = host.startsWith("serialy.") ? ("serial" as const) : ("movie" as const);
   const matches = [
     ...responseHtml.matchAll(
-      /<a href="([^"]+online-(?:film|serial)-[^"]+)"[^>]*>\s*<img[^>]+src="([^"]+)"[\s\S]*?<span class="nazov">([\s\S]*?)<\/span>/gi,
+      /<a href="([^"]+(?:online-(?:film|serial)-|serial-)[^"]+)"[^>]*>(?:\s*<img[^>]+src="([^"]*)"[^>]*>)?\s*<span class="nazov">([\s\S]*?)<\/span>(?:\s*<span class="zanre">([\s\S]*?)<\/span>)?/gi,
     ),
   ];
 
   return matches.map((match) => {
     const href = match[1].trim();
-    const posterSrc = match[2].trim();
+    const posterSrc = match[2]?.trim() ?? "";
     const rawTitle = stripTags(match[3]).trim();
+    const zanreText = stripTags(match[4] ?? "").trim();
     const normalizedHref = href.startsWith("//") ? `https:${href}` : href;
     const slug = normalizedHref.split("/").pop() ?? "";
-    const cleanSlug = slug.replace(/^online-(film|serial)-/i, "");
-    const yearMatch = rawTitle.match(/\((19|20)\d{2}\)\s*$/);
+    const cleanSlug = slug.replace(/^(?:online-(?:film|serial)-|serial-)/i, "").replace(/#.*$/, "");
+    const yearMatch = rawTitle.match(/\((19|20)\d{2}\)\s*$/) ?? zanreText.match(/^((?:19|20)\d{2})/);
     const title = rawTitle.replace(/\s*\((19|20)\d{2}\)\s*$/, "").trim();
 
     return {
       title: title || cleanSlug.replace(/-/g, " "),
       slug: cleanSlug,
       platform: "bombuj" as const,
-      posterUrl: posterSrc.startsWith("//") ? `https:${posterSrc}` : posterSrc,
+      posterUrl: posterSrc ? (posterSrc.startsWith("//") ? `https:${posterSrc}` : posterSrc) : null,
       mediaType,
-      year: yearMatch ? yearMatch[0].replace(/[()]/g, "") : null,
+      year: yearMatch ? yearMatch[1].replace(/[()]/g, "") : null,
     };
   });
 }
