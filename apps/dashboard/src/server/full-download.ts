@@ -3373,42 +3373,6 @@ function orderPlaybackPlayers(input: PlaybackResolveInput) {
   return [active, ...withDirect, ...sameLanguage, ...subtitleFallbacks, ...remainingPreferred, ...crossLanguageFallbacks].filter(Boolean) as typeof remotePlayers;
 }
 
-function runFirstSuccess<T, U>(items: T[], concurrency: number, worker: (item: T) => Promise<U>): Promise<U> {
-  return new Promise<U>((resolve, reject) => {
-    let index = 0;
-    let pending = 0;
-    let settled = 0;
-    let done = false;
-
-    const runWorker = () => {
-      while (!done && pending < concurrency && index < items.length) {
-        const item = items[index];
-        index += 1;
-        pending += 1;
-        worker(item).then(
-          (result) => {
-            if (done) return;
-            done = true;
-            resolve(result);
-          },
-          () => {
-            pending -= 1;
-            settled += 1;
-            if (settled >= items.length) {
-              done = true;
-              reject(new Error("No player attempt succeeded."));
-            } else {
-              runWorker();
-            }
-          },
-        );
-      }
-    };
-
-    runWorker();
-  });
-}
-
 export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
   const orderedPlayers = orderPlaybackPlayers(input);
   const failures: PlaybackResolveFailure[] = [];
@@ -3529,7 +3493,7 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
     const activeResult = await activeAttempt;
     if (activeResult) return activeResult;
 
-    const firstFallback = await Promise.any(restAttempts.map((p, i) => p.then((result) => {
+    const firstFallback = await Promise.any(restAttempts.map((p) => p.then((result) => {
       if (result) return result;
       throw new Error("fallback failed");
     })));
