@@ -139,18 +139,37 @@ export default async function handler(req, res) {
 
     const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
     const isXpassSegment = /play\.xpass\.top/i.test(referer || "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
-    const upstreamHeaders = {
-      "user-agent": USER_AGENT,
-      accept: "*/*",
-      ...(referer ? { referer } : {}),
-      ...(typeof req.headers.range === "string" ? { range: req.headers.range } : {}),
-    };
 
-    const upstream = await fetch(parsed.toString(), {
-      method: req.method,
-      headers: upstreamHeaders,
-      redirect: "follow",
-    });
+    const isRetryable403 = (status) => status === 403 || status === 401;
+
+    function buildUpstreamHeaders(override = {}) {
+      return {
+        "user-agent": override.userAgent ?? USER_AGENT,
+        accept: "*/*",
+        ...(referer && !override.stripReferer ? { referer } : {}),
+        ...(typeof req.headers.range === "string" ? { range: req.headers.range } : {}),
+        ...override.extra,
+      };
+    }
+
+    const headerStrategies = [
+      () => buildUpstreamHeaders(),
+      () => buildUpstreamHeaders({ stripReferer: true }),
+      () => buildUpstreamHeaders({ stripReferer: true, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36" }),
+      () => buildUpstreamHeaders({ stripReferer: true, extra: { accept: "text/vtt,text/plain,*/*" } }),
+    ];
+
+    let upstream;
+    for (const buildHeaders of headerStrategies) {
+      upstream = await fetch(parsed.toString(), {
+        method: req.method,
+        headers: buildHeaders(),
+        redirect: "follow",
+      });
+      if (upstream.ok || upstream.status === 206 || !isRetryable403(upstream.status)) {
+        break;
+      }
+    }
 
     if (!upstream.ok && upstream.status !== 206) {
       const body = await upstream.text().catch(() => "");

@@ -71,7 +71,7 @@ Test-Step "CORS: /api/download-full/browser-file exempt from CORS" {
   } catch {
     $code = $_.Exception.Response.StatusCode.value__
     if ($code -eq 403) {
-      return @{ Success = $false; Message = "Browser-file endpoint still returns 403 — CORS exemption NOT working" }
+      return @{ Success = $false; Message = "Browser-file endpoint still returns 403 - CORS exemption NOT working" }
     }
     # Other errors (404, 502, etc.) are fine — means CORS was bypassed
     return @{ Success = $true; Message = "Browser-file endpoint returned $code (not 403 = CORS exempt)" }

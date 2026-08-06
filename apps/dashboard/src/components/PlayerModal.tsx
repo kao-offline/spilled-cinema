@@ -1,8 +1,7 @@
-import { ArrowLeft, ChevronDown, LoaderCircle, MoreHorizontal, RotateCw, Star } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, LoaderCircle, MoreHorizontal, RotateCw, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
-import { LanguageBadge } from "./LanguageBadge";
 import { getCanonicalLanguageKey, getCanonicalLanguageLabel, getLanguagePresentation } from "../lib/language";
 import { formatEpisodeTitle } from "../lib/episode-title";
 import { buildRuntimeUrl } from "../lib/local-api";
@@ -21,13 +20,6 @@ function isDurationCompatible(playerDuration: number | undefined, expectedDurati
   if (!playerDuration || !expectedDuration || expectedDuration <= 0) return true;
   const diff = Math.abs(playerDuration - expectedDuration) / expectedDuration;
   return diff <= DURATION_TOLERANCE_PERCENT / 100;
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 type PlayerModalProps = {
@@ -55,14 +47,6 @@ function episodeShortLabel(episode: LibraryEpisode | null) {
   if (episode.episodeCode) return episode.episodeCode.toUpperCase();
   if (episode.episodeNumber != null) return `S${episode.seasonNumber}E${String(episode.episodeNumber).padStart(2, "0")}`;
   return `S${episode.seasonNumber}`;
-}
-
-function hasCzechSubtitles(episode: LibraryEpisode) {
-  return episode.players.some((player) => {
-    if (!player.subtitlesUrl) return false;
-    const key = getCanonicalLanguageKey(player.language);
-    return key.includes("cz") && key.includes("subs");
-  });
 }
 
 function playbackCacheKey(player: EpisodePlayer) {
@@ -315,7 +299,7 @@ export function PlayerModal({
     ? effectiveEpisode?.players.find((player) => player.alias === playback.playerAlias) ?? activePlayer
     : instantPlayback?.playerAlias
       ? effectiveEpisode?.players.find((player) => player.alias === instantPlayback.playerAlias) ?? activePlayer
-    : activePlayer;
+      : activePlayer;
 
   function toggleLang(lang: string) {
     setExpandedLangs((prev) => {
@@ -712,7 +696,7 @@ export function PlayerModal({
 
   const sourceLabel = activeIsLocal
     ? activePlayer.provider === "spillsave" ? "Vault file" : "Local file"
-    : selectedResolvedPlayer ? `${selectedResolvedPlayer.label} via Spilled player` : "Spilled player";
+    : selectedResolvedPlayer ? `${selectedResolvedPlayer.label}` : "Player";
   const showEpisodes = show?.episodes ?? [episode];
   const selectorEpisodes = [...showEpisodes]
     .sort((first, second) => (first.seasonNumber - second.seasonNumber) || ((first.episodeNumber ?? 0) - (second.episodeNumber ?? 0)));
@@ -826,45 +810,50 @@ export function PlayerModal({
           </button>
 
           {episodeSelectorOpen ? (
-            <div className="spilled-episode-picker absolute left-1/2 mt-3 w-[min(92vw,33rem)] -translate-x-1/2 p-3">
-              <div className="grid max-h-[23rem] grid-cols-[3.75rem_minmax(0,1fr)] gap-3">
-                <div className="spilled-season-rail">
-                  {selectorSeasons.map(([seasonNumber]) => (
-                    <button
-                      key={seasonNumber}
-                      type="button"
-                      onClick={() => setSelectedSelectorSeason(seasonNumber)}
-                      className={clsx(
-                        "spilled-season-tab",
-                        activeSelectorSeason === seasonNumber && "spilled-season-tab-active",
-                      )}
-                    >
-                      S{seasonNumber}
-                    </button>
-                  ))}
-                </div>
+            <div className="glass-panel absolute left-1/2 mt-3 w-[min(92vw,36rem)] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/10 p-4" style={{ maxHeight: "70vh" }}>
+              <div className="mb-3 flex items-center gap-2 overflow-x-auto pb-2" style={{ scrollbarWidth: "none" }}>
+                {selectorSeasons.map(([seasonNumber]) => (
+                  <button
+                    key={seasonNumber}
+                    type="button"
+                    onClick={() => setSelectedSelectorSeason(seasonNumber)}
+                    className={clsx("glass-season-pill shrink-0", activeSelectorSeason === seasonNumber && "glass-season-pill-active")}
+                  >
+                    S{seasonNumber}
+                  </button>
+                ))}
+              </div>
 
-                <div className="custom-scrollbar flex max-h-[21.5rem] min-w-0 flex-col gap-1 overflow-y-auto pr-1">
-                  {activeSelectorEpisodes.map((entry) => {
-                    const selected = entry.id === episode.id;
-                    const hasCzSubs = hasCzechSubtitles(entry);
-                    return (
-                      <button
-                        key={entry.id}
-                        type="button"
-                        onClick={() => {
-                          setEpisodeSelectorOpen(false);
-                          onSelectEpisode?.(entry);
-                        }}
-                        className={clsx("spilled-episode-row w-full text-left", selected && "spilled-episode-row-active")}
-                      >
-                        <span className="spilled-episode-code">{episodeShortLabel(entry)}</span>
-                        <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{formatEpisodeTitle(entry)}</span>
-                        {hasCzSubs ? <span className="spilled-subtitle-tag" title="Czech subtitles">CZ TIT</span> : null}
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="custom-scrollbar min-h-0 space-y-2 overflow-y-auto" style={{ maxHeight: "calc(70vh - 4rem)" }}>
+                {activeSelectorEpisodes.map((entry) => {
+                  const selected = entry.id === episode.id;
+                  const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
+                  return (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => {
+                        setEpisodeSelectorOpen(false);
+                        onSelectEpisode?.(entry);
+                      }}
+                      className={clsx("glass-episode-card w-full text-left", selected && "glass-episode-card-active")}
+                    >
+                      {episodeArtwork ? (
+                        <div className="h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-white/10">
+                          <img src={episodeArtwork} alt="" className="h-full w-full object-cover" />
+                        </div>
+                      ) : null}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-white/50">{episodeShortLabel(entry)}</div>
+                        <div className="truncate text-sm font-bold text-white">{formatEpisodeTitle(entry)}</div>
+                        {entry.durationSeconds ? (
+                          <div className="text-xs text-white/40">{Math.round(entry.durationSeconds / 60)} min</div>
+                        ) : null}
+                      </div>
+                      {selected ? <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20"><div className="h-2 w-2 rounded-full bg-white" /></div> : <ChevronRight className="h-4 w-4 shrink-0 text-white/30" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -875,74 +864,55 @@ export function PlayerModal({
             <MoreHorizontal className="h-4 w-4" />
           </button>
           {playerMenuOpen ? (
-            <div className="spilled-floating-panel spilled-source-panel absolute right-0 top-12 w-[min(92vw,23rem)] p-2.5">
-              <div className="mb-2.5 border-b border-white/[0.07] px-2 pb-3 pt-1">
-                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-white/32">{isMovieEntry ? "Active Movie" : "Active Episode"}</div>
-                <div className="mt-1 truncate text-lg font-black text-white">{modalHeading}</div>
-                <div className="truncate text-xs font-semibold text-white/42">{modalSubheading}</div>
-                <div className="mt-2.5 inline-flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.16em] text-white/34">
-                  <span className={clsx("h-1.5 w-1.5 rounded-full", sourceDiscoveryState === "failed" ? "bg-red-300" : sourceDiscoveryState === "searching" ? "animate-pulse bg-white/60" : "bg-white/28")} />
-                  Sources {sourceDiscoveryState === "searching" ? "searching providers" : sourceDiscoveryState}
-                </div>
+            <div className="glass-panel absolute right-0 top-12 w-[min(92vw,28rem)] overflow-hidden rounded-2xl border border-white/10" style={{ maxHeight: "70vh" }}>
+              <div className="border-b border-white/10 px-5 py-4">
+                <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Episode"}</div>
+                <div className="mt-1 truncate text-base font-bold text-white">{modalHeading}</div>
               </div>
 
-              <div className="custom-scrollbar max-h-[46vh] space-y-2 overflow-y-auto pr-1">
+              <div className="custom-scrollbar overflow-y-auto p-3" style={{ maxHeight: "calc(70vh - 5rem)" }}>
                 {groupedPlayers.map((group) => {
                   const isOpen = expandedLangs.has(group.key);
                   return (
-                    <div key={group.key} className="spilled-source-group">
-                      <button type="button" onClick={() => toggleLang(group.key)} className="flex w-full items-center justify-between px-3 py-2.5 text-left transition hover:bg-white/[0.045]">
-                        <LanguageBadge language={group.label} className="bg-white/[0.055] text-white/78 ring-1 ring-white/[0.08]" />
-                        <ChevronDown className={clsx("h-4 w-4 text-white/40 transition-transform duration-300", isOpen && "rotate-180")} />
+                    <div key={group.key} className="mb-2">
+                      <button type="button" onClick={() => toggleLang(group.key)} className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-white/10">
+                        <span className="text-sm font-semibold text-white/80">{group.label}</span>
+                        <ChevronDown className={clsx("h-4 w-4 text-white/40 transition-transform duration-200", isOpen && "rotate-180")} />
                       </button>
-                      <div className={clsx("grid transition-all duration-300 ease-in-out", isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
-                        <div className="overflow-hidden">
-                          <div className="flex flex-col gap-1.5 p-2 pt-0">
-                            {group.players.map((player) => {
-                              const active = player.alias === activePlayer.alias;
-                              const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
-                              const hasSubs = /titulky|subtitles|subbed/i.test(player.language ?? "") || Boolean(player.subtitlesUrl);
-                              const expectedDuration = episode?.durationSeconds ?? episode?.playbackDurationSeconds;
-                              const playerDuration = playerStatuses[player.alias]?.playback?.duration;
-                              const durationOk = isDurationCompatible(playerDuration, expectedDuration);
-                              return (
-                                <button
-                                  key={player.alias}
-                                  type="button"
-                                  onClick={() => handleChoosePlayer(player)}
-                                  className={clsx("spilled-source-option", active && "spilled-source-option-active")}
-                                >
-                                  <div className="flex items-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap text-[10px] font-black uppercase">
-                                    {player.provider === "spillsave" ? <Star className="h-4 w-4 text-yellow-300" /> : null}
-                                    <span className="truncate">{player.label}</span>
-                                    {hasSubs ? <span className="shrink-0 rounded-full bg-white/[0.08] px-1.5 py-0.5 text-[7px] text-white/50">SUB</span> : null}
-                                    {playerDuration && expectedDuration ? (
-                                      <span className={clsx("shrink-0 rounded-full px-1.5 py-0.5 text-[7px]", durationOk ? "bg-emerald-400/10 text-emerald-300/70" : "bg-amber-400/10 text-amber-300/70")}>
-                                        {formatDuration(playerDuration)}{!durationOk ? " !" : ""}
-                                      </span>
-                                    ) : null}
-                                    <span className={clsx("ml-auto rounded-full px-2 py-1 text-[8px] tracking-[0.05em]", active ? status === "failed" ? "bg-red-500/12 text-red-700" : "bg-black/[0.06] text-black/45" : status === "resolved" ? "bg-emerald-400/12 text-emerald-100/80" : status === "failed" ? "bg-red-400/12 text-red-100/75" : status === "resolving" ? "bg-white/[0.08] text-white/60" : "bg-white/[0.04] text-white/30")}>{status}</span>
-                                  </div>
-                                  <div className="mt-0.5 text-xs opacity-70">{player.provider.toUpperCase()}</div>
-                                </button>
-                              );
-                            })}
-                          </div>
+                      {isOpen ? (
+                        <div className="mt-1 space-y-1.5 pl-2">
+                          {group.players.map((player) => {
+                            const active = player.alias === activePlayer.alias;
+                            const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
+                            return (
+                              <button
+                                key={player.alias}
+                                type="button"
+                                onClick={() => handleChoosePlayer(player)}
+                                className={clsx("glass-settings-item w-full text-left", active && "bg-white/15")}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-sm font-medium text-white/80">{player.label}</div>
+                                  <div className="text-xs text-white/40">{player.provider}</div>
+                                </div>
+                                {status === "resolving" ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : status === "resolved" ? <div className="h-2 w-2 rounded-full bg-emerald-400" /> : status === "failed" ? <div className="h-2 w-2 rounded-full bg-red-400" /> : null}
+                              </button>
+                            );
+                          })}
                         </div>
-                      </div>
+                      ) : null}
                     </div>
                   );
                 })}
               </div>
 
               {playbackFailures.length > 0 ? (
-                <div className="mt-3 max-h-32 space-y-1 overflow-y-auto rounded-xl border border-red-400/15 bg-red-500/10 px-4 py-3 text-xs text-red-100/80">
+                <div className="border-t border-white/10 px-4 py-3">
                   {playbackFailures.map((failure) => (
-                    <div key={`${failure.playerAlias}:${failure.reason}`}><strong>{failure.provider}</strong>: {failure.reason}</div>
+                    <div key={`${failure.playerAlias}:${failure.reason}`} className="text-xs text-red-300/80"><strong>{failure.provider}</strong>: {failure.reason}</div>
                   ))}
                 </div>
               ) : null}
-
             </div>
           ) : null}
         </div>

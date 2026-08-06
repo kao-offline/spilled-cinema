@@ -52,35 +52,49 @@ export default async function handler(req, res) {
       return;
     }
 
-    const upstreamHeaders = {
-      "user-agent": USER_AGENT,
-      accept: "text/vtt,text/plain,application/json,*/*",
-      referer: "https://svetserialu.to/",
-    };
+    const isRetryable403 = (status) => status === 403 || status === 401;
+
+    const headerStrategies = [
+      { "user-agent": USER_AGENT, accept: "text/vtt,text/plain,application/json,*/*", referer: "https://svetserialu.to/" },
+      { "user-agent": USER_AGENT, accept: "text/vtt,text/plain,*/*" },
+      { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36", accept: "text/vtt,text/plain,*/*" },
+      { "user-agent": USER_AGENT },
+    ];
 
     const fetchBody = async (url) => {
-      const response = await fetch(url, { method: "GET", headers: upstreamHeaders, redirect: "follow" });
-      if (!response.ok) return { status: response.status, body: "" };
-      const contentType = (response.headers.get("content-type") || "").toLowerCase();
-      if (contentType.includes("application/json") || contentType.includes("text/json")) {
-        const payload = await response.json().catch(() => null);
-        if (Array.isArray(payload)) {
-          const entry = payload.find((item) => item && item.default) ?? payload[0];
-          if (entry && typeof entry.file === "string") {
-            let safeFile = null;
-            try {
-              safeFile = new URL(entry.file).toString();
-            } catch {
-              safeFile = null;
-            }
-            if (safeFile) {
-              const vtt = await fetch(safeFile, { method: "GET", headers: upstreamHeaders, redirect: "follow" });
-              return { status: vtt.ok ? vtt.status : 502, body: vtt.ok ? await vtt.text() : "" };
+      let lastStatus = 0;
+      for (const headers of headerStrategies) {
+        const response = await fetch(url, { method: "GET", headers, redirect: "follow" });
+        lastStatus = response.status;
+        if (response.ok || !isRetryable403(response.status)) {
+          if (!response.ok) return { status: response.status, body: "" };
+          const contentType = (response.headers.get("content-type") || "").toLowerCase();
+          if (contentType.includes("application/json") || contentType.includes("text/json")) {
+            const payload = await response.json().catch(() => null);
+            if (Array.isArray(payload)) {
+              const entry = payload.find((item) => item && item.default) ?? payload[0];
+              if (entry && typeof entry.file === "string") {
+                let safeFile = null;
+                try {
+                  safeFile = new URL(entry.file).toString();
+                } catch {
+                  safeFile = null;
+                }
+                if (safeFile) {
+                  let vtt;
+                  for (const vttHeaders of headerStrategies) {
+                    vtt = await fetch(safeFile, { method: "GET", headers: vttHeaders, redirect: "follow" });
+                    if (vtt.ok || !isRetryable403(vtt.status)) break;
+                  }
+                  return { status: vtt.ok ? vtt.status : 502, body: vtt.ok ? await vtt.text() : "" };
+                }
+              }
             }
           }
+          return { status: response.status, body: await response.text() };
         }
       }
-      return { status: response.status, body: await response.text() };
+      return { status: lastStatus || 502, body: "" };
     };
 
     const { status, body } = await fetchBody(parsed.toString());

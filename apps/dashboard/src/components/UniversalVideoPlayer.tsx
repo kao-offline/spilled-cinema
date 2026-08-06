@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
-import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX } from "lucide-react";
+import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
@@ -211,6 +211,13 @@ export function UniversalVideoPlayer({
   const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState(() => Math.max(0, subtitleTracks.findIndex((track) => track.default)));
   const [subtitleAppearance, setSubtitleAppearance] = useState<SubtitleAppearance>(readSubtitleAppearance);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const [autoplay, setAutoplay] = useState(true);
+  const [loop, setLoop] = useState(false);
+  const [brightness, setBrightness] = useState(100);
+  const [mirrored, setMirrored] = useState(false);
+  const [sleepTimer, setSleepTimer] = useState<number | null>(null);
+  const [settingsSection, setSettingsSection] = useState<"main" | "subtitles">("main");
+  const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceType = useMemo(() => getSourceType(src), [src]);
   const subtitleTrackSignature = useMemo(
     () => subtitleTracks
@@ -249,6 +256,28 @@ export function UniversalVideoPlayer({
       // Player preferences are optional when storage is unavailable.
     }
   }, [subtitleAppearance]);
+
+  useEffect(() => {
+    if (sleepTimerRef.current) {
+      clearTimeout(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+    if (sleepTimer && sleepTimer > 0) {
+      sleepTimerRef.current = setTimeout(() => {
+        const video = videoRef.current;
+        if (video) video.pause();
+        setSleepTimer(null);
+      }, sleepTimer * 60 * 1000);
+    }
+    return () => {
+      if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
+    };
+  }, [sleepTimer]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.loop = loop;
+  }, [loop]);
 
   useEffect(() => {
     const host = videoHostRef.current;
@@ -854,7 +883,7 @@ export function UniversalVideoPlayer({
         if (!paused) setControlsVisible(false);
       }}
     >
-      <div ref={videoHostRef} className="absolute inset-0" />
+      <div ref={videoHostRef} className="absolute inset-0" style={{ filter: `brightness(${brightness / 100})`, transform: mirrored ? "scaleX(-1)" : undefined }} />
 
       <div className={clsx(
         "pointer-events-none absolute inset-0 z-10 flex items-end justify-start bg-[linear-gradient(90deg,rgba(0,0,0,0.58),rgba(0,0,0,0.10)_42%,rgba(0,0,0,0.18)),linear-gradient(0deg,rgba(0,0,0,0.66),rgba(0,0,0,0.10)_44%,rgba(0,0,0,0.05))] px-5 pb-36 pt-24 text-left transition-[opacity,transform,filter] duration-300 ease-out sm:px-9 sm:pb-40 lg:px-12",
@@ -984,114 +1013,136 @@ export function UniversalVideoPlayer({
           </div>
 
           {settingsOpen ? (
-            <div className="custom-scrollbar absolute bottom-12 right-0 max-h-[min(68svh,36rem)] w-[min(22rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl border border-white/12 bg-[#0b0c0f]/96 p-3 text-sm text-white shadow-[0_24px_80px_rgba(0,0,0,0.68)] backdrop-blur-2xl">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-[0.18em] text-white/52">Player settings</span>
-                <span className="text-xs font-semibold text-white/58">{formatClock(currentTime)}</span>
+            <div className="glass-panel custom-scrollbar absolute bottom-12 right-0 max-h-[min(72svh,40rem)] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl border border-white/12 p-4 text-sm text-white shadow-[0_24px_80px_rgba(0,0,0,0.68)]">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-sm font-bold text-white">Settings</span>
+                <button type="button" onClick={() => setSettingsOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/60 transition hover:bg-white/20">
+                  <Minimize className="h-3.5 w-3.5" />
+                </button>
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-white/58">Speed</div>
-                  <div className="grid grid-cols-5 gap-1">
-                    {speedOptions.map((speed) => (
-                      <button
-                        key={speed}
-                        type="button"
-                        onClick={() => setPlayerRate(speed)}
-                        className={clsx(
-                          "rounded-md px-2 py-1.5 text-xs font-bold transition",
-                          playbackRate === speed ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        )}
-                      >
-                        {speed === 1 ? "1x" : `${speed}x`}
-                      </button>
-                    ))}
+              {settingsSection === "main" ? (
+                <div className="space-y-1">
+                  <div className="glass-section-header">Sources</div>
+                  <div className="glass-settings-item" onClick={() => {}}>
+                    <div className="glass-settings-label">
+                      <Settings className="h-4 w-4 text-white/50" />
+                      <span>Quality</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{qualityLevel === -1 ? "Auto" : qualityLevels.find((l) => l.index === qualityLevel)?.label ?? "Auto"}</span>
+                    </div>
                   </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-white/58">Quality</div>
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPlayerQuality(-1)}
-                      disabled={qualityLevels.length === 0}
-                      className={clsx(
-                        "rounded-md px-2 py-1.5 text-xs font-bold transition",
-                        qualityLevel === -1 ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        qualityLevels.length === 0 && "cursor-not-allowed opacity-40",
-                      )}
-                    >
+                  <div className="grid grid-cols-2 gap-1 px-3 py-2">
+                    <button type="button" onClick={() => setPlayerQuality(-1)} className={clsx("rounded-lg px-3 py-2 text-xs font-semibold transition", qualityLevel === -1 ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
                       Auto
                     </button>
-                    {qualityLevels.map((level) => (
-                      <button
-                        key={level.index}
-                        type="button"
-                        onClick={() => setPlayerQuality(level.index)}
-                        className={clsx(
-                          "rounded-md px-2 py-1.5 text-xs font-bold transition",
-                          qualityLevel === level.index ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        )}
-                      >
+                    {qualityLevels.slice(0, 4).map((level) => (
+                      <button key={level.index} type="button" onClick={() => setPlayerQuality(level.index)} className={clsx("rounded-lg px-3 py-2 text-xs font-semibold transition", qualityLevel === level.index ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
                         {level.label}
                       </button>
                     ))}
                   </div>
+
+                  <div className="glass-section-header mt-3">Video & Audio</div>
+                  <div className="glass-settings-item" onClick={() => setMirrored((v) => !v)}>
+                    <div className="glass-settings-label">
+                      <ArrowLeftRight className="h-4 w-4 text-white/50" />
+                      <span>Mirror</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{mirrored ? "On" : "Off"}</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item">
+                    <div className="glass-settings-label">
+                      <Sun className="h-4 w-4 text-white/50" />
+                      <span>Brightness</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input type="range" min={50} max={150} step={5} value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} className="h-1 w-20 accent-white" />
+                      <span className="text-xs text-white/50 w-8">{brightness}%</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item" onClick={() => { if (document.pictureInPictureEnabled) document.querySelector("video")?.requestPictureInPicture().catch(() => undefined); }}>
+                    <div className="glass-settings-label">
+                      <PictureInPicture className="h-4 w-4 text-white/50" />
+                      <span>Picture in Picture</span>
+                    </div>
+                  </div>
+
+                  <div className="glass-section-header mt-3">Playback</div>
+                  <div className="px-3 py-2">
+                    <div className="mb-2 text-xs text-white/50">Speed</div>
+                    <div className="grid grid-cols-5 gap-1">
+                      {speedOptions.map((speed) => (
+                        <button key={speed} type="button" onClick={() => setPlayerRate(speed)} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", playbackRate === speed ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                          {speed === 1 ? "1x" : `${speed}x`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="glass-settings-item" onClick={() => setAutoplay((v) => !v)}>
+                    <div className="glass-settings-label">
+                      <Play className="h-4 w-4 text-white/50" />
+                      <span>Autoplay</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{autoplay ? "On" : "Off"}</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item" onClick={() => setLoop((v) => !v)}>
+                    <div className="glass-settings-label">
+                      <Repeat className="h-4 w-4 text-white/50" />
+                      <span>Loop</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{loop ? "On" : "Off"}</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item">
+                    <div className="glass-settings-label">
+                      <Clock className="h-4 w-4 text-white/50" />
+                      <span>Sleep timer</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {[null, 15, 30, 45, 60].map((minutes) => (
+                        <button key={String(minutes)} type="button" onClick={() => setSleepTimer(minutes)} className={clsx("rounded px-2 py-1 text-[10px] font-semibold transition", sleepTimer === minutes ? "bg-white text-black" : "bg-white/10 text-white/60 hover:bg-white/15")}>
+                          {minutes === null ? "Off" : `${minutes}m`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button type="button" onClick={() => setSettingsSection("subtitles")} className="mt-3 flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-white/10">
+                    <div className="glass-settings-label">
+                      <Captions className="h-4 w-4 text-white/50" />
+                      <span>Subtitle settings</span>
+                    </div>
+                    <span className="text-xs text-white/40">{captionsEnabled ? "On" : "Off"}</span>
+                  </button>
                 </div>
+              ) : (
+                <div className="space-y-1">
+                  <button type="button" onClick={() => setSettingsSection("main")} className="mb-3 flex items-center gap-2 text-xs text-white/50 hover:text-white">
+                    <span>←</span> Back
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setCaptionsEnabled((value) => !value)}
-                  disabled={subtitleTracks.length === 0}
-                  className={clsx(
-                    "flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs font-bold transition",
-                    captionsEnabled ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                    subtitleTracks.length === 0 && "cursor-not-allowed opacity-40",
-                  )}
-                >
-                  <span>Subtitles</span>
-                  <span>{subtitleTracks.length === 0 ? "Unavailable" : captionsEnabled ? "On" : "Off"}</span>
-                </button>
-
-                <div className="border-t border-white/8 pt-3">
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.16em] text-white/38">Subtitle appearance</span>
-                    <button type="button" onClick={() => setSubtitleAppearance(DEFAULT_SUBTITLE_APPEARANCE)} className="text-[10px] font-bold text-white/42 transition hover:text-white">Reset</button>
-                  </div>
-
-                  <div className="mb-3 rounded-xl border border-white/8 bg-white/[0.035] p-3 text-center">
-                    <span
-                      className="inline rounded px-1.5 py-0.5 font-bold leading-relaxed"
-                      style={{
-                        color: subtitleAppearance.textColor,
-                        backgroundColor: hexToRgba(subtitleAppearance.backgroundColor, subtitleAppearance.backgroundOpacity),
-                        fontSize: `${Math.max(12, subtitleAppearance.size * 0.16)}px`,
-                        textShadow: subtitleAppearance.edge === "outline" ? "-1px -1px #000, 1px -1px #000, -1px 1px #000, 1px 1px #000" : subtitleAppearance.edge === "shadow" ? "0 3px 6px #000" : "none",
-                      }}
-                    >
-                      Subtitle preview
-                    </span>
-                  </div>
+                  <div className="glass-section-header">Subtitles</div>
+                  <button type="button" onClick={() => setCaptionsEnabled((v) => !v)} disabled={subtitleTracks.length === 0} className={clsx("glass-settings-item w-full", captionsEnabled && "bg-white/15")}>
+                    <div className="glass-settings-label">
+                      <Captions className="h-4 w-4 text-white/50" />
+                      <span>Subtitles</span>
+                    </div>
+                    <span className="text-xs text-white/50">{subtitleTracks.length === 0 ? "Unavailable" : captionsEnabled ? "On" : "Off"}</span>
+                  </button>
 
                   {subtitleTracks.length > 1 ? (
-                    <div className="mb-3">
-                      <div className="mb-2 text-xs font-semibold text-white/58">Track</div>
+                    <div className="px-3 py-2">
+                      <div className="mb-2 text-xs text-white/50">Track</div>
                       <div className="grid grid-cols-2 gap-1">
                         {subtitleTracks.map((track, index) => (
-                          <button
-                            key={`${track.src}:${index}`}
-                            type="button"
-                            onClick={() => {
-                              setSelectedSubtitleTrack(index);
-                              setCaptionsEnabled(true);
-                            }}
-                            className={clsx(
-                              "truncate rounded-md px-2 py-1.5 text-xs font-bold transition",
-                              captionsEnabled && selectedSubtitleTrack === index ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                            )}
-                          >
+                          <button key={`${track.src}:${index}`} type="button" onClick={() => { setSelectedSubtitleTrack(index); setCaptionsEnabled(true); }} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", captionsEnabled && selectedSubtitleTrack === index ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
                             {track.label}
                           </button>
                         ))}
@@ -1099,58 +1150,49 @@ export function UniversalVideoPlayer({
                     </div>
                   ) : null}
 
-                  <label className="mb-3 block">
-                    <div className="mb-2 flex items-center justify-between text-xs font-semibold text-white/58">
-                      <span>Text size</span>
-                      <span className="tabular-nums text-white/42">{subtitleAppearance.size}%</span>
+                  <div className="px-3 py-2">
+                    <div className="mb-2 rounded-xl border border-white/10 bg-white/5 p-3 text-center">
+                      <span className="inline rounded px-1.5 py-0.5 font-bold leading-relaxed" style={{ color: subtitleAppearance.textColor, backgroundColor: hexToRgba(subtitleAppearance.backgroundColor, subtitleAppearance.backgroundOpacity), fontSize: `${Math.max(12, subtitleAppearance.size * 0.16)}px`, textShadow: subtitleAppearance.edge === "outline" ? "-1px -1px #000, 1px -1px #000, -1px 1px #000, 1px 1px #000" : subtitleAppearance.edge === "shadow" ? "0 3px 6px #000" : "none" }}>
+                        Subtitle preview
+                      </span>
                     </div>
-                    <input type="range" min={60} max={200} step={10} value={subtitleAppearance.size} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, size: Number(event.target.value) }))} className="h-1 w-full accent-white" />
-                  </label>
-
-                  <div className="mb-3 grid grid-cols-2 gap-2">
-                    <label>
-                      <div className="mb-2 text-xs font-semibold text-white/58">Text color</div>
-                      <div className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.065] px-2">
-                        <input type="color" value={subtitleAppearance.textColor} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, textColor: event.target.value }))} className="h-6 w-7 cursor-pointer border-0 bg-transparent p-0" />
-                        <span className="text-[9px] font-bold uppercase text-white/42">{subtitleAppearance.textColor}</span>
-                      </div>
-                    </label>
-                    <label>
-                      <div className="mb-2 text-xs font-semibold text-white/58">Background</div>
-                      <div className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.065] px-2">
-                        <input type="color" value={subtitleAppearance.backgroundColor} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, backgroundColor: event.target.value }))} className="h-6 w-7 cursor-pointer border-0 bg-transparent p-0" />
-                        <span className="text-[9px] font-bold uppercase text-white/42">{subtitleAppearance.backgroundColor}</span>
-                      </div>
-                    </label>
                   </div>
 
-                  <label className="mb-3 block">
-                    <div className="mb-2 flex items-center justify-between text-xs font-semibold text-white/58">
-                      <span>Background opacity</span>
-                      <span className="tabular-nums text-white/42">{subtitleAppearance.backgroundOpacity}%</span>
+                  <div className="px-3 py-2">
+                    <div className="mb-2 flex items-center justify-between text-xs text-white/50">
+                      <span>Text size</span>
+                      <span>{subtitleAppearance.size}%</span>
                     </div>
-                    <input type="range" min={0} max={100} step={5} value={subtitleAppearance.backgroundOpacity} onChange={(event) => setSubtitleAppearance((value) => ({ ...value, backgroundOpacity: Number(event.target.value) }))} className="h-1 w-full accent-white" />
-                  </label>
+                    <input type="range" min={60} max={200} step={10} value={subtitleAppearance.size} onChange={(e) => setSubtitleAppearance((v) => ({ ...v, size: Number(e.target.value) }))} className="h-1 w-full accent-white" />
+                  </div>
 
-                  <div className="mb-3">
-                    <div className="mb-2 text-xs font-semibold text-white/58">Text edge</div>
+                  <div className="px-3 py-2">
+                    <div className="mb-2 text-xs text-white/50">Text edge</div>
                     <div className="grid grid-cols-3 gap-1">
                       {(["none", "shadow", "outline"] as const).map((edge) => (
-                        <button key={edge} type="button" onClick={() => setSubtitleAppearance((value) => ({ ...value, edge }))} className={clsx("rounded-md px-2 py-1.5 text-xs font-bold capitalize transition", subtitleAppearance.edge === edge ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14")}>{edge}</button>
+                        <button key={edge} type="button" onClick={() => setSubtitleAppearance((v) => ({ ...v, edge }))} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold capitalize transition", subtitleAppearance.edge === edge ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                          {edge}
+                        </button>
                       ))}
                     </div>
                   </div>
 
-                  <div>
-                    <div className="mb-2 text-xs font-semibold text-white/58">Vertical position</div>
+                  <div className="px-3 py-2">
+                    <div className="mb-2 text-xs text-white/50">Position</div>
                     <div className="grid grid-cols-3 gap-1">
-                      {[{ label: "High", value: 72 }, { label: "Middle", value: 82 }, { label: "Low", value: 90 }].map((position) => (
-                        <button key={position.value} type="button" onClick={() => setSubtitleAppearance((value) => ({ ...value, position: position.value }))} className={clsx("rounded-md px-2 py-1.5 text-xs font-bold transition", subtitleAppearance.position === position.value ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14")}>{position.label}</button>
+                      {[{ label: "High", value: 72 }, { label: "Middle", value: 82 }, { label: "Low", value: 90 }].map((pos) => (
+                        <button key={pos.value} type="button" onClick={() => setSubtitleAppearance((v) => ({ ...v, position: pos.value }))} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", subtitleAppearance.position === pos.value ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                          {pos.label}
+                        </button>
                       ))}
                     </div>
                   </div>
+
+                  <button type="button" onClick={() => setSubtitleAppearance(DEFAULT_SUBTITLE_APPEARANCE)} className="mt-2 w-full rounded-xl bg-white/10 py-2 text-xs font-semibold text-white/60 transition hover:bg-white/15">
+                    Reset to default
+                  </button>
                 </div>
-              </div>
+              )}
             </div>
           ) : null}
         </div>
