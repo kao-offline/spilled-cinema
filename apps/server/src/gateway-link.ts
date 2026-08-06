@@ -73,6 +73,7 @@ export class ManagedGatewayLink {
       const identity = await this.options.runtime.getTransportIdentityRecord();
       const base = this.options.gatewayUrl.replace(/\/$/, "").replace(/^http/, "ws");
       const url = `${base}/v2/nodes/${encodeURIComponent(identity.nodeId)}/connect?role=node`;
+      console.log(`[managed-gateway] connecting to gateway as ${identity.nodeId}...`);
       const socket = new WebSocket(url, ["spilled-v2"], {
         headers: {
           "X-Spilled-Node-Enrollment": this.options.enrollmentCredential,

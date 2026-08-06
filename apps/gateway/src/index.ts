@@ -145,7 +145,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export class NodeLink extends DurableObject<Env> {
-  private static readonly HEARTBEAT_INTERVAL_MS = 30_000;
+  private static readonly HEARTBEAT_INTERVAL_MS = 10_000;
 
   private attachment(socket: WebSocket) {
     return socket.deserializeAttachment() as

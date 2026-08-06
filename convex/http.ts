@@ -425,7 +425,7 @@ http.route({
         nodeId: body.nodeId,
         protocolVersion: 2,
         capacityClass: "standard",
-        ttlMs: 60_000,
+        ttlMs: 15_000,
       });
       return json({ ok: true });
     }
@@ -477,7 +477,7 @@ http.route({
       nodeId: body.nodeId,
       protocolVersion: 2,
       capacityClass: "standard",
-      ttlMs: 60_000,
+      ttlMs: 15_000,
     });
     return json({ ok: true });
   }),

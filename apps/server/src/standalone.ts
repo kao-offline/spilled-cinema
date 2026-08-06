@@ -340,7 +340,8 @@ function startNativePipe() {
 }
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  if (!applyCors(req, res)) {
+  const pathname = req.url?.split("?")[0];
+  if (pathname !== "/api/download-full/browser-file" && !applyCors(req, res)) {
     res.statusCode = 403;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Origin is not allowed." }));
@@ -353,7 +354,6 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     return;
   }
 
-  const pathname = req.url?.split("?")[0];
   if (pathname === "/setup" && req.method === "GET") {
     const remote = req.socket.remoteAddress ?? "";
     const loopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
@@ -731,65 +731,52 @@ async function startManagedGateway() {
     console.warn("[managed-gateway] disabled; the node remains local-only");
     return;
   }
-
-  const createLink = (enrollmentCredential: string) => {
-    if (gatewayLink) return;
-    gatewayLink = new ManagedGatewayLink({
-      gatewayUrl,
-      enrollmentCredential,
-      jwksUrl: gatewayJwksUrl,
-      runtime: handlers.runtime,
-      execute: createV2RpcExecutor(handlers, transientDownloads, handlers.runtime, bulkTransfers),
-    });
-    gatewayLink.start();
-  };
-
-  const storedCredential = await handlers.runtime.storage.getProtectedSecret?.("gateway.enrollmentCredential");
-  if (storedCredential) {
-    createLink(storedCredential);
-    console.log("[managed-gateway] node link started with stored enrollment credential");
-  }
-
-  const applyOnce = async () => {
-    const application = await handlers.runtime.createGatewayEnrollmentApplication({
-      enrollmentCredential: process.env.SPILLED_GATEWAY_ENROLLMENT?.trim() || undefined,
-    });
-    const response = await fetch(`${controlPlaneUrl}/v2/nodes/apply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(application),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      throw new Error(`application returned ${response.status}`);
-    }
-    createLink(application.enrollmentCredential);
-    console.log("[managed-gateway] node application accepted; verification is pending");
-  };
-
   const apply = async () => {
     try {
-      await applyOnce();
+      const application = await handlers.runtime.createGatewayEnrollmentApplication({
+        enrollmentCredential: process.env.SPILLED_GATEWAY_ENROLLMENT?.trim() || undefined,
+      });
+      const response = await fetch(`${controlPlaneUrl}/v2/nodes/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(application),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) {
+        throw new Error(`application returned ${response.status}`);
+      }
+      if (!gatewayLink) {
+        gatewayLink = new ManagedGatewayLink({
+          gatewayUrl,
+          enrollmentCredential: application.enrollmentCredential,
+          jwksUrl: gatewayJwksUrl,
+          runtime: handlers.runtime,
+          execute: createV2RpcExecutor(handlers, transientDownloads, handlers.runtime, bulkTransfers),
+        });
+        gatewayLink.start();
+      }
+      console.log("[managed-gateway] node application accepted; verification is pending");
     } catch (error) {
-      console.warn(`[managed-gateway] enrollment refresh failed; node link continues with previous credential (${error instanceof Error ? error.message : "unknown error"})`);
+      console.warn(`[managed-gateway] unavailable; local operation continues (${error instanceof Error ? error.message : "unknown error"})`);
     }
   };
-
   refreshManagedGatewayApplication = apply;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      await applyOnce();
-      break;
-    } catch (error) {
-      if (attempt < 2) {
-        const delay = 2_000 * 2 ** attempt;
-        console.warn(`[managed-gateway] apply attempt ${attempt + 1} failed; retrying in ${delay / 1000}s (${error instanceof Error ? error.message : "unknown error"})`);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      } else {
-        console.warn(`[managed-gateway] all apply attempts failed; node link continues with stored credential (${error instanceof Error ? error.message : "unknown error"})`);
-      }
+      await apply();
+      if (gatewayLink) break;
+    } catch {
+      // apply already logs its own warnings
     }
+    if (gatewayLink) break;
+    const delay = Math.min(10_000, 1_000 * 2 ** attempt);
+    console.warn(`[managed-gateway] gateway link not established; retrying in ${delay / 1000}s`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
+  if (!gatewayLink) {
+    console.warn("[managed-gateway] could not establish gateway link after retries; will retry every 30 minutes");
   }
 
   gatewayEnrollmentTimer = setInterval(() => void apply(), 30 * 60_000);
