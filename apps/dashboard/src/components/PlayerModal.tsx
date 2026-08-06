@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, List, LoaderCircle, RotateCw, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, List, LoaderCircle, RotateCw } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -200,7 +200,7 @@ export function PlayerModal({
   episode,
   show,
   onClose,
-  onSelectPlayer: _onSelectPlayer,
+  onSelectPlayer,
   onSelectEpisode,
   onResolvePlayer,
   onResolvePlayerFailure,
@@ -215,7 +215,7 @@ export function PlayerModal({
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playbackFailures, setPlaybackFailures] = useState<PlaybackResolveFailure[]>([]);
   const [resolvingPlayback, setResolvingPlayback] = useState(false);
-  const [, setPlayerStatuses] = useState<Record<string, PlayerResolutionStatus>>({});
+  const [playerStatuses, setPlayerStatuses] = useState<Record<string, PlayerResolutionStatus>>({});
   const [expandedPlayers, setExpandedPlayers] = useState<EpisodePlayer[]>([]);
   const [localSelectedAlias, setLocalSelectedAlias] = useState<PlayerAlias | null>(null);
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
@@ -287,6 +287,42 @@ export function PlayerModal({
     : instantPlayback?.playerAlias
       ? effectiveEpisode?.players.find((player) => player.alias === instantPlayback.playerAlias) ?? activePlayer
       : activePlayer;
+
+  function toggleLang(lang: string) {
+    setExpandedLangs((prev) => {
+      const next = new Set(prev);
+      if (next.has(lang)) next.delete(lang);
+      else next.add(lang);
+      return next;
+    });
+  }
+
+  function handleChoosePlayer(player: EpisodePlayer) {
+    if (!episode) return;
+    const shouldRetry = player.alias === activePlayer?.alias
+      || playerStatuses[player.alias]?.status === "failed"
+      || player.resolutionStatus === "failed";
+    if (shouldRetry && !isLocalPlayer(player)) {
+      const key = playbackCacheKey(player);
+      removeCachedPlayerUrl("playback", key);
+      removeCachedPlayerFailure("playback", key);
+      playbackErrorRetryRef.current = key;
+      setPlayback(null);
+      setPlaybackError(null);
+      setPlaybackFailures([]);
+      setPlayerStatuses((current) => ({
+        ...current,
+        [player.alias]: { status: "unresolved" },
+      }));
+      setPlaybackRetryNonce((value) => value + 1);
+    }
+    if (episode.players.some((entry) => entry.alias === player.alias)) {
+      setLocalSelectedAlias(null);
+      onSelectPlayer(episode.id, player.alias);
+      return;
+    }
+    setLocalSelectedAlias(player.alias);
+  }
 
   useEffect(() => {
     setExpandedPlayers([]);
@@ -742,67 +778,111 @@ export function PlayerModal({
           <button onClick={onClose} className="spilled-glass-icon h-10 w-10" aria-label="Back to episode detail">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <img src="/Spilled.svg" alt="Spilled" className="hidden h-9 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
         </div>
 
-        <div className="pointer-events-auto relative">
-          <button type="button" onClick={() => setPlayerMenuOpen((value) => !value)} className="spilled-glass-icon h-10 w-10" aria-label="Player options">
-            <ChevronDown className={clsx("h-4 w-4 transition-transform duration-200", playerMenuOpen && "rotate-180")} />
-          </button>
-          {playerMenuOpen ? (
-            <div className="glass-panel absolute right-0 top-12 flex max-h-[80vh] w-[min(92vw,32rem)] flex-col overflow-hidden rounded-2xl border border-white/10">
-              <div className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 py-2" style={{ scrollbarWidth: "none" }}>
-                {selectorSeasons.map(([seasonNumber]) => (
-                  <button
-                    key={seasonNumber}
-                    type="button"
-                    onClick={() => setSelectedSelectorSeason(seasonNumber)}
-                    className={clsx("glass-season-pill shrink-0", activeSelectorSeason === seasonNumber && "glass-season-pill-active")}
-                  >
-                    S{seasonNumber}
-                  </button>
-                ))}
-              </div>
-
-              <div className="custom-scrollbar min-h-0 overflow-y-auto p-3">
-                {activeSelectorEpisodes.map((entry) => {
-                  const selected = entry.id === effectiveEpisode.id;
-                  const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onClick={() => {
-                        setPlayerMenuOpen(false);
-                        onSelectEpisode?.(entry);
-                      }}
-                      className={clsx("mb-3 w-full overflow-hidden rounded-xl border transition", selected ? "border-orange-500/60" : "border-white/10 hover:border-white/25")}
-                    >
-                      <div className="relative aspect-video w-full bg-white/5">
-                        {episodeArtwork ? (
-                          <img src={episodeArtwork} alt="" className="h-full w-full object-cover" loading="lazy" />
-                        ) : (
-                          <div className="flex h-full items-center justify-center text-white/20">No image</div>
-                        )}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
-                        <div className="absolute bottom-0 left-0 right-0 p-4">
-                          <div className="text-lg font-bold text-white">{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
-                          <div className="mt-1 flex items-center gap-2 text-sm text-white/70">
-                            {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
+        <div className="pointer-events-auto flex items-center gap-2">
+          <div className="relative">
+            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
+              <List className="h-4 w-4" />
+            </button>
+            {episodeSelectorOpen ? (
+              <div className="glass-panel absolute right-0 top-12 flex w-[min(85vw,20rem)] flex-col overflow-hidden rounded-2xl border border-white/10" style={{ maxHeight: "75vh" }}>
+                <div className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 py-2" style={{ scrollbarWidth: "none" }}>
+                  {selectorSeasons.map(([seasonNumber]) => (
+                    <button key={seasonNumber} type="button" onClick={() => setSelectedSelectorSeason(seasonNumber)} className={clsx("glass-season-pill shrink-0 text-xs", activeSelectorSeason === seasonNumber && "glass-season-pill-active")}>
+                      S{seasonNumber}
+                    </button>
+                  ))}
+                </div>
+                <div className="custom-scrollbar overflow-y-auto" style={{ maxHeight: "calc(75vh - 3rem)" }}>
+                  {activeSelectorEpisodes.map((entry, index) => {
+                    const selected = entry.id === effectiveEpisode.id;
+                    const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
+                    const distance = Math.abs(index - activeSelectorEpisodes.findIndex((e) => e.id === effectiveEpisode.id));
+                    const scale = selected ? 1 : Math.max(0.7, 1 - distance * 0.12);
+                    return (
+                      <button key={entry.id} type="button" onClick={() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); }} className="w-full px-3 py-1.5">
+                        <div className={clsx("overflow-hidden rounded-xl border transition-all duration-300", selected ? "border-orange-500/70 shadow-lg shadow-orange-500/20" : "border-white/10 opacity-70 hover:opacity-100")} style={{ transform: `scale(${scale})`, transformOrigin: "center center" }}>
+                          <div className="relative w-full bg-white/5" style={{ aspectRatio: selected ? "16/9" : "16/10" }}>
+                            {episodeArtwork ? (
+                              <img src={episodeArtwork} alt="" className="h-full w-full object-cover" loading="lazy" />
+                            ) : (
+                              <div className="flex h-full items-center justify-center text-white/20">No image</div>
+                            )}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+                            <div className="absolute bottom-0 left-0 right-0 p-3">
+                              <div className={clsx("font-bold text-white", selected ? "text-base" : "text-sm")}>{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
+                              {selected ? (
+                                <div className="mt-1 flex items-center gap-2 text-xs text-white/60">
+                                  {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
+                                </div>
+                              ) : null}
+                            </div>
+                            {selected ? (
+                              <div className="absolute top-2 right-2 flex h-5 w-5 items-center justify-center rounded-full bg-orange-500">
+                                <div className="h-1.5 w-1.5 rounded-full bg-white" />
+                              </div>
+                            ) : null}
                           </div>
                         </div>
-                        {selected ? (
-                          <div className="absolute top-3 right-3 flex h-6 w-6 items-center justify-center rounded-full bg-orange-500">
-                            <div className="h-2 w-2 rounded-full bg-white" />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="relative">
+            <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
+              <ChevronDown className={clsx("h-4 w-4 transition-transform duration-200", playerMenuOpen && "rotate-180")} />
+            </button>
+            {playerMenuOpen ? (
+              <div className="glass-panel absolute right-0 top-12 flex max-h-[70vh] w-[min(85vw,22rem)] flex-col overflow-hidden rounded-2xl border border-white/10">
+                <div className="border-b border-white/10 px-4 py-3">
+                  <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Episode"}</div>
+                  <div className="mt-1 truncate text-sm font-bold text-white">{modalHeading}</div>
+                </div>
+                <div className="custom-scrollbar overflow-y-auto p-2" style={{ maxHeight: "calc(70vh - 4.5rem)" }}>
+                  {groupedPlayers.map((group) => {
+                    const isOpen = expandedLangs.has(group.key);
+                    return (
+                      <div key={group.key} className="mb-1">
+                        <button type="button" onClick={() => toggleLang(group.key)} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition hover:bg-white/10">
+                          <span className="text-sm font-semibold text-white/80">{group.label}</span>
+                          <ChevronDown className={clsx("h-4 w-4 text-white/40 transition-transform duration-200", isOpen && "rotate-180")} />
+                        </button>
+                        {isOpen ? (
+                          <div className="mt-1 space-y-1 pl-2">
+                            {group.players.map((player) => {
+                              const active = player.alias === activePlayer.alias;
+                              const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
+                              return (
+                                <button key={player.alias} type="button" onClick={() => handleChoosePlayer(player)} className={clsx("glass-settings-item w-full text-left", active && "bg-white/15")}>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-sm font-medium text-white/80">{player.label}</div>
+                                    <div className="text-xs text-white/40">{player.provider}</div>
+                                  </div>
+                                  {status === "resolving" ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : status === "resolved" ? <div className="h-2 w-2 rounded-full bg-emerald-400" /> : status === "failed" ? <div className="h-2 w-2 rounded-full bg-red-400" /> : null}
+                                </button>
+                              );
+                            })}
                           </div>
                         ) : null}
                       </div>
-                    </button>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+                {playbackFailures.length > 0 ? (
+                  <div className="border-t border-white/10 px-4 py-3">
+                    {playbackFailures.map((failure) => (
+                      <div key={`${failure.playerAlias}:${failure.reason}`} className="text-xs text-red-300/80"><strong>{failure.provider}</strong>: {failure.reason}</div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </div>
       </div>
     </section>
