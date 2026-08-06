@@ -74,34 +74,41 @@ export function chooseResolvedPlayerCandidate(
 }
 
 async function fetchPlayerHtml(targetUrl: string, refererUrl?: string) {
-  const response = await fetch(targetUrl, {
-    redirect: "follow",
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9,cs;q=0.8",
-      Referer: refererUrl ?? targetUrl,
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(targetUrl, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,cs;q=0.8",
+        Referer: refererUrl ?? targetUrl,
+      },
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    throw new Error(`Player page request failed: ${response.status} ${response.statusText}`);
-  }
+    if (!response.ok) {
+      throw new Error(`Player page request failed: ${response.status} ${response.statusText}`);
+    }
 
-  const finalUrl = response.url || targetUrl;
-  const contentType = response.headers.get("content-type") || "";
+    const finalUrl = response.url || targetUrl;
+    const contentType = response.headers.get("content-type") || "";
 
-  if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+    if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+      return {
+        finalUrl,
+        html: null,
+      };
+    }
+
     return {
       finalUrl,
-      html: null,
+      html: await response.text(),
     };
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return {
-    finalUrl,
-    html: await response.text(),
-  };
 }
 
 export async function resolvePlayerEmbedUrl(input: {

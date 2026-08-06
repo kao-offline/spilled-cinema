@@ -3,7 +3,7 @@ import { formatEpisodeTitle } from "./episode-title";
 import { requestRuntimeJson, resolveRuntimeUrl } from "./local-api";
 import { normalizePlaybackUrlForClient } from "./player-url-cache";
 
-const UNIVERSAL_PLAYBACK_TIMEOUT_MS = 90_000;
+const UNIVERSAL_PLAYBACK_TIMEOUT_MS = 15_000;
 
 export type FullDownloadJobState = "queued" | "resolving" | "downloading" | "completed" | "failed";
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, List, LoaderCircle, RotateCw } from "lucide-react";
+import { ArrowLeft, ChevronDown, List, LoaderCircle, RotateCw, Settings } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -221,6 +221,9 @@ export function PlayerModal({
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
+  const [episodeTransitioning, setEpisodeTransitioning] = useState(false);
+  const [focusedEpisodeIndex, setFocusedEpisodeIndex] = useState<number>(0);
+  const episodeScrollRef = useRef<HTMLDivElement>(null);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
@@ -330,6 +333,8 @@ export function PlayerModal({
     setSourceDiscoveryState("idle");
     setSelectedSelectorSeason(null);
     setEpisodeSelectorOpen(false);
+    setEpisodeTransitioning(false);
+    setFocusedEpisodeIndex(0);
     setPlaybackRetryNonce(0);
     playbackErrorRetryRef.current = null;
     backgroundResolveKeysRef.current = new Set();
@@ -780,70 +785,128 @@ export function PlayerModal({
           </button>
         </div>
 
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex flex-col items-end gap-2">
           <div className="relative">
-            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
-              <List className="h-4 w-4" />
+            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon flex items-center gap-2 px-3 py-2" aria-label="Season">
+              <span className="text-xs font-semibold text-white/80">Season {activeSelectorSeason ?? 1}</span>
+              <ChevronDown className={clsx("h-3.5 w-3.5 text-white/60 transition-transform duration-200", episodeSelectorOpen && "rotate-180")} />
             </button>
-            {episodeSelectorOpen ? (
-              <div className="glass-panel absolute right-0 top-12 flex w-[min(85vw,20rem)] flex-col overflow-hidden rounded-2xl border border-white/10" style={{ maxHeight: "75vh" }}>
-                <div className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 py-2" style={{ scrollbarWidth: "none" }}>
-                  {selectorSeasons.map(([seasonNumber]) => (
-                    <button key={seasonNumber} type="button" onClick={() => setSelectedSelectorSeason(seasonNumber)} className={clsx("glass-season-pill shrink-0 text-xs", activeSelectorSeason === seasonNumber && "glass-season-pill-active")}>
-                      S{seasonNumber}
-                    </button>
-                  ))}
-                </div>
-                <div className="custom-scrollbar overflow-y-auto" style={{ maxHeight: "calc(75vh - 3rem)" }}>
-                  {activeSelectorEpisodes.map((entry, index) => {
-                    const selected = entry.id === effectiveEpisode.id;
-                    const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
-                    const distance = Math.abs(index - activeSelectorEpisodes.findIndex((e) => e.id === effectiveEpisode.id));
-                    const scale = selected ? 1 : Math.max(0.7, 1 - distance * 0.12);
-                    return (
-                      <button key={entry.id} type="button" onClick={() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); }} className="w-full px-3 py-1.5">
-                        <div className={clsx("overflow-hidden rounded-xl border transition-all duration-300", selected ? "border-orange-500/70 shadow-lg shadow-orange-500/20" : "border-white/10 opacity-70 hover:opacity-100")} style={{ transform: `scale(${scale})`, transformOrigin: "center center" }}>
-                          <div className="relative w-full bg-white/5" style={{ aspectRatio: selected ? "16/9" : "16/10" }}>
-                            {episodeArtwork ? (
-                              <img src={episodeArtwork} alt="" className="h-full w-full object-cover" loading="lazy" />
-                            ) : (
-                              <div className="flex h-full items-center justify-center text-white/20">No image</div>
-                            )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
-                            <div className="absolute bottom-0 left-0 right-0 p-3">
-                              <div className={clsx("font-bold text-white", selected ? "text-base" : "text-sm")}>{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
-                              {selected ? (
-                                <div className="mt-1 flex items-center gap-2 text-xs text-white/60">
-                                  {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
-                                </div>
-                              ) : null}
-                            </div>
-                            {selected ? (
-                              <div className="absolute top-2 right-2 flex h-5 w-5 items-center justify-center rounded-full bg-orange-500">
-                                <div className="h-1.5 w-1.5 rounded-full bg-white" />
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+            {episodeSelectorOpen && selectorSeasons.length > 1 ? (
+              <div className="glass-panel absolute right-0 top-12 w-32 overflow-hidden rounded-xl border border-white/10 py-1">
+                {selectorSeasons.map(([seasonNumber]) => (
+                  <button key={seasonNumber} type="button" onClick={() => setSelectedSelectorSeason(seasonNumber)} className={clsx("flex w-full items-center px-3 py-2 text-sm transition hover:bg-white/10", activeSelectorSeason === seasonNumber ? "text-white font-semibold" : "text-white/60")}>
+                    Season {seasonNumber}
+                  </button>
+                ))}
               </div>
             ) : null}
           </div>
-
-          <div className="relative">
+          <div className="flex gap-2">
             <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
-              <ChevronDown className={clsx("h-4 w-4 transition-transform duration-200", playerMenuOpen && "rotate-180")} />
+              <Settings className="h-4 w-4" />
             </button>
-            {playerMenuOpen ? (
-              <div className="glass-panel absolute right-0 top-12 flex max-h-[70vh] w-[min(85vw,22rem)] flex-col overflow-hidden rounded-2xl border border-white/10">
+            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
+              <List className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {episodeSelectorOpen ? (
+        <div className="absolute inset-y-0 right-0 z-30 flex justify-end transition-all duration-500" style={{ paddingTop: "max(5rem, env(safe-area-inset-top))", transform: episodeTransitioning ? "translateX(100%)" : "translateX(0)" }}>
+          <div className="pointer-events-auto h-full w-[min(90vw,28rem)] bg-gradient-to-l from-black/95 via-black/90 to-transparent">
+            <div
+              ref={episodeScrollRef}
+              className="h-full overflow-y-auto"
+              style={{ scrollSnapType: "y mandatory", scrollBehavior: "smooth", scrollbarWidth: "none" }}
+              onScroll={(e) => {
+                const container = e.currentTarget;
+                const scrollTop = container.scrollTop;
+                const cardHeight = 160;
+                const centeredIndex = Math.round(scrollTop / cardHeight);
+                setFocusedEpisodeIndex(Math.max(0, Math.min(centeredIndex, activeSelectorEpisodes.length - 1)));
+              }}
+            >
+              <div className="flex flex-col items-center gap-0 pt-[35vh] pb-[35vh]">
+                {activeSelectorEpisodes.map((entry, index) => {
+                  const isFocused = index === focusedEpisodeIndex;
+                  const isCurrentPlaying = entry.id === effectiveEpisode.id;
+                  const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
+                  const distance = Math.abs(index - focusedEpisodeIndex);
+                  const scale = isFocused ? 1 : Math.max(0.55, 1 - distance * 0.12);
+                  const opacity = isFocused ? 1 : Math.max(0.3, 1 - distance * 0.25);
+                  return (
+                    <div
+                      key={entry.id}
+                      className="w-full px-4"
+                      style={{ scrollSnapAlign: "center", height: "160px" }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isFocused) {
+                            setEpisodeTransitioning(true);
+                            setTimeout(() => {
+                              setEpisodeSelectorOpen(false);
+                              onSelectEpisode?.(entry);
+                              setTimeout(() => setEpisodeTransitioning(false), 100);
+                            }, 400);
+                          } else {
+                            const container = episodeScrollRef.current;
+                            if (container) {
+                              container.scrollTo({ top: index * 160, behavior: "smooth" });
+                            }
+                          }
+                        }}
+                        className="w-full h-full"
+                        style={{ transform: `scale(${scale})`, transformOrigin: "center center", opacity }}
+                      >
+                        <div className={clsx("relative w-full h-full overflow-hidden rounded-2xl border-2 transition-all duration-300", isFocused ? (isCurrentPlaying ? "border-orange-500/80 shadow-2xl shadow-orange-500/20" : "border-white/30 shadow-xl shadow-white/10") : "border-white/5")}>
+                          {episodeArtwork ? (
+                            <img src={episodeArtwork} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center bg-white/5 text-white/20">No image</div>
+                          )}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent" />
+                          <div className="absolute bottom-0 left-0 right-0 p-3">
+                            <div className="text-base font-bold text-white">{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
+                            <div className="mt-0.5 flex items-center gap-2 text-xs text-white/60">
+                              {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
+                            </div>
+                            {isFocused ? (
+                              <p className="mt-1.5 line-clamp-2 text-xs leading-4 text-white/50">{entry.episodeTitle ?? `Episode ${entry.episodeNumber}`}</p>
+                            ) : null}
+                          </div>
+                          {isCurrentPlaying && !isFocused ? (
+                            <div className="absolute top-2 right-2 flex h-5 w-5 items-center justify-center rounded-full bg-orange-500">
+                              <div className="h-1.5 w-1.5 rounded-full bg-white" />
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {episodeTransitioning ? (
+        <div className="absolute inset-0 z-50 bg-black animate-fade-in" style={{ animationDuration: "400ms" }} />
+      ) : null}
+
+      {playerMenuOpen ? (
+        <div className="absolute inset-y-0 right-0 z-30 flex justify-end" style={{ paddingTop: "max(5rem, env(safe-area-inset-top))" }}>
+          <div className="pointer-events-auto h-full w-[min(85vw,22rem)] overflow-y-auto bg-gradient-to-l from-black/95 via-black/90 to-transparent" style={{ scrollbarWidth: "none" }}>
+            <div className="p-4 pt-8 pb-24">
+              <div className="glass-panel overflow-hidden rounded-2xl border border-white/10">
                 <div className="border-b border-white/10 px-4 py-3">
-                  <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Episode"}</div>
+                  <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Active Source"}</div>
                   <div className="mt-1 truncate text-sm font-bold text-white">{modalHeading}</div>
                 </div>
-                <div className="custom-scrollbar overflow-y-auto p-2" style={{ maxHeight: "calc(70vh - 4.5rem)" }}>
+                <div className="p-2">
                   {groupedPlayers.map((group) => {
                     const isOpen = expandedLangs.has(group.key);
                     return (
@@ -881,10 +944,10 @@ export function PlayerModal({
                   </div>
                 ) : null}
               </div>
-            ) : null}
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </section>
   );
 }

@@ -12,6 +12,38 @@ const USER_AGENT =
 const PLAYBACK_FETCH_PROXY_TEMPLATE = process.env.PLAYBACK_FETCH_PROXY_TEMPLATE || process.env.IMPORT_FETCH_PROXY_TEMPLATE || "";
 const PUBLIC_DNS_CACHE = new Map<string, { addresses: string[]; expiresAt: number }>();
 
+const EMBED_URL_CACHE_TTL_MS = 60 * 60 * 1000;
+const embedUrlCache = new Map<string, { expiresAt: number; url: string }>();
+
+async function resolvePlayerEmbedUrlWithTimeout(input: { embedUrl: string; provider?: string }, timeoutMs = 8000) {
+  const cacheKey = `${input.provider ?? ""}|${input.embedUrl}`;
+  const cached = embedUrlCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const url = await Promise.race([
+      resolvePlayerEmbedUrl(input),
+      new Promise<never>((_, reject) => {
+        controller.signal.addEventListener("abort", () => reject(new Error("Embed URL resolution timed out.")), { once: true });
+      }),
+    ]);
+    embedUrlCache.set(cacheKey, { url, expiresAt: Date.now() + EMBED_URL_CACHE_TTL_MS });
+    if (embedUrlCache.size > 256) {
+      const oldestKey = embedUrlCache.keys().next().value as string | undefined;
+      if (oldestKey) embedUrlCache.delete(oldestKey);
+    }
+    return url;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const RESOLVE_OVERALL_TIMEOUT_MS = 12_000;
+
 export type FullDownloadState = "queued" | "resolving" | "downloading" | "completed" | "failed";
 
 export type FullDownloadJob = {
@@ -391,20 +423,27 @@ async function fetchTextForResolution(url: string, refererUrl: string | undefine
     }
   }
 
-  const response = await fetch(url, {
-    headers: {
-      "user-agent": USER_AGENT,
-      accept,
-      referer: refererUrl ?? "https://www.bombuj.si/",
-    },
-    redirect: "follow",
-  }).catch(() => null);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept,
+        referer: refererUrl ?? "https://www.bombuj.si/",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    }).catch(() => null);
 
-  if (response?.ok) {
-    return {
-      text: await response.text(),
-      finalUrl: response.url || url,
-    };
+    if (response?.ok) {
+      return {
+        text: await response.text(),
+        finalUrl: response.url || url,
+      };
+    }
+  } finally {
+    clearTimeout(timeout);
   }
 
   const proxyText = await readFetchProxyText(url, refererUrl);
@@ -515,7 +554,7 @@ async function resolveCandidateEmbedUrl(candidate: {
   }
 
   try {
-    return await resolvePlayerEmbedUrl({
+    return await resolvePlayerEmbedUrlWithTimeout({
       embedUrl,
       provider: candidate.provider,
     });
@@ -1305,7 +1344,7 @@ async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache 
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    Number.parseInt(process.env.SPILLED_STREAM_VALIDATE_TIMEOUT_MS || "7000", 10),
+    Number.parseInt(process.env.SPILLED_STREAM_VALIDATE_TIMEOUT_MS || "3000", 10),
   );
   const host = new URL(target.streamUrl).hostname;
 
@@ -1674,7 +1713,7 @@ const vidkingMetadataCache = new Map<string, { expiresAt: number; metadata: Awai
 const vidkingResolvedStreamCache = new Map<string, { expiresAt: number; target: ResolvedStreamTarget }>();
 const vidkingSeedCache = new Map<string, { expiresAt: number; seed: string }>();
 
-async function fetchVidking(url: string, init: RequestInit = {}, timeoutMs = 12_000) {
+async function fetchVidking(url: string, init: RequestInit = {}, timeoutMs = 6_000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1839,8 +1878,8 @@ async function fetchVidkingSeed(mediaId: string, forceRefresh = false) {
       },
     });
     if (response.status !== 429 || attempt === 3) break;
-    const jitter = Number.parseInt(mediaId.slice(-3), 10) % 400 || 0;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 600 * (attempt + 1) + jitter));
+    const jitter = Number.parseInt(mediaId.slice(-3), 10) % 200 || 0;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 300 * (attempt + 1) + jitter));
   }
   if (!response?.ok) {
     if (response && (response.status === 401 || response.status === 403)) {
@@ -3374,59 +3413,70 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
   const orderedPlayers = orderPlaybackPlayers(input);
   const failures: PlaybackResolveFailure[] = [];
   const activePlayer = orderedPlayers.find((player) => player.alias === input.activePlayerAlias);
-  const activeSubtitleUrl = activePlayer ? await resolveSubtitleUrlFromPlayer(activePlayer) : undefined;
+
+  const subtitlePromise = activePlayer ? resolveSubtitleUrlFromPlayer(activePlayer) : Promise.resolve(undefined);
+
+  const fastStreamTypeOf = (url: string) => {
+    const t = inferStreamType(url);
+    return t === "hls" || t === "mp4" || t === "dash" ? t : null;
+  };
+
+  const directUrlResults = await Promise.allSettled(
+    orderedPlayers.map(async (player) => {
+      const rawDirectUrl = getDirectStreamUrl({
+        embedUrl: player.embedUrl,
+        streamUrl: player.streamUrl,
+        resolvedUrl: player.resolvedUrl,
+      });
+      if (!rawDirectUrl) return null;
+      const candidateEmbedUrl = player.embedUrl;
+      if (!canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl)) return null;
+      const streamType = fastStreamTypeOf(rawDirectUrl);
+      if (!streamType) return null;
+      return { player, rawDirectUrl, streamType };
+    }),
+  );
+
+  const directHits = directUrlResults
+    .filter((r): r is PromiseFulfilledResult<{ player: PlaybackResolveInput["players"][number]; rawDirectUrl: string; streamType: "hls" | "mp4" | "dash" }> => r.status === "fulfilled" && r.value !== null)
+    .map((r) => r.value);
+
+  if (directHits.length > 0) {
+    const activeHit = directHits.find((hit) => hit.player.alias === input.activePlayerAlias) ?? directHits[0];
+    const refererUrl = activeHit.player.streamRefererUrl ?? activeHit.player.sourcePageUrl ?? activeHit.player.embedUrl;
+    const activeSubtitleUrl = await subtitlePromise;
+    return {
+      playerAlias: activeHit.player.alias,
+      playbackUrl: buildPlaybackProxyPath(toValidatedHttpUrl(activeHit.rawDirectUrl), refererUrl, input.episodeId, activeHit.streamType),
+      resolvedUrl: toValidatedHttpUrl(activeHit.rawDirectUrl),
+      refererUrl,
+      streamType: activeHit.streamType,
+      subtitlesUrl: activeHit.player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(activeHit.player.embedUrl) ?? activeSubtitleUrl,
+    };
+  }
 
   const attemptPlayer = async (player: PlaybackResolveInput["players"][number]): Promise<PlaybackResolveResult> => {
     const candidateEmbedUrl = (await resolveCandidateEmbedUrl(player)) ?? player.embedUrl;
-    const rawDirectUrl = getDirectStreamUrl({
-      embedUrl: player.embedUrl,
-      streamUrl: player.streamUrl,
-      resolvedUrl: player.resolvedUrl,
-    });
-    const directUrlIsFresh = rawDirectUrl && canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl);
-    const directUrl = directUrlIsFresh ? rawDirectUrl : null;
-
-    if (directUrl) {
-      const fastStreamType = inferStreamType(directUrl);
-      if (fastStreamType === "hls" || fastStreamType === "mp4" || fastStreamType === "dash") {
-        const refererUrl = player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl;
-        return {
-          playerAlias: player.alias,
-          playbackUrl: buildPlaybackProxyPath(toValidatedHttpUrl(directUrl), refererUrl, input.episodeId, fastStreamType),
-          resolvedUrl: toValidatedHttpUrl(directUrl),
-          refererUrl,
-          streamType: fastStreamType,
-          subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
-        };
-      }
-    }
 
     const equivalentVidkingUrl = buildVidkingEquivalentUrl(candidateEmbedUrl);
-    const equivalentVidking = equivalentVidkingUrl && !directUrl
+    const equivalentVidking = equivalentVidkingUrl
       ? await resolveVidkingStream("vidking", equivalentVidkingUrl).catch(() => null)
       : null;
-    let resolved = directUrl
-      ? {
-          streamUrl: toValidatedHttpUrl(directUrl),
-          refererUrl: player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl,
-        }
-      : equivalentVidking
-        ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl).catch(() => null))
-        ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+    let resolved = equivalentVidking
+      ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl).catch(() => null))
+      ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
 
-    if (!resolved && !directUrl && isVidkingPlayer(player.provider, candidateEmbedUrl)) {
+    if (!resolved && isVidkingPlayer(player.provider, candidateEmbedUrl)) {
       const twoEmbedFallbackUrl = await getTwoEmbedFallbackUrlFromVidking(candidateEmbedUrl);
       if (twoEmbedFallbackUrl) {
         resolved = await resolveStreamTarget(twoEmbedFallbackUrl, 0, new Set<string>(), player.sourcePageUrl, false);
       }
     }
 
-    if (!resolved && !directUrl) {
+    if (!resolved) {
       for (const alternateEmbedUrl of getAlternateProviderUrls(candidateEmbedUrl)) {
         resolved = await resolveStreamTarget(alternateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-        if (resolved) {
-          break;
-        }
+        if (resolved) break;
       }
     }
 
@@ -3441,24 +3491,6 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
 
     const validation = await validateResolvedStream(resolved);
     if (!validation.ok) {
-      if (directUrl) {
-        const refreshed = equivalentVidking
-          ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl))
-          ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-        if (refreshed) {
-          const refreshedValidation = await validateResolvedStream(refreshed);
-          if (refreshedValidation.ok) {
-            return {
-              playerAlias: player.alias,
-              playbackUrl: buildPlaybackProxyPath(refreshed.streamUrl, refreshed.refererUrl, input.episodeId, refreshedValidation.streamType),
-              resolvedUrl: refreshed.streamUrl,
-              refererUrl: refreshed.refererUrl,
-              streamType: refreshedValidation.streamType,
-              subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
-            };
-          }
-        }
-      }
       failures.push({
         playerAlias: player.alias,
         provider: player.provider,
@@ -3467,6 +3499,7 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
       throw new Error("reason" in validation ? validation.reason : "Stream validation failed.");
     }
 
+    const activeSubtitleUrl = await subtitlePromise;
     return {
       playerAlias: player.alias,
       playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId, validation.streamType),
@@ -3477,23 +3510,43 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
     };
   };
 
-  try {
-    return await attemptPlayer(orderedPlayers[0]);
-  } catch {
-    // Prefer the active player; on failure fall back to the remaining players in parallel.
-  }
+  const overallTimeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("Playback resolution timed out.")), RESOLVE_OVERALL_TIMEOUT_MS);
+  });
 
-  if (orderedPlayers.length > 1) {
-    try {
-      return await runFirstSuccess(orderedPlayers.slice(1), 2, attemptPlayer);
-    } catch {
-      // All fallbacks failed; report the combined error below.
+  const resolveAll = async (): Promise<PlaybackResolveResult> => {
+    if (orderedPlayers.length <= 1) {
+      return attemptPlayer(orderedPlayers[0]);
     }
-  }
 
-  const summary = failures.map((failure) => `${failure.provider}: ${failure.reason}`).join(" | ");
-  const error = summary || "No remote player links are available for this episode.";
-  throw Object.assign(new Error(error), { failures });
+    const activePlayerFirst = orderedPlayers[0];
+    const restPlayers = orderedPlayers.slice(1);
+
+    const activeAttempt = attemptPlayer(activePlayerFirst).catch(() => null);
+
+    const restAttempts = restPlayers.map((p) => attemptPlayer(p).catch(() => null));
+
+    const activeResult = await activeAttempt;
+    if (activeResult) return activeResult;
+
+    const firstFallback = await Promise.any(restAttempts.map((p, i) => p.then((result) => {
+      if (result) return result;
+      throw new Error("fallback failed");
+    })));
+    if (firstFallback) return firstFallback;
+
+    throw new Error("All player resolution attempts failed.");
+  };
+
+  try {
+    return await Promise.race([resolveAll(), overallTimeout]);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("timed out")) {
+      failures.length = 0;
+      failures.push({ playerAlias: "all", provider: "all", reason: "Resolution timed out." });
+    }
+    throw error;
+  }
 }
 
 export async function createFullDownloadJob(input: CreateDownloadInput): Promise<FullDownloadJob> {
