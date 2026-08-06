@@ -500,6 +500,34 @@ export class JsonNodeStorage implements NodeStorage {
 
     throw lastError instanceof Error ? lastError : new Error("Failed to write node state.");
   }
+
+  private secretsFilePath() {
+    return `${this.filePath}.secrets.json`;
+  }
+
+  async getProtectedSecret(key: string) {
+    try {
+      const parsed = JSON.parse(await readFile(this.secretsFilePath(), "utf8")) as Record<string, string>;
+      return parsed[key] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async setProtectedSecret(key: string, value: string) {
+    let current: Record<string, string> = {};
+    try {
+      current = JSON.parse(await readFile(this.secretsFilePath(), "utf8")) as Record<string, string>;
+    } catch {
+      current = {};
+    }
+    current[key] = value;
+    const directory = dirname(this.filePath);
+    await mkdir(directory, { recursive: true });
+    const tempPath = `${this.filePath}.secrets.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(tempPath, JSON.stringify(current), "utf8");
+    await rename(tempPath, this.secretsFilePath());
+  }
 }
 
 type StateCollectionKey =
