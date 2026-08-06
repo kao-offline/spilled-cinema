@@ -702,6 +702,7 @@ async function fetchBombujSerial(rawSlug: string): Promise<ImportedShow> {
     posterUrl: artwork.posterUrl ?? posterUrl,
     backdropUrl: artwork.backdropUrl ?? null,
     bannerUrl: artwork.bannerUrl ?? null,
+    bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
     availableSeasons: [...new Set(resolvedEpisodes.map((episode) => episode.seasonNumber))].sort((a, b) => a - b),
     importedAt,

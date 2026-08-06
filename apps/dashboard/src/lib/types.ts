@@ -71,6 +71,7 @@ export type ImportedShow = {
   posterUrl?: string | null;
   backdropUrl?: string | null;
   bannerUrl?: string | null;
+  bannerWithLogoUrl?: string | null;
   homepagePosterUrl?: string | null;
   homepageBannerUrl?: string | null;
   homepageArtworkVersion?: number | null;

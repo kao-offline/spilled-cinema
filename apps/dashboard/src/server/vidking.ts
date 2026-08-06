@@ -5,6 +5,7 @@ import {
   scoreSearchCandidate,
 } from "../lib/search-ranking";
 import { searchTmdbTitleCandidates } from "./external-title-search";
+import { enrichArtwork } from "./artwork";
 
 const BASE_URL = "https://www.vidking.net";
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
@@ -515,6 +516,15 @@ export async function fetchVidkingTitle(slug: string, mediaType?: "movie" | "ser
     throw new Error(`No VidKing episodes could be built for ${title}.`);
   }
 
+  const artwork = await enrichArtwork({
+    mediaType: isMovie ? "movie" : "tv",
+    title,
+    altTitle: details.original_title ?? details.original_name ?? null,
+    yearHint: parseYear(details.release_date ?? details.first_air_date) ?? undefined,
+    description: details.overview ?? null,
+    currentPosterUrl: tmdbImage(details.poster_path, "w342"),
+  });
+
   return {
     slug: showSlug,
     title,
@@ -526,9 +536,11 @@ export async function fetchVidkingTitle(slug: string, mediaType?: "movie" | "ser
       imdb: details.imdb_id ?? details.external_ids?.imdb_id ?? undefined,
       tmdb: parsed.tmdbId,
     },
-    posterUrl: tmdbImage(details.poster_path, "w342"),
-    backdropUrl: tmdbImage(details.backdrop_path, "w780"),
-    clearLogoUrl: null,
+    posterUrl: artwork.posterUrl ?? tmdbImage(details.poster_path, "w342"),
+    backdropUrl: artwork.backdropUrl ?? tmdbImage(details.backdrop_path, "w780"),
+    bannerUrl: artwork.bannerUrl ?? null,
+    bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? null,
+    clearLogoUrl: artwork.clearLogoUrl ?? null,
     actors: tmdbCast(details),
     availableSeasons: [...new Set(episodes.map((episode) => episode.seasonNumber))].sort((a, b) => a - b),
     importedAt,

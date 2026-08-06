@@ -190,7 +190,7 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[150] h-[100dvh] overflow-hidden bg-[#030407]/88 backdrop-blur-xl" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[250] h-[100dvh] overflow-hidden bg-[#030407]/88 backdrop-blur-xl" onMouseDown={onClose}>
       <div className="mx-auto box-border flex h-full min-h-0 w-full items-center justify-center p-1.5 sm:p-4 lg:p-6" onMouseDown={(event) => event.stopPropagation()}>
         <section
           className="relative flex h-[calc(100dvh-0.75rem)] min-h-0 w-full max-w-[1480px] flex-col overflow-hidden rounded-[1.25rem] border border-white/[0.09] bg-[#08090d] shadow-[0_45px_160px_rgba(0,0,0,0.8)] sm:h-[calc(100dvh-2rem)] sm:max-h-[920px] sm:rounded-[2rem] lg:h-[calc(100dvh-3rem)]"

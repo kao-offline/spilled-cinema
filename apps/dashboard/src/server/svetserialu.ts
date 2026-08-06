@@ -855,6 +855,7 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     posterUrl: artwork.posterUrl ?? (posterPath ? absoluteUrl(posterPath, BASE_URL) : null),
     backdropUrl: artwork.backdropUrl ?? null,
     bannerUrl: artwork.bannerUrl ?? null,
+    bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
     availableSeasons: [...availableSeasons].sort((a, b) => a - b),
     importedAt,
