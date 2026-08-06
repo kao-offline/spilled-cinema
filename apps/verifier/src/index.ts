@@ -105,6 +105,29 @@ async function probe(candidate: Candidate, capability: Capability) {
     plaintext: JSON.stringify({ method: template.method, params: template.params }),
   });
   const protocol = `ticket.${Buffer.from(JSON.stringify(ticket)).toString("base64url")}`;
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
+    try {
+      return await probeOnce(candidate, ticket, requestId, encrypted, protocol);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!lastError.message.includes("4003")) throw lastError;
+    }
+  }
+  throw lastError;
+}
+
+async function probeOnce(
+  candidate: Candidate,
+  ticket: CapabilityTicketV2,
+  requestId: string,
+  encrypted: ReturnType<typeof createEncryptedNodeRequest>,
+  protocol: string,
+) {
   const socket = new WebSocket(
     `${gatewayUrl}/v2/nodes/${encodeURIComponent(candidate.nodeId)}/connect?role=client`,
     ["spilled-v2", protocol],
