@@ -10,6 +10,7 @@ apps/dashboard/.env*
 apps/client/native/dist
 apps/server-windows/release
 apps/server-windows/server
+apps/verifier-windows/release
 apps/extractor/.next
 apps/extractor/.next-build
 apps/server/dist
