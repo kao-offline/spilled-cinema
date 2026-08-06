@@ -15,7 +15,7 @@ const VIDKING_AVAILABILITY_TIMEOUT_MS = 700;
 const VIDKING_AVAILABILITY_CACHE_MAX = 1000;
 
 type VidkingMediaType = "movie" | "tv";
-export type VidkingAvailability = "available" | "unavailable" | "unknown";
+export type VidkingAvailability = "available" | "unavailable" | "unknown" | "verifying";
 
 export type VidkingAvailabilityResult = {
   importSlug: string;
@@ -24,6 +24,7 @@ export type VidkingAvailabilityResult = {
   detailUrl: string;
   checkedAt: number;
   reason?: string | null;
+  verifying?: boolean;
 };
 
 type TmdbDetails = {
@@ -229,6 +230,15 @@ function classifyVidkingHtml(html: string) {
   if (/\b(?:not found|unavailable|no sources|removed|video not found|media unavailable)\b/.test(lower)) {
     return { availability: "unavailable" as const, reason: "VidKing reported no playable source." };
   }
+  if (
+    /\b(?:just a moment|checking your browser|verif(?:ying|ication|y)|security check|cf-chl-|__cf_chl|captcha|challenge|access denied|maintenance)\b/.test(lower)
+  ) {
+    return {
+      availability: "verifying" as const,
+      reason: "VidKing is running a verification check right now. Try again in a few minutes.",
+      verifying: true,
+    };
+  }
   if (/(?:iframe|video|player|embed|stream|hls|m3u8|__next|vidking)/i.test(html)) {
     return { availability: "available" as const, reason: null };
   }
@@ -347,6 +357,16 @@ export async function checkVidkingAvailability(input: {
       return result;
     }
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        const result = {
+          ...baseResult,
+          availability: "verifying" as const,
+          reason: "VidKing is running a verification check right now. Try again in a few minutes.",
+          verifying: true,
+        };
+        setAvailabilityCache(cacheKey, result);
+        return result;
+      }
       const result = { ...baseResult, availability: "unknown" as const, reason: `VidKing returned ${response.status}.` };
       setAvailabilityCache(cacheKey, result);
       return result;

@@ -555,6 +555,161 @@ async function removeUnavailableBombujAggregators(
   return players.filter((_player, index) => checks[index]);
 }
 
+function parseBombujSerialEpisodeList(html: string, seasonNumber: number) {
+  const results: Array<{
+    episodeUrl: string;
+    seasonNumber: number;
+    episodeNumber: number;
+    episodeCode: string;
+    language: string;
+  }> = [];
+
+  for (const match of html.matchAll(/<a\s+href='([^']*)'[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const href = match[1]?.trim();
+    if (!href || !/\/serial\//i.test(href)) {
+      continue;
+    }
+    const parsed = parseBombujEpisodeSlug(href);
+    if (!parsed || parsed.seasonNumber !== seasonNumber || !Number.isFinite(parsed.episodeNumber)) {
+      continue;
+    }
+    const block = match[2] ?? "";
+    const language = stripTags(
+      block.match(/<div[^>]*float:right[^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? "",
+    ).trim() || "Unknown Lang";
+
+    results.push({
+      episodeUrl: absoluteBombujUrl(href, SERIES_BASE_URL),
+      seasonNumber: parsed.seasonNumber,
+      episodeNumber: parsed.episodeNumber,
+      episodeCode: `s${parsed.seasonNumber}e${parsed.episodeNumber}`,
+      language,
+    });
+  }
+
+  return results;
+}
+
+async function fetchBombujSerial(rawSlug: string): Promise<ImportedShow> {
+  const serialPageUrl = `${SERIES_BASE_URL}/serial-${rawSlug}`;
+  const headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0" };
+  const html = await fetchText(serialPageUrl, { headers }).catch(() => "");
+  if (!html) {
+    throw new Error(`Failed to fetch Bombuj serial page for "${rawSlug}".`);
+  }
+
+  const title = stripTags(matchOne(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i) ?? rawSlug);
+  const rawAltTitle = stripTags(matchOne(html, /<h2[^>]*>([\s\S]*?)<\/h2>/i) ?? "");
+  const altTitle = isBombujHelperSubtitle(rawAltTitle) ? "" : rawAltTitle;
+  const description = stripTags(matchOne(html, /<div class="desc"[^>]*>([\s\S]*?)<\/div>/i) ?? "");
+  let posterUrl = matchOne(html, /<meta property="og:image"\s*content="([^"]+)"/i) ?? null;
+  const yearHint = title.match(/\b(19\d{2}|20\d{2})\b/)?.[1] ?? altTitle.match(/\b(19\d{2}|20\d{2})\b/)?.[1] ?? null;
+  const csfdMeta = await fetchCsfdMovieMeta(title, yearHint);
+
+  if (posterUrl) {
+    if (posterUrl.startsWith("//")) {
+      posterUrl = `https:${posterUrl}`;
+    } else if (!posterUrl.startsWith("http")) {
+      posterUrl = `${SERIES_BASE_URL}${posterUrl}`;
+    }
+  }
+
+  const seasonNumbers = [...new Set(
+    [...html.matchAll(/epizody\/ajax2\.php\?[^"'\s]*seria=(\d+)/gi)]
+      .map((match) => Number.parseInt(match[1], 10)),
+  )].filter(Number.isFinite).sort((a, b) => a - b);
+  if (seasonNumbers.length === 0) {
+    throw new Error(`No Bombuj season lists found for "${rawSlug}".`);
+  }
+
+  const episodesBySeason = await mapWithConcurrency(seasonNumbers, 3, async (seasonNumber) => {
+    const listHtml = await fetchText(
+      `${SERIES_BASE_URL}/epizody/ajax2.php?url=${encodeURIComponent(rawSlug)}&seria=${seasonNumber}`,
+      { headers: { ...headers, Referer: serialPageUrl, "X-Requested-With": "XMLHttpRequest" } },
+    ).catch(() => "");
+    return listHtml ? parseBombujSerialEpisodeList(listHtml, seasonNumber) : [];
+  });
+
+  const importedAt = Date.now();
+  const resolvedEpisodes = await mapWithConcurrency(episodesBySeason.flat(), 3, async (episode) => {
+    let players: LibraryEpisode["players"] = [];
+    try {
+      const episodeHtml = await fetchText(episode.episodeUrl, {
+        headers: { ...headers, Referer: serialPageUrl },
+      }).catch(() => "");
+      if (episodeHtml) {
+        players = await extractBombujPlayersFromHtml(episodeHtml, episode.episodeUrl, SERIES_BASE_URL, headers, episode.language);
+      }
+    } catch {
+      players = [];
+    }
+
+    if (players.length === 0) {
+      players.push({
+        alias: "bombuj-native" as PlayerAlias,
+        provider: "bombuj-native",
+        label: "Bombuj Native",
+        sourcePageUrl: episode.episodeUrl,
+        embedUrl: episode.episodeUrl,
+        resolutionStatus: "failed",
+        resolutionError: "No external Bombuj player links could be extracted for this episode.",
+      });
+    }
+
+    return {
+      id: `bombuj:${rawSlug}:${episode.episodeCode}`,
+      showSlug: rawSlug,
+      showTitle: title,
+      posterUrl: posterUrl || undefined,
+      seasonNumber: episode.seasonNumber,
+      episodeNumber: episode.episodeNumber,
+      episodeCode: episode.episodeCode,
+      episodeTitle: `${title} - ${episode.episodeCode.toUpperCase()}${episode.language && episode.language !== "Unknown Lang" ? ` - ${episode.language}` : ""}`,
+      episodeUrl: episode.episodeUrl,
+      players,
+      selectedPlayerAlias: players[0].alias,
+      importedAt,
+    } satisfies LibraryEpisode;
+  });
+
+  resolvedEpisodes.sort((a, b) =>
+    (a.seasonNumber - b.seasonNumber) || (a.episodeNumber ?? 0) - (b.episodeNumber ?? 0),
+  );
+  if (resolvedEpisodes.length === 0) {
+    throw new Error(`No Bombuj episodes found for serial "${rawSlug}".`);
+  }
+
+  const normalizedDescription = description || csfdMeta?.description || null;
+  const yearText = csfdMeta?.year ?? yearHint ?? null;
+  const yearWithRating = yearText
+    ? `${yearText}${csfdMeta?.rating !== null && csfdMeta?.rating !== undefined ? ` - CSFD ${csfdMeta.rating}%` : ""}`
+    : (csfdMeta?.rating !== null && csfdMeta?.rating !== undefined ? `CSFD ${csfdMeta.rating}%` : null);
+  const artwork = await enrichArtwork({
+    mediaType: "tv",
+    title,
+    altTitle: altTitle || null,
+    yearHint: yearHint ?? undefined,
+    description: normalizedDescription || null,
+    currentPosterUrl: posterUrl,
+  });
+
+  return {
+    slug: `bombuj-${rawSlug}`,
+    title,
+    altTitle: altTitle || null,
+    description: normalizedDescription,
+    years: yearWithRating,
+    posterUrl: artwork.posterUrl ?? posterUrl,
+    backdropUrl: artwork.backdropUrl ?? null,
+    bannerUrl: artwork.bannerUrl ?? null,
+    clearLogoUrl: artwork.clearLogoUrl ?? null,
+    availableSeasons: [...new Set(resolvedEpisodes.map((episode) => episode.seasonNumber))].sort((a, b) => a - b),
+    importedAt,
+    mediaType: "serial",
+    episodes: resolvedEpisodes,
+  };
+}
+
 /**
  * Basic Bombuj Extractor Skeleton 
  * NOTE: Bombuj leverages anti-bot mechanics. This initial scraper creates a skeleton implementation.
@@ -566,6 +721,11 @@ export async function fetchBombujMovie(slug: string, mediaType?: "movie" | "seri
   const rawSlug = (episodePart?.showSlug ?? slug)
     .replace(/^online-(serial|film)-/, "")
     .replace(/^serial-/, "");
+
+  if (isSerial && !episodePart && !isDirectUrl) {
+    return await fetchBombujSerial(rawSlug);
+  }
+
   const siteBaseUrl = isSerial ? SERIES_BASE_URL : MOVIE_BASE_URL;
   const movieUrl = isDirectUrl
     ? slug

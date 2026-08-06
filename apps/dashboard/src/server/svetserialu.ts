@@ -11,7 +11,12 @@ import {
   scoreSearchCandidate,
 } from "../lib/search-ranking";
 import { searchSvetSerialuCatalog } from "./svetserialu-catalog";
-import { searchSvetSerialuAlgolia } from "./svetserialu-algolia";
+import {
+  isSvetSerialuAlgoliaAvailable,
+  saveSvetSerialuRecords,
+  searchSvetSerialuAlgolia,
+  type SvetSerialuIndexRecord,
+} from "./svetserialu-algolia";
 
 const BASE_URLS: string[] = ["https://svetserialu.to", "https://svetserialu.io", "https://svetserialov.to"];
 const BASE_URL = BASE_URLS[0];
@@ -883,6 +888,7 @@ export type SvetSerialuSearchResult = {
   directors?: string[];
   detailUrl?: string | null;
   matchScore?: number;
+  _source?: "catalog" | "live";
 };
 
 async function searchSvetSerialuProvider(
@@ -971,6 +977,7 @@ async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuC
     directors: item.directors,
     detailUrl: item.detailUrl,
     matchScore: item.matchScore,
+    _source: "catalog" as const,
   }));
 
   if (catalogResults.length > 0) {
@@ -997,9 +1004,11 @@ async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuC
       posterUrl: result.posterUrl ?? candidate.posterUrl ?? null,
       year: result.year ?? candidate.year ?? null,
       matchScore: scoreSvetProviderMatchForCatalog(query, result, candidate, index),
+      _source: "live" as const,
     }));
   });
-  const direct = await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials });
+  const direct = (await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials }))
+    .map((result) => ({ ...result, _source: "live" as const }));
   const unique = new Map<string, SvetSerialuSearchResult>();
 
   for (const result of [...targeted.flat(), ...direct].sort(compareSearchScores)) {
@@ -1068,6 +1077,166 @@ function mergeSvetSerialuResults(...groups: SvetSerialuSearchResult[][]) {
   return keepHighConfidenceSearchResults([...unique.values()].sort(compareSearchScores)).slice(0, 8);
 }
 
+function buildMinimalSvetSerialuIndexRecord(result: SvetSerialuSearchResult): SvetSerialuIndexRecord | null {
+  if (!result.slug || !result.title) {
+    return null;
+  }
+  return {
+    objectID: result.slug,
+    slug: result.slug,
+    title: result.title,
+    alt_title: result.alternateTitles?.find((title) => title && title !== result.title) ?? null,
+    year: result.year ?? null,
+    poster_url: result.posterUrl ?? null,
+    episode_count: 0,
+    season_count: 0,
+  };
+}
+
+async function scrapeSvetSerialuIndexRecord(slug: string): Promise<SvetSerialuIndexRecord | null> {
+  const showUrl = `${BASE_URL}/serial/${slug}`;
+  const showHtml = await fetchText(showUrl, undefined, undefined);
+
+  const title = stripTags(matchOne(showHtml, /<h1 class="nunito">([\s\S]*?)<\/h1>/i) ?? slug);
+  const altTitle = stripTags(matchOne(showHtml, /<span class="alt-name nunito">([\s\S]*?)<\/span>/i) ?? "");
+  const description = stripTags(matchOne(showHtml, /<div class="show-text nunito">([\s\S]*?)<\/div>/i) ?? "");
+  const posterPath = matchOne(showHtml, /<div class="show-image">\s*<img src="([^"]+)"/i);
+  const years = stripTags(matchOne(showHtml, /<span class="year nunito">([\s\S]*?)<\/span>/i) ?? "");
+  const firstEpisodePath = matchOne(
+    showHtml,
+    /<a href="(\/serial\/[^"]+\/s\d+e\d+)" class="button starwatch/i,
+  );
+
+  let scrapedEpisodes: ParsedEpisode[] = [];
+  if (firstEpisodePath) {
+    const firstEpisodeUrl = absoluteUrl(firstEpisodePath, BASE_URL);
+    const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl, undefined);
+    const tvShowId = matchOne(firstEpisodeHtml, /\/episodes-list\?tvShowId=(\d+)/i);
+
+    if (tvShowId) {
+      const firstSeason = Number.parseInt(firstEpisodeUrl.match(/\/s(\d+)e\d+$/i)?.[1] ?? "1", 10);
+      const firstSeasonListHtml = await fetchText(
+        `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${firstSeason}&episode=1`,
+        firstEpisodeUrl,
+        undefined,
+      );
+      const availableSeasons = getSeasonNumbers(firstSeasonListHtml);
+      const lists = await mapWithConcurrency(availableSeasons, 4, async (seasonNumber) =>
+        seasonNumber === firstSeason
+          ? firstSeasonListHtml
+          : await fetchText(
+              `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${seasonNumber}&episode=1`,
+              showUrl,
+              undefined,
+            ),
+      );
+      scrapedEpisodes = lists.flatMap((html, index) => getEpisodesFromList(html, availableSeasons[index]));
+    } else {
+      const accordionSeasons = getAccordionSeasons(showHtml);
+      scrapedEpisodes = (await mapWithConcurrency(accordionSeasons, 4, async (season) => {
+        const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl, undefined);
+        return getEpisodesFromList(html, season.seasonNumber);
+      })).flat();
+    }
+  }
+
+  const yearStart = years?.match(/\b(19|20)\d{2}\b/)?.[0] ?? null;
+  const yearEnd = years?.match(/\b(19|20)\d{2}\b\s*[–-]\s*((?:19|20)\d{2})/)?.[1] ?? yearStart;
+
+  const maxEpisodes = 50;
+  const episodes = scrapedEpisodes.slice(0, maxEpisodes).map((episode) => ({
+    c: episode.episodeCode ?? `s${String(episode.seasonNumber).padStart(2, "0")}e${String(episode.episodeNumber ?? 0).padStart(2, "0")}`,
+    t: episode.episodeTitle ? episode.episodeTitle.substring(0, 80) : null,
+    s: episode.seasonNumber,
+  }));
+  let episodesText: string | null = null;
+  if (scrapedEpisodes.length > maxEpisodes) {
+    episodesText = scrapedEpisodes.map((episode) =>
+      episode.episodeCode ?? `s${String(episode.seasonNumber).padStart(2, "0")}e${String(episode.episodeNumber ?? 0).padStart(2, "0")}`,
+    ).join(" ");
+    if (episodesText.length > 2000) {
+      episodesText = episodesText.substring(0, 2000);
+    }
+  }
+
+  return {
+    objectID: slug,
+    slug,
+    title,
+    alt_title: altTitle || null,
+    year: years || null,
+    year_start: yearStart ? Number.parseInt(yearStart, 10) : null,
+    year_end: yearEnd ? Number.parseInt(yearEnd, 10) : null,
+    description: description ? description.substring(0, 500) : null,
+    poster_url: posterPath ? absoluteUrl(posterPath, BASE_URL) : null,
+    episode_count: scrapedEpisodes.length,
+    season_count: new Set(scrapedEpisodes.map((episode) => episode.seasonNumber)).size,
+    episodes,
+    episodes_text: episodesText,
+  };
+}
+
+const SVET_INDEX_MAX_CONCURRENCY = 2;
+const SVET_INDEX_RECENT_TTL_MS = 10 * 60 * 1000;
+const svetIndexInFlight = new Map<string, Promise<void>>();
+const svetIndexRecentlyIndexed = new Map<string, number>();
+const svetIndexPending: Array<{ slug: string; fallback: SvetSerialuSearchResult | null }> = [];
+let svetIndexActive = 0;
+
+function isSvetIndexRecentlyIndexed(slug: string) {
+  const indexedAt = svetIndexRecentlyIndexed.get(slug);
+  if (!indexedAt) {
+    return false;
+  }
+  if (Date.now() - indexedAt >= SVET_INDEX_RECENT_TTL_MS) {
+    svetIndexRecentlyIndexed.delete(slug);
+    return false;
+  }
+  return true;
+}
+
+function pumpSvetIndexQueue() {
+  while (svetIndexActive < SVET_INDEX_MAX_CONCURRENCY && svetIndexPending.length > 0) {
+    const entry = svetIndexPending.shift()!;
+    svetIndexActive += 1;
+    const task = (async () => {
+      try {
+        const record = await scrapeSvetSerialuIndexRecord(entry.slug).catch(() => null)
+          ?? (entry.fallback ? buildMinimalSvetSerialuIndexRecord(entry.fallback) : null);
+        if (record) {
+          const saved = await saveSvetSerialuRecords([record]);
+          if (saved) {
+            svetIndexRecentlyIndexed.set(entry.slug, Date.now());
+          }
+        }
+      } catch {
+        // Indexing is best-effort and must never break the search path.
+      } finally {
+        svetIndexActive -= 1;
+        pumpSvetIndexQueue();
+      }
+    })();
+    svetIndexInFlight.set(entry.slug, task);
+    void task.finally(() => svetIndexInFlight.delete(entry.slug));
+  }
+}
+
+function queueSvetSerialuIndexing(results: SvetSerialuSearchResult[]) {
+  if (!isSvetSerialuAlgoliaAvailable()) {
+    return;
+  }
+  const queued = results
+    .filter((result) => result._source === "live")
+    .slice(0, 5);
+  for (const result of queued) {
+    if (svetIndexInFlight.has(result.slug) || isSvetIndexRecentlyIndexed(result.slug)) {
+      continue;
+    }
+    svetIndexPending.push({ slug: result.slug, fallback: result });
+  }
+  pumpSvetIndexQueue();
+}
+
 export async function searchSvetSerialu(query: string, credentials?: SvetSerialuCredentials | null): Promise<SvetSerialuSearchResult[]> {
   if (query.trim().length < 2) {
     return [];
@@ -1078,17 +1247,28 @@ export async function searchSvetSerialu(query: string, credentials?: SvetSerialu
 
   const algoliaFast = await waitForSearch(algoliaSearch, 250);
   const legacyFast = await waitForSearch(legacySearch, 0);
+  let algoliaFinal: SearchSettled | null;
+  let legacyFinal: SearchSettled | null;
+  let merged: SvetSerialuSearchResult[];
+
   if (algoliaFast?.status === "fulfilled" && algoliaFast.value.length >= 4) {
-    return mergeSvetSerialuResults(algoliaFast.value, legacyFast?.value ?? []);
+    algoliaFinal = algoliaFast;
+    legacyFinal = legacyFast ?? { status: "rejected", value: [] };
+    merged = mergeSvetSerialuResults(algoliaFast.value, legacyFast?.value ?? []);
+  } else {
+    [algoliaFinal, legacyFinal] = await Promise.all([
+      algoliaFast ?? waitForSearch(algoliaSearch, 10_000),
+      // The public SvetSerialu page commonly answers in 3-7 seconds. A two
+      // second race returned an empty result while the healthy request later
+      // logged 200 OK, which made command search appear randomly broken.
+      legacyFast ?? waitForSearch(legacySearch, 10_000),
+    ]);
+    merged = mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);
   }
 
-  const [algoliaFinal, legacyFinal] = await Promise.all([
-    algoliaFast ?? waitForSearch(algoliaSearch, 10_000),
-    // The public SvetSerialu page commonly answers in 3-7 seconds. A two
-    // second race returned an empty result while the healthy request later
-    // logged 200 OK, which made command search appear randomly broken.
-    legacyFast ?? waitForSearch(legacySearch, 10_000),
-  ]);
+  const algoliaSlugs = new Set((algoliaFinal?.value ?? []).map((result) => result.slug));
+  const missingFromIndex = (legacyFinal?.value ?? []).filter((result) => !algoliaSlugs.has(result.slug));
+  queueSvetSerialuIndexing(missingFromIndex);
 
-  return mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);
+  return merged;
 }

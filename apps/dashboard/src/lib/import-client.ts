@@ -20,7 +20,7 @@ type ArtworkMediaType = "movie" | "tv";
 
 export const HOMEPAGE_ARTWORK_VERSION = 6;
 
-export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown";
+export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown" | "verifying";
 
 export type VidkingAvailabilityItem = {
   importSlug: string;
@@ -34,6 +34,7 @@ export type VidkingAvailabilityResult = {
   detailUrl: string;
   checkedAt: number;
   reason?: string | null;
+  verifying?: boolean;
 };
 
 const VIDKING_AVAILABILITY_CACHE_PREFIX = "spilled.vidking-availability.v1";
@@ -281,6 +282,7 @@ function vidkingAvailabilityCacheKey(item: VidkingAvailabilityItem) {
 function vidkingAvailabilityTtl(availability: VidkingAvailabilityResult["availability"]) {
   if (availability === "available") return 6 * 60 * 60 * 1000;
   if (availability === "unavailable") return 30 * 60 * 1000;
+  if (availability === "verifying") return 5 * 60 * 1000;
   return 5 * 60 * 1000;
 }
 
@@ -294,7 +296,10 @@ function readCachedVidkingAvailability(item: VidkingAvailabilityItem) {
     const parsed = JSON.parse(raw) as Partial<VidkingAvailabilityResult>;
     if (
       typeof parsed.importSlug !== "string" ||
-      (parsed.availability !== "available" && parsed.availability !== "unavailable" && parsed.availability !== "unknown") ||
+      (parsed.availability !== "available" &&
+        parsed.availability !== "unavailable" &&
+        parsed.availability !== "unknown" &&
+        parsed.availability !== "verifying") ||
       typeof parsed.checkedAt !== "number"
     ) {
       return null;

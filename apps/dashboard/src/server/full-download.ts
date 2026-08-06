@@ -1633,6 +1633,8 @@ const VIDKING_SOURCE_SERVERS = [
   "1movies/sources-with-title",
 ] as const;
 const VIDKING_PAYLOAD_MAGIC = new Uint8Array([109, 118, 109, 49]);
+const VIDKING_VERIFICATION_ERROR =
+  "VidKing is currently running a verification check. Try again in a few minutes.";
 const VIDKING_HASH_WORDS = [
   1116352408, 1899447441, 3049323471, 3921009573,
   961987163, 1508970993, 2453635748, 2870763221,
@@ -1838,7 +1840,12 @@ async function fetchVidkingSeed(mediaId: string, forceRefresh = false) {
     const jitter = Number.parseInt(mediaId.slice(-3), 10) % 400 || 0;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 600 * (attempt + 1) + jitter));
   }
-  if (!response?.ok) throw new Error(`VidKing seed request failed: ${response?.status ?? "network"}.`);
+  if (!response?.ok) {
+    if (response && (response.status === 401 || response.status === 403)) {
+      throw new Error(VIDKING_VERIFICATION_ERROR);
+    }
+    throw new Error(`VidKing seed request failed: ${response?.status ?? "network"}.`);
+  }
   const payload = await response.json() as { seed?: unknown; ttlMs?: unknown };
   if (typeof payload.seed !== "string" || !payload.seed) throw new Error("VidKing seed response was invalid.");
   const ttlMs = typeof payload.ttlMs === "number" && Number.isFinite(payload.ttlMs) ? payload.ttlMs : 30_000;
@@ -1917,6 +1924,7 @@ function selectVidkingSources(payload: VidkingSourcePayload) {
 
 async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<ReturnType<typeof fetchVidkingMetadata>>) {
   const errors: string[] = [];
+  let sawVerification = false;
   for (const endpoint of VIDKING_SOURCE_SERVERS) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const seed = await fetchVidkingSeed(route.tmdbId, attempt > 0);
@@ -1949,8 +1957,14 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
 
       if (!response) break;
       if (response.status === 401 && attempt === 0) {
+        sawVerification = true;
         vidkingSeedCache.delete(route.tmdbId);
         continue;
+      }
+      if (response.status === 403) {
+        sawVerification = true;
+        errors.push(`${endpoint}: 403 (verification)`);
+        break;
       }
       if (response.status === 429 && attempt < 2) {
         const jitter = Number.parseInt(route.tmdbId.slice(-3), 10) % 400 || 0;
@@ -1993,6 +2007,9 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
     }
   }
 
+  if (sawVerification) {
+    throw new Error(`${VIDKING_VERIFICATION_ERROR} (${errors.join(" | ") || "source API returned 401/403"})`);
+  }
   throw new Error(errors.length ? `VidKing source API failed. ${errors.join(" | ")}` : "VidKing source API returned no sources.");
 }
 

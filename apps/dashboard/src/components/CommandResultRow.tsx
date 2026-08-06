@@ -84,6 +84,7 @@ function availabilityLabel(result: CommandSearchResult) {
     return null;
   }
   if (result.availability === "checking") return "Checking";
+  if (result.availability === "verifying") return "VidKing verifying";
   if (result.availability === "available") return "Available";
   if (result.availability === "unavailable") return "Not on VidKing";
   if (result.availability === "unknown") return "Availability unknown";
@@ -93,6 +94,7 @@ function availabilityLabel(result: CommandSearchResult) {
 function availabilityClass(result: CommandSearchResult) {
   if (result.kind !== "remote-title") return "";
   if (result.availability === "available") return "bg-emerald-400/12 text-emerald-200";
+  if (result.availability === "verifying") return "bg-sky-400/12 text-sky-200";
   if (result.availability === "unavailable") return "bg-red-400/12 text-red-200";
   if (result.availability === "unknown") return "bg-amber-400/12 text-amber-100";
   return "bg-white/8 text-white/42";

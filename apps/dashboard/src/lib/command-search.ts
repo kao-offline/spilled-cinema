@@ -4,7 +4,7 @@ import type { ExplorePersonSuggestion } from "./discovery-client";
 import { hasRequiredSearchTokenCoverage, scoreSearchCandidate, sortUnifiedSearchResults } from "./search-ranking";
 import { getShowArtwork, getShowMetadata } from "./media-library";
 
-export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown";
+export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown" | "verifying";
 
 export type RemoteCommandResult = {
   title: string;
@@ -296,11 +296,13 @@ export function buildRemoteCommandResults(input: {
         ? "available"
         : sourceMatches.some((source) => source.availability === "checking")
           ? "checking"
-          : sourceMatches.every((source) => source.availability === "unavailable")
-            ? "unavailable"
-            : sourceMatches.some((source) => source.availability === "unknown")
-              ? "unknown"
-              : primary.availability,
+          : sourceMatches.some((source) => source.availability === "verifying")
+            ? "verifying"
+            : sourceMatches.every((source) => source.availability === "unavailable")
+              ? "unavailable"
+              : sourceMatches.some((source) => source.availability === "unknown")
+                ? "unknown"
+                : primary.availability,
       availabilityReason: primary.availabilityReason ?? sourceMatches.find((source) => source.availabilityReason)?.availabilityReason ?? null,
       saved: Boolean(savedShow),
       savedShowSlug: savedShow?.slug,
