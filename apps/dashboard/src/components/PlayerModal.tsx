@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, LoaderCircle, RotateCw } from "lucide-react";
+import { ArrowLeft, ChevronDown, List, LoaderCircle, RotateCw, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -200,7 +200,7 @@ export function PlayerModal({
   episode,
   show,
   onClose,
-  onSelectPlayer,
+  onSelectPlayer: _onSelectPlayer,
   onSelectEpisode,
   onResolvePlayer,
   onResolvePlayerFailure,
@@ -215,11 +215,12 @@ export function PlayerModal({
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playbackFailures, setPlaybackFailures] = useState<PlaybackResolveFailure[]>([]);
   const [resolvingPlayback, setResolvingPlayback] = useState(false);
-  const [playerStatuses, setPlayerStatuses] = useState<Record<string, PlayerResolutionStatus>>({});
+  const [, setPlayerStatuses] = useState<Record<string, PlayerResolutionStatus>>({});
   const [expandedPlayers, setExpandedPlayers] = useState<EpisodePlayer[]>([]);
   const [localSelectedAlias, setLocalSelectedAlias] = useState<PlayerAlias | null>(null);
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
+  const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
@@ -292,6 +293,7 @@ export function PlayerModal({
     setLocalSelectedAlias(null);
     setSourceDiscoveryState("idle");
     setSelectedSelectorSeason(null);
+    setEpisodeSelectorOpen(false);
     setPlaybackRetryNonce(0);
     playbackErrorRetryRef.current = null;
     backgroundResolveKeysRef.current = new Set();
