@@ -980,6 +980,17 @@ async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuC
     _source: "catalog" as const,
   }));
 
+  const direct = (await searchSvetSerialuProvider(query, { limit: 8, credentials }))
+    .map((result) => ({ ...result, _source: "live" as const }));
+
+  if (catalogResults.length > 0 && direct.length > 0) {
+    const merged = new Map<string, SvetSerialuSearchResult>();
+    for (const r of [...catalogResults, ...direct].sort(compareSearchScores)) {
+      if (!merged.has(r.slug)) merged.set(r.slug, r);
+    }
+    return keepHighConfidenceSearchResults([...merged.values()]).slice(0, 8);
+  }
+
   if (catalogResults.length > 0) {
     return catalogResults;
   }
@@ -1007,11 +1018,11 @@ async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuC
       _source: "live" as const,
     }));
   });
-  const direct = (await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials }))
+  const fallbackDirect = (await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials }))
     .map((result) => ({ ...result, _source: "live" as const }));
   const unique = new Map<string, SvetSerialuSearchResult>();
 
-  for (const result of [...targeted.flat(), ...direct].sort(compareSearchScores)) {
+  for (const result of [...targeted.flat(), ...fallbackDirect].sort(compareSearchScores)) {
     if (!unique.has(result.slug)) {
       unique.set(result.slug, result);
     }
