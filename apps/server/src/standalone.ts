@@ -258,9 +258,20 @@ function applyCors(req: IncomingMessage, res: ServerResponse) {
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder, Range, If-None-Match, If-Modified-Since");
+  res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type");
   res.setHeader("Access-Control-Allow-Private-Network", "true");
   return true;
+}
+
+function applyPermissiveCors(req: IncomingMessage, res: ServerResponse) {
+  const origin = req.headers.origin?.replace(/\/$/, "");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder, Range, If-None-Match, If-Modified-Since");
+  res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type");
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
 }
 
 function notFound(res: ServerResponse) {
@@ -341,11 +352,15 @@ function startNativePipe() {
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = req.url?.split("?")[0];
-  if (pathname !== "/api/download-full/browser-file" && !applyCors(req, res)) {
+  const isBrowserFile = pathname === "/api/download-full/browser-file";
+  if (!isBrowserFile && !applyCors(req, res)) {
     res.statusCode = 403;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Origin is not allowed." }));
     return;
+  }
+  if (isBrowserFile) {
+    applyPermissiveCors(req, res);
   }
 
   if (req.method === "OPTIONS") {
