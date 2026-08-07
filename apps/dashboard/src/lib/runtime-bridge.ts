@@ -1,3 +1,9 @@
+import {
+  isLocalhostProbeOnCooldown,
+  markLocalhostProbeAttempted,
+  markLocalhostProbeFailure,
+} from "./localhost-probe-cache";
+
 export type LocalRuntimeTransport = "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted" | null;
 
 export type LocalRuntimeStatus = {
@@ -89,7 +95,11 @@ async function probeDirectLocalRuntime() {
   if (!canUseDirectLocalFetch()) {
     return null;
   }
+  if (isLocalhostProbeOnCooldown()) {
+    return null;
+  }
 
+  markLocalhostProbeAttempted();
   const origins = ["http://127.0.0.1:8787", "http://localhost:8787"];
   for (const origin of origins) {
     try {
@@ -108,6 +118,7 @@ async function probeDirectLocalRuntime() {
     }
   }
 
+  markLocalhostProbeFailure();
   return null;
 }
 

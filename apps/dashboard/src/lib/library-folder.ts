@@ -103,6 +103,8 @@ let vaultDiagnostics: VaultDiagnostics = {
   updatedAt: null,
 };
 
+const VAULT_DEBUG = typeof import.meta !== "undefined" && import.meta.env?.DEV === true;
+
 function recordVaultDiagnostics(patch: Partial<VaultDiagnostics>) {
   vaultDiagnostics = {
     ...vaultDiagnostics,
@@ -112,7 +114,9 @@ function recordVaultDiagnostics(patch: Partial<VaultDiagnostics>) {
 }
 
 function recordVaultInfo(operation: VaultOperation, message: string, details?: unknown) {
-  console.info(`[vault] ${operation}: ${message}`, details ?? "");
+  if (VAULT_DEBUG) {
+    console.info(`[vault] ${operation}: ${message}`, details ?? "");
+  }
   recordVaultDiagnostics({ lastOperation: operation });
 }
 

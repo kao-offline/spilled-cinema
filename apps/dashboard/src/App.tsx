@@ -102,6 +102,7 @@ import { formatEpisodeTitle } from "./lib/episode-title";
 import { scoreSearchCandidate } from "./lib/search-ranking";
 import { buildRuntimeUrl } from "./lib/local-api";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
+import { resetLocalNodeProbeCache } from "./lib/local-api";
 import { balancedBackgroundImage } from "./lib/image-resolution";
 import { cacheExploreFeed, deriveTasteProfileFromLibraryState, readDiscoveryUiState, readTasteProfile, recordAudioPreferenceSignal, recordEpisodePlaySignal, recordFavoriteSignal, recordImportedShowSignal, recordShowOpenSignal, updateDiscoveryUiState, type DiscoveryUiState } from "./lib/discovery-storage";
 import { fetchExploreFeed } from "./lib/discovery-client";
@@ -1408,7 +1409,7 @@ function AppContent() {
       const status = await probeLocalRuntime();
       if (!canceled) {
         setLocalRuntimeStatus(status);
-        timer = window.setTimeout(() => void probe(), status.available ? 60_000 : 10_000);
+        timer = window.setTimeout(() => void probe(), status.available ? 60_000 : 30_000);
       }
     };
 
@@ -3725,6 +3726,7 @@ function AppContent() {
               onImportLibrary={handleImportLibrary}
               localRuntimeStatus={localRuntimeStatus}
               onRefreshLocalRuntime={() => {
+                resetLocalNodeProbeCache();
                 void probeLocalRuntime().then(setLocalRuntimeStatus);
               }}
               vaultStatus={vaultStatus}

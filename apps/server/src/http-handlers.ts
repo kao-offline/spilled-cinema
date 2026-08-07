@@ -1540,41 +1540,63 @@ export function createHttpHandlers() {
         { "User-Agent": "Mozilla/5.0" },
       ];
 
-      const fetchBody = async (url: string): Promise<{ status: number; body: string }> => {
+      const alternateHosts = ["svetserialu.io", "svetserialov.to"];
+
+      const targetCandidates = (() => {
+        try {
+          const url = new URL(target);
+          const host = url.hostname.toLowerCase();
+          if (host.endsWith(".svetserialu.to") || host === "svetserialu.to") {
+            const rewritten = alternateHosts.map((h) => {
+              const copy = new URL(url.href);
+              copy.hostname = h;
+              return copy.toString();
+            });
+            return [url.toString(), ...rewritten];
+          }
+        } catch {
+          // Not a rewritable URL; fall through.
+        }
+        return [target];
+      })();
+
+      const fetchBody = async (): Promise<{ status: number; body: string }> => {
         let lastStatus = 0;
-        for (const h of headerStrategies) {
-          const response = await fetch(url, { redirect: "follow", headers: h });
-          lastStatus = response.status;
-          if (response.ok || !isRetryable403(response.status)) {
-            if (!response.ok) return { status: response.status, body: "" };
-            const contentType = (response.headers.get("content-type") || "").toLowerCase();
-            if (contentType.includes("application/json") || contentType.includes("text/json")) {
-              const payload = await response.json().catch(() => null);
-              if (Array.isArray(payload)) {
-                const entry = payload.find((item: any) => item && item.default) ?? payload[0];
-                if (entry && typeof entry.file === "string") {
-                  const safeFile = (() => {
-                    try { return new URL(entry.file).toString(); } catch { return null; }
-                  })();
-                  if (safeFile) {
-                    let vtt: Response | undefined;
-                    for (const vh of headerStrategies) {
-                      vtt = await fetch(safeFile, { redirect: "follow", headers: vh });
-                      if (vtt.ok || !isRetryable403(vtt.status)) break;
+        for (const candidate of targetCandidates) {
+          for (const h of headerStrategies) {
+            const response = await fetch(candidate, { redirect: "follow", headers: h });
+            lastStatus = response.status;
+            if (response.ok || !isRetryable403(response.status)) {
+              if (!response.ok) return { status: response.status, body: "" };
+              const contentType = (response.headers.get("content-type") || "").toLowerCase();
+              if (contentType.includes("application/json") || contentType.includes("text/json")) {
+                const payload = await response.json().catch(() => null);
+                if (Array.isArray(payload)) {
+                  const entry = payload.find((item: any) => item && item.default) ?? payload[0];
+                  if (entry && typeof entry.file === "string") {
+                    const safeFile = (() => {
+                      try { return new URL(entry.file).toString(); } catch { return null; }
+                    })();
+                    if (safeFile) {
+                      let vtt: Response | undefined;
+                      for (const vh of headerStrategies) {
+                        vtt = await fetch(safeFile, { redirect: "follow", headers: vh });
+                        if (vtt.ok || !isRetryable403(vtt.status)) break;
+                      }
+                      if (vtt?.ok) return { status: vtt.status, body: await vtt.text() };
+                      return { status: 502, body: "" };
                     }
-                    if (vtt?.ok) return { status: vtt.status, body: await vtt.text() };
-                    return { status: 502, body: "" };
                   }
                 }
               }
+              return { status: response.status, body: await response.text() };
             }
-            return { status: response.status, body: await response.text() };
           }
         }
         return { status: lastStatus || 502, body: "" };
       };
 
-      const { status, body } = await fetchBody(parsed.toString());
+      const { status, body } = await fetchBody();
       if (status !== 200) return sendJson(res, status, { error: "Failed to fetch subtitle file." });
 
       const normalized = normalizeSubtitleText(body);

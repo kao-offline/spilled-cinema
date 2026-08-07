@@ -81,6 +81,24 @@ function absoluteUrl(value: string, base = BASE_URL) {
   }
 }
 
+function normalizeSvetSubtitleUrl(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    const primary = new URL(BASE_URL);
+    if (parsed.hostname === primary.hostname || !/^svetserial/.test(parsed.hostname)) {
+      return parsed.toString();
+    }
+    parsed.hostname = primary.hostname;
+    parsed.port = primary.port;
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
 function isSvetSerialuInternalSourceUrl(value: string) {
   try {
     const parsed = new URL(value);
@@ -599,7 +617,7 @@ function resolvePlayerHtml(playerHtml: string, sourcePageUrl: string) {
       let subtitlesUrl: string | undefined;
 
       try {
-        subtitlesUrl = new URL(embedUrl).searchParams.get("sub.info") ?? undefined;
+        subtitlesUrl = normalizeSvetSubtitleUrl(new URL(embedUrl).searchParams.get("sub.info") ?? undefined) ?? undefined;
       } catch {
         subtitlesUrl = undefined;
       }

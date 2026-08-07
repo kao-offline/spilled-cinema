@@ -1,4 +1,10 @@
 import { requestPublicGateway } from "./v2-gateway-client";
+import {
+  isLocalhostProbeOnCooldown,
+  markLocalhostProbeAttempted,
+  markLocalhostProbeFailure,
+  resetLocalhostProbeCache,
+} from "./localhost-probe-cache";
 
 type RuntimeApiResult<T> = {
   ok: boolean;
@@ -193,7 +199,11 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
   if (!canUseDirectLocalFetch()) {
     return null;
   }
+  if (isLocalhostProbeOnCooldown()) {
+    return null;
+  }
 
+  markLocalhostProbeAttempted();
   for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
     try {
       const response = await fetchWithTimeout(`${origin}${path}`, {
@@ -217,6 +227,7 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
     }
   }
 
+  markLocalhostProbeFailure();
   return null;
 }
 
@@ -225,6 +236,10 @@ function canUseDirectLocalFetch() {
   // https dashboard may fetch the user's local node directly. If no node is
   // running the connection is refused quickly and we fall through.
   return true;
+}
+
+export function resetLocalNodeProbeCache() {
+  resetLocalhostProbeCache();
 }
 
 async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
