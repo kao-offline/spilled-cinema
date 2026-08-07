@@ -17,7 +17,7 @@ type JsonRequestInit = {
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
 const DIRECT_LOCAL_TIMEOUT_MS = 3000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
-const PLAYBACK_RUNTIME_TIMEOUT_MS = 15000;
+const PLAYBACK_RUNTIME_TIMEOUT_MS = 90000;
 
 function canUseHostedSameOriginApi() {
   return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);

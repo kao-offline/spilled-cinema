@@ -223,7 +223,6 @@ export function PlayerModal({
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
   const [episodeTransitioning, setEpisodeTransitioning] = useState(false);
   const [focusedEpisodeIndex, setFocusedEpisodeIndex] = useState<number>(0);
-  const episodeScrollRef = useRef<HTMLDivElement>(null);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
@@ -815,31 +814,24 @@ export function PlayerModal({
       {episodeSelectorOpen ? (
         <div className="absolute inset-y-0 right-0 z-30 flex justify-end transition-all duration-500" style={{ paddingTop: "max(5rem, env(safe-area-inset-top))", transform: episodeTransitioning ? "translateX(100%)" : "translateX(0)" }}>
           <div className="pointer-events-auto h-full w-[min(90vw,28rem)] bg-gradient-to-l from-black/95 via-black/90 to-transparent">
-            <div
-              ref={episodeScrollRef}
-              className="h-full overflow-y-auto"
-              style={{ scrollSnapType: "y mandatory", scrollBehavior: "smooth", scrollbarWidth: "none" }}
-              onScroll={(e) => {
-                const container = e.currentTarget;
-                const scrollTop = container.scrollTop;
-                const cardHeight = 160;
-                const centeredIndex = Math.round(scrollTop / cardHeight);
-                setFocusedEpisodeIndex(Math.max(0, Math.min(centeredIndex, activeSelectorEpisodes.length - 1)));
-              }}
-            >
-              <div className="flex flex-col items-center gap-0 pt-[35vh] pb-[35vh]">
-                {activeSelectorEpisodes.map((entry, index) => {
-                  const isFocused = index === focusedEpisodeIndex;
+            <div className="flex h-full flex-col px-3">
+              {(() => {
+                const visibleEpisodes = [];
+                for (let offset = -2; offset <= 2; offset++) {
+                  const idx = focusedEpisodeIndex + offset;
+                  if (idx >= 0 && idx < activeSelectorEpisodes.length) {
+                    visibleEpisodes.push({ entry: activeSelectorEpisodes[idx], offset });
+                  }
+                }
+                return visibleEpisodes.map(({ entry, offset }) => {
+                  const isFocused = offset === 0;
                   const isCurrentPlaying = entry.id === effectiveEpisode.id;
                   const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
-                  const distance = Math.abs(index - focusedEpisodeIndex);
-                  const scale = isFocused ? 1 : Math.max(0.55, 1 - distance * 0.12);
-                  const opacity = isFocused ? 1 : Math.max(0.3, 1 - distance * 0.25);
                   return (
                     <div
                       key={entry.id}
-                      className="w-full px-4"
-                      style={{ scrollSnapAlign: "center", height: "160px" }}
+                      className="w-full shrink-0"
+                      style={{ height: "calc((100dvh - 5rem) / 5 - 0.2rem)" }}
                     >
                       <button
                         type="button"
@@ -852,14 +844,10 @@ export function PlayerModal({
                               setTimeout(() => setEpisodeTransitioning(false), 100);
                             }, 400);
                           } else {
-                            const container = episodeScrollRef.current;
-                            if (container) {
-                              container.scrollTo({ top: index * 160, behavior: "smooth" });
-                            }
+                            setFocusedEpisodeIndex(focusedEpisodeIndex + offset);
                           }
                         }}
                         className="w-full h-full"
-                        style={{ transform: `scale(${scale})`, transformOrigin: "center center", opacity }}
                       >
                         <div className={clsx("relative w-full h-full overflow-hidden rounded-2xl border-2 transition-all duration-300", isFocused ? (isCurrentPlaying ? "border-orange-500/80 shadow-2xl shadow-orange-500/20" : "border-white/30 shadow-xl shadow-white/10") : "border-white/5")}>
                           {episodeArtwork ? (
@@ -869,12 +857,14 @@ export function PlayerModal({
                           )}
                           <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent" />
                           <div className="absolute bottom-0 left-0 right-0 p-3">
-                            <div className="text-base font-bold text-white">{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
-                            <div className="mt-0.5 flex items-center gap-2 text-xs text-white/60">
-                              {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
-                            </div>
+                            <div className={clsx("font-bold text-white", isFocused ? "text-xl" : "text-base")}>{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
                             {isFocused ? (
-                              <p className="mt-1.5 line-clamp-2 text-xs leading-4 text-white/50">{entry.episodeTitle ?? `Episode ${entry.episodeNumber}`}</p>
+                              <>
+                                <div className="mt-1 flex items-center gap-2 text-sm text-white/60">
+                                  {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
+                                </div>
+                                <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-white/50">{entry.episodeTitle ?? `Episode ${entry.episodeNumber}`}</p>
+                              </>
                             ) : null}
                           </div>
                           {isCurrentPlaying && !isFocused ? (
@@ -886,8 +876,8 @@ export function PlayerModal({
                       </button>
                     </div>
                   );
-                })}
-              </div>
+                });
+              })()}
             </div>
           </div>
         </div>

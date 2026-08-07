@@ -15,34 +15,21 @@ const PUBLIC_DNS_CACHE = new Map<string, { addresses: string[]; expiresAt: numbe
 const EMBED_URL_CACHE_TTL_MS = 60 * 60 * 1000;
 const embedUrlCache = new Map<string, { expiresAt: number; url: string }>();
 
-async function resolvePlayerEmbedUrlWithTimeout(input: { embedUrl: string; provider?: string }, timeoutMs = 8000) {
+async function resolvePlayerEmbedUrlCached(input: { embedUrl: string; provider?: string }) {
   const cacheKey = `${input.provider ?? ""}|${input.embedUrl}`;
   const cached = embedUrlCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.url;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const url = await Promise.race([
-      resolvePlayerEmbedUrl(input),
-      new Promise<never>((_, reject) => {
-        controller.signal.addEventListener("abort", () => reject(new Error("Embed URL resolution timed out.")), { once: true });
-      }),
-    ]);
-    embedUrlCache.set(cacheKey, { url, expiresAt: Date.now() + EMBED_URL_CACHE_TTL_MS });
-    if (embedUrlCache.size > 256) {
-      const oldestKey = embedUrlCache.keys().next().value as string | undefined;
-      if (oldestKey) embedUrlCache.delete(oldestKey);
-    }
-    return url;
-  } finally {
-    clearTimeout(timeout);
+  const url = await resolvePlayerEmbedUrl(input);
+  embedUrlCache.set(cacheKey, { url, expiresAt: Date.now() + EMBED_URL_CACHE_TTL_MS });
+  if (embedUrlCache.size > 256) {
+    const oldestKey = embedUrlCache.keys().next().value as string | undefined;
+    if (oldestKey) embedUrlCache.delete(oldestKey);
   }
+  return url;
 }
-
-const RESOLVE_OVERALL_TIMEOUT_MS = 12_000;
 
 export type FullDownloadState = "queued" | "resolving" | "downloading" | "completed" | "failed";
 
@@ -423,8 +410,6 @@ async function fetchTextForResolution(url: string, refererUrl: string | undefine
     }
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     const response = await fetch(url, {
       headers: {
@@ -433,7 +418,6 @@ async function fetchTextForResolution(url: string, refererUrl: string | undefine
         referer: refererUrl ?? "https://www.bombuj.si/",
       },
       redirect: "follow",
-      signal: controller.signal,
     }).catch(() => null);
 
     if (response?.ok) {
@@ -442,8 +426,8 @@ async function fetchTextForResolution(url: string, refererUrl: string | undefine
         finalUrl: response.url || url,
       };
     }
-  } finally {
-    clearTimeout(timeout);
+  } catch {
+    // swallow
   }
 
   const proxyText = await readFetchProxyText(url, refererUrl);
@@ -554,7 +538,7 @@ async function resolveCandidateEmbedUrl(candidate: {
   }
 
   try {
-    return await resolvePlayerEmbedUrlWithTimeout({
+    return await resolvePlayerEmbedUrlCached({
       embedUrl,
       provider: candidate.provider,
     });
@@ -1284,7 +1268,7 @@ function firstHlsResourceUrl(playlist: string, playlistUrl: string) {
 async function validateHlsResources(
   response: Response,
   target: ResolvedStreamTarget,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<StreamValidationResult> {
   let playlistResponse = response;
   let playlistUrl = response.url || target.streamUrl;
@@ -1305,7 +1289,7 @@ async function validateHlsResources(
         referer: target.refererUrl,
       },
       redirect: "follow",
-      signal,
+      ...(signal ? { signal } : {}),
     });
     const resourceHost = new URL(resourceUrl).hostname;
     if (!resourceResponse.ok && resourceResponse.status !== 206) {
@@ -1341,11 +1325,6 @@ async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache 
     }
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    Number.parseInt(process.env.SPILLED_STREAM_VALIDATE_TIMEOUT_MS || "3000", 10),
-  );
   const host = new URL(target.streamUrl).hostname;
 
   const finish = (result: StreamValidationResult): StreamValidationResult => {
@@ -1373,7 +1352,6 @@ async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache 
         ...(streamType === "mp4" || streamType === "unknown" ? { range: "bytes=0-4095" } : {}),
       },
       redirect: "follow",
-      signal: controller.signal,
     });
     if (response.ok || response.status === 206) {
       const contentType = response.headers.get("content-type") ?? "";
@@ -1383,7 +1361,7 @@ async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache 
       }
       const detectedType = streamTypeFromContentType(contentType);
       if (streamType === "hls" || detectedType === "hls") {
-        const validated = await validateHlsResources(response, target, controller.signal);
+        const validated = await validateHlsResources(response, target);
         return finish(validated);
       }
       await response.body?.cancel().catch(() => undefined);
@@ -1398,8 +1376,6 @@ async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache 
       ok: false,
       reason: `Resolved stream host ${host} is not reachable by the playback proxy${code ? ` (${code})` : ""}.`,
     });
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -1713,17 +1689,10 @@ const vidkingMetadataCache = new Map<string, { expiresAt: number; metadata: Awai
 const vidkingResolvedStreamCache = new Map<string, { expiresAt: number; target: ResolvedStreamTarget }>();
 const vidkingSeedCache = new Map<string, { expiresAt: number; seed: string }>();
 
-async function fetchVidking(url: string, init: RequestInit = {}, timeoutMs = 6_000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+async function fetchVidking(url: string, init: RequestInit = {}) {
+  return fetch(url, {
+    ...init,
+  });
 }
 
 function isVidkingPlayer(provider: string | undefined, embedUrl: string) {
@@ -3474,10 +3443,6 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
     };
   };
 
-  const overallTimeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("Playback resolution timed out.")), RESOLVE_OVERALL_TIMEOUT_MS);
-  });
-
   const resolveAll = async (): Promise<PlaybackResolveResult> => {
     if (orderedPlayers.length <= 1) {
       return attemptPlayer(orderedPlayers[0]);
@@ -3502,15 +3467,7 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
     throw new Error("All player resolution attempts failed.");
   };
 
-  try {
-    return await Promise.race([resolveAll(), overallTimeout]);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("timed out")) {
-      failures.length = 0;
-      failures.push({ playerAlias: "all", provider: "all", reason: "Resolution timed out." });
-    }
-    throw error;
-  }
+  return resolveAll();
 }
 
 export async function createFullDownloadJob(input: CreateDownloadInput): Promise<FullDownloadJob> {

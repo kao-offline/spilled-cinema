@@ -21,6 +21,7 @@ type GatewayLinkOptions = {
   jwksUrl: string;
   runtime: SpilledCinemaNodeRuntime;
   execute: Parameters<SpilledCinemaNodeRuntime["handleEncryptedRemoteRequest"]>[0]["execute"];
+  onReconnectStalled?: () => void;
 };
 
 type JwksResponse = {
@@ -65,6 +66,18 @@ export class ManagedGatewayLink {
       connected: this.socket?.readyState === WebSocket.OPEN,
       reconnectAttempts: this.reconnectAttempts,
     };
+  }
+
+  setEnrollmentCredential(credential: string) {
+    if (!credential) return;
+    if (this.options.enrollmentCredential === credential) return;
+    this.options.enrollmentCredential = credential;
+    console.log("[managed-gateway] enrollment credential refreshed");
+    const socket = this.socket;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      // Rotate the live link so the new credential is used on the next reconnect.
+      socket.close(1000, "Enrollment credential rotated.");
+    }
   }
 
   private async connect() {
@@ -155,6 +168,9 @@ export class ManagedGatewayLink {
       void this.connect();
     }, delay);
     this.reconnectTimer.unref?.();
+    if (this.reconnectAttempts >= 4) {
+      this.options.onReconnectStalled?.();
+    }
   }
 
   private async loadSigningKey(keyId: string) {
