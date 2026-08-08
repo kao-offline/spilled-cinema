@@ -178,7 +178,7 @@ async function fetchBombujSuggestionResults(
   const mediaType = host.startsWith("serialy.") ? ("serial" as const) : ("movie" as const);
   const matches = [
     ...responseHtml.matchAll(
-      /<a href="([^"]+(?:online-(?:film|serial)-|serial-)[^"]+)"[^>]*>(?:\s*<img[^>]+src="([^"]*)"[^>]*>)?\s*<span class="nazov">([\s\S]*?)<\/span>(?:\s*<span class="zanre">([\s\S]*?)<\/span>)?/gi,
+      /<a href="([^"]+(?:online-(?:film|serial)-|serial-)[^"]+)"[^>]*>(?:\s*<img[^>]+src="([^"]*)"[^>]*>\s*<\/a>\s*<\/div>\s*<a href="[^"]+"[^>]*>\s*<span class="cele_info">\s*)?<span class="nazov">([\s\S]*?)<\/span>(?:\s*<span class="zanre">([\s\S]*?)<\/span>)?/gi,
     ),
   ];
 
@@ -190,16 +190,18 @@ async function fetchBombujSuggestionResults(
     const normalizedHref = href.startsWith("//") ? `https:${href}` : href;
     const slug = normalizedHref.split("/").pop() ?? "";
     const cleanSlug = slug.replace(/^(?:online-(?:film|serial)-|serial-)/i, "").replace(/#.*$/, "");
-    const yearMatch = rawTitle.match(/\((19|20)\d{2}\)\s*$/) ?? zanreText.match(/^((?:19|20)\d{2})/);
+    const yearMatch = rawTitle.match(/\(((?:19|20)\d{2})\)\s*$/) ?? zanreText.match(/^((?:19|20)\d{2})/);
     const title = rawTitle.replace(/\s*\((19|20)\d{2}\)\s*$/, "").trim();
+    const titleParts = mediaType === "serial" ? title.split(/\s*-\s*/).filter(Boolean) : [];
 
     return {
-      title: title || cleanSlug.replace(/-/g, " "),
+      title: titleParts[0] || title || cleanSlug.replace(/-/g, " "),
       slug: cleanSlug,
       platform: "bombuj" as const,
       posterUrl: posterSrc ? (posterSrc.startsWith("//") ? `https:${posterSrc}` : posterSrc) : null,
       mediaType,
       year: yearMatch ? yearMatch[1].replace(/[()]/g, "") : null,
+      alternateTitles: titleParts.slice(1).filter((part) => part !== titleParts[0]),
     };
   });
 }
@@ -837,6 +839,7 @@ export type BombujSearchResult = {
   posterUrl?: string | null;
   mediaType?: "movie" | "serial";
   year?: string | null;
+  alternateTitles?: string[];
   matchScore?: number;
 };
 

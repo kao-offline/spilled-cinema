@@ -148,11 +148,24 @@ async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<Runt
   };
 }
 
+// The extension bridge posts a message and waits for a response that never
+// arrives when no extension is installed. On the hosted dashboard that wait
+// (2.5s) was paid on every runtime request even though the bridge could never
+// succeed. Track whether the bridge has ever answered and skip it for the rest
+// of the page session once it times out, so the transport cascade falls through
+// to the gateway immediately instead of stalling on a dead extension.
+let extensionBridgeAvailable: boolean | null = null;
+
 async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (extensionBridgeAvailable === false) {
+    return null;
+  }
+
   const id = `runtime_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 
   const payload = await new Promise<{ ok: boolean; status: number; origin?: string; data?: T }>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
+      extensionBridgeAvailable = false;
       window.removeEventListener("message", onMessage);
       reject(new Error("Extension bridge timed out."));
     }, 2500);
@@ -164,6 +177,8 @@ async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<R
 
       window.clearTimeout(timeout);
       window.removeEventListener("message", onMessage);
+      // Any answer proves the bridge is present, even an error payload.
+      extensionBridgeAvailable = true;
       if (!event.data.ok) {
         reject(new Error(event.data.error || "Extension bridge failed."));
         return;
@@ -204,8 +219,13 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
   }
 
   markLocalhostProbeAttempted();
-  for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
-    try {
+  // Probe both loopback hostnames in parallel instead of sequentially. When no
+  // local node is running, a refused connection fails fast but a firewall that
+  // silently drops the probe costs the full timeout; racing the two hosts keeps
+  // the worst-case probe to a single DIRECT_LOCAL_TIMEOUT_MS instead of two.
+  const origins = ["http://127.0.0.1:8787", "http://localhost:8787"];
+  const settled = await Promise.allSettled(
+    origins.map(async (origin) => {
       const response = await fetchWithTimeout(`${origin}${path}`, {
         method: init.method ?? "GET",
         headers: {
@@ -214,16 +234,19 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
       }, DIRECT_LOCAL_TIMEOUT_MS);
+      return { origin, response };
+    }),
+  );
 
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
       return {
-        ok: response.ok,
-        status: response.status,
-        data: (await readJsonSafe<T>(response)) as T,
-        origin,
+        ok: result.value.response.ok,
+        status: result.value.response.status,
+        data: (await readJsonSafe<T>(result.value.response)) as T,
+        origin: result.value.origin,
         transport: "direct",
       };
-    } catch {
-      // Try the next origin.
     }
   }
 

@@ -143,6 +143,8 @@ let nativePipeServer: NetServer | null = null;
 
 const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/status", handler: handlers.statusHandler },
+  { path: "/api/tmdb-to-imdb", handler: handlers.tmdbToImdbHandler },
+  { path: "/api/tmdb-search", handler: handlers.tmdbSearchHandler },
   { path: "/api/server", handler: handlers.controlPlaneProxyHandler },
   { path: "/api/import-svetserialu", handler: handlers.importSvetSerialuHandler },
   { path: "/api/svetserialu/auth/verify", handler: handlers.svetSerialuAuthVerifyHandler },

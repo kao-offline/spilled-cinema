@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
-import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight } from "lucide-react";
+import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
 import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
+import type { SkipSegment } from "../lib/intro-skip";
+import { findActiveSkipSegment, prewarmSkipTarget } from "../lib/intro-skip";
 
 type SubtitleTrack = {
   src: string;
@@ -106,6 +108,8 @@ type UniversalVideoPlayerProps = {
   subtitleTracks?: SubtitleTrack[];
   autoPlayToken?: number | null;
   initialTime?: number | null;
+  skipSegments?: SkipSegment[];
+  onSkipIntro?: (segment: SkipSegment) => void;
   onProgress?: (progress: { currentTime: number; duration: number }) => void;
   onError?: (message: string) => void;
 };
@@ -177,6 +181,8 @@ export function UniversalVideoPlayer({
   subtitleTracks = [],
   autoPlayToken = null,
   initialTime = null,
+  skipSegments = [],
+  onSkipIntro,
   onProgress,
   onError,
 }: UniversalVideoPlayerProps) {
@@ -217,6 +223,7 @@ export function UniversalVideoPlayer({
   const [mirrored, setMirrored] = useState(false);
   const [sleepTimer, setSleepTimer] = useState<number | null>(null);
   const [settingsSection, setSettingsSection] = useState<"main" | "subtitles">("main");
+  const activeSkipSegment = useMemo(() => findActiveSkipSegment(skipSegments, currentTime), [skipSegments, currentTime]);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceType = useMemo(() => getSourceType(src), [src]);
   const subtitleTrackSignature = useMemo(
@@ -833,6 +840,15 @@ export function UniversalVideoPlayer({
     togglePlay();
   }
 
+  function handleSkipIntro() {
+    const segment = activeSkipSegment;
+    if (!segment) return;
+    const target = segment.end ?? (videoRef.current?.duration || duration);
+    seekTo(target);
+    onSkipIntro?.(segment);
+    prewarmSkipTarget(src, target);
+  }
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -955,6 +971,23 @@ export function UniversalVideoPlayer({
           <span className="ml-auto tabular-nums text-white/78">{formatClock(currentTime)} / {formatClock(duration)}</span>
         </div>
 
+        {activeSkipSegment && (
+          <div className="absolute bottom-full right-0 mb-2 sm:mb-4">
+            <button
+              type="button"
+              data-player-control
+              onClick={(event) => {
+                event.stopPropagation();
+                handleSkipIntro();
+              }}
+              className="flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 active:scale-95"
+            >
+              <SkipForward className="h-4 w-4 fill-white" strokeWidth={0} />
+              Skip {activeSkipSegment.type === "intro" ? "Intro" : activeSkipSegment.type === "outro" ? "Outro" : activeSkipSegment.type}
+            </button>
+          </div>
+        )}
+
         <div
           ref={seekBarRef}
           role="slider"
@@ -972,6 +1005,20 @@ export function UniversalVideoPlayer({
           className="group/seek relative h-5 cursor-pointer touch-none"
         >
           <div className="absolute left-0 right-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-white/28" />
+          {playableDuration > 0 ? skipSegments.map((segment, index) => (
+            <div
+              key={`skip-${segment.type}-${index}`}
+              className={clsx(
+                "skip-segment-marker absolute top-1/2 h-[5px] -translate-y-1/2 rounded-full",
+                segment.type === "intro" ? "bg-orange-500/70" : segment.type === "outro" ? "bg-blue-500/70" : "bg-purple-500/70",
+              )}
+              style={{
+                left: `${(segment.start / playableDuration) * 100}%`,
+                width: `${Math.max(0.3, (((segment.end ?? playableDuration) - segment.start) / playableDuration) * 100)}%`,
+              }}
+              title={`${segment.type === "intro" ? "Intro" : segment.type === "outro" ? "Outro" : segment.type} ${formatClock(segment.start)} - ${formatClock(segment.end ?? playableDuration)}`}
+            />
+          )) : null}
           {playableDuration > 0 ? bufferedRanges.map((range, index) => (
             <div
               key={`${range.start}:${range.end}:${index}`}

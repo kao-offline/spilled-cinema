@@ -63,6 +63,28 @@ const X25519_SPKI_PREFIX = Uint8Array.from([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 
 const GATEWAY_URL = (import.meta.env.VITE_SPILLED_GATEWAY_URL as string | undefined)
   ?? "https://spilled-node-gateway.hrdykrystof.workers.dev";
 
+// Capability tickets are signed and scoped to a node/capability/action but are
+// not single-use. Reusing the last known node + still-valid ticket for the same
+// capability avoids the discovery + ticket HTTP round trips (through Vercel and
+// Convex) on every gateway call, which matters most for search where each
+// keystroke hits the gateway. A failed cached attempt falls through to fresh
+// discovery, so a node going offline never wedges a session.
+type GatewayCachedSession = {
+  candidate: V2Candidate;
+  ticket: CapabilityTicketV2;
+};
+
+const gatewaySessionCache = new Map<string, GatewayCachedSession>();
+const GATEWAY_TICKET_REUSE_MARGIN_MS = 10_000;
+
+function gatewaySessionCacheKey(capability: Capability, action: string) {
+  return `${capability}:${action}`;
+}
+
+function isGatewayTicketUsable(ticket: CapabilityTicketV2) {
+  return ticket.expiresAt - Date.now() > GATEWAY_TICKET_REUSE_MARGIN_MS;
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
@@ -305,11 +327,27 @@ export async function requestPublicGateway(
   method: string,
   params: Record<string, unknown>,
 ) {
+  const cacheKey = gatewaySessionCacheKey(capability, action);
+  const cached = gatewaySessionCache.get(cacheKey);
+  if (cached && isGatewayTicketUsable(cached.ticket)) {
+    try {
+      return {
+        nodeId: cached.candidate.nodeId,
+        endpointUrl: cached.candidate.endpointUrl ?? null,
+        data: await sendGatewayRpc(cached.candidate, cached.ticket, method, params),
+      };
+    } catch (error) {
+      console.warn(`[gateway] cached ${cached.candidate.nodeId} ${method} failed, re-discovering:`, error);
+      gatewaySessionCache.delete(cacheKey);
+    }
+  }
+
   const candidates = await discoverCandidates(capability);
   let lastError: unknown = null;
   for (const candidate of candidates) {
     try {
       const ticket = await issueTicket(candidate, capability, action);
+      gatewaySessionCache.set(cacheKey, { candidate, ticket });
       return {
         nodeId: candidate.nodeId,
         endpointUrl: candidate.endpointUrl ?? null,

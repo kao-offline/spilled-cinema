@@ -801,3 +801,12 @@ body {
     1px 1px 0 #000,
     0 2px 4px rgba(0, 0, 0, 0.8);
 }
+
+.spilled-universal-player .skip-segment-marker {
+  transition: height 150ms ease, opacity 150ms ease;
+}
+
+.spilled-universal-player .skip-segment-marker:hover {
+  height: 7px;
+  opacity: 1;
+}

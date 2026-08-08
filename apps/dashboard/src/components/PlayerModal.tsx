@@ -13,6 +13,7 @@ import { prewarmPlaybackUrl } from "../lib/playback-prewarm";
 import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
 import { resolveTitleItem, searchTitleItems } from "../lib/provider-modules-client";
 import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
+import { fetchSkipSegmentsForIds, collectSkipTitleIds, resolveSkipTitleIdsByTitle, type SkipSegment, type SkipTitleIds } from "../lib/intro-skip";
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -227,6 +228,7 @@ export function PlayerModal({
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
   const lastProgressSaveRef = useRef(0);
+  const [skipSegments, setSkipSegments] = useState<SkipSegment[]>([]);
 
   const effectiveEpisode = useMemo(() => {
     if (!episode) return null;
@@ -338,7 +340,37 @@ export function PlayerModal({
     playbackErrorRetryRef.current = null;
     backgroundResolveKeysRef.current = new Set();
     lastProgressSaveRef.current = 0;
+    setSkipSegments([]);
   }, [episode?.id]);
+
+  useEffect(() => {
+    if (!effectiveEpisode || !show) {
+      setSkipSegments([]);
+      return;
+    }
+    const ids = collectSkipTitleIds(show, effectiveEpisode);
+    if (!ids.imdb && !ids.tmdb && !ids.tvdb) {
+      console.info("[skip-segments] No embedded ids, falling back to title search", show.title);
+      let canceled = false;
+      void resolveSkipTitleIdsByTitle(show.title, show.mediaType, show.metadata?.year ?? show.years).then((titleIds) => {
+        if (canceled) return;
+        const merged: SkipTitleIds = { ...ids, ...titleIds };
+        console.info("[skip-segments] title-resolved ids:", merged);
+        void fetchSkipSegmentsForIds(merged, effectiveEpisode.seasonNumber, effectiveEpisode.episodeNumber ?? 1).then((segments) => {
+          console.info("[skip-segments] result:", segments);
+          if (!canceled) setSkipSegments(segments);
+        });
+      });
+      return () => { canceled = true; };
+    }
+    console.info("[skip-segments] ids:", ids, "season:", effectiveEpisode.seasonNumber, "episode:", effectiveEpisode.episodeNumber ?? 1);
+    let canceled = false;
+    void fetchSkipSegmentsForIds(ids, effectiveEpisode.seasonNumber, effectiveEpisode.episodeNumber ?? 1).then((segments) => {
+      console.info("[skip-segments] result:", segments);
+      if (!canceled) setSkipSegments(segments);
+    });
+    return () => { canceled = true; };
+  }, [effectiveEpisode?.id, effectiveEpisode?.seasonNumber, effectiveEpisode?.episodeNumber, show?.externalIds?.imdb, show?.externalIds?.tmdb]);
 
   useEffect(() => {
     if (!ENABLE_PLAYER_BACKGROUND_DISCOVERY) return;
@@ -734,6 +766,7 @@ export function PlayerModal({
             subtitleTracks={localSubtitleTracks}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
+            skipSegments={skipSegments}
             onProgress={handlePlayerProgress}
           />
         ) : remotePlaybackSrc ? (
@@ -752,6 +785,7 @@ export function PlayerModal({
             subtitleTracks={remoteSubtitleTracks}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
+            skipSegments={skipSegments}
             onProgress={handlePlayerProgress}
             onError={handlePlaybackError}
           />

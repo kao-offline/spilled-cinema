@@ -837,7 +837,6 @@ function AppContent() {
   };
 
   const handleCheckNewEpisodes = async (forSlug?: string) => {
-    if (!localRuntimeStatus.available) return;
     setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
       const result = await performLibraryWatcherScan(providerModules);
@@ -871,7 +870,6 @@ function AppContent() {
   };
 
   const handleCheckShowNewEpisodes = async (show: ImportedShow) => {
-    if (!localRuntimeStatus.available) return;
     setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
       let slug = show.providerMatches?.find((match) => match.integrationId === "svetserialu")?.providerItemId;
@@ -918,7 +916,7 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (providerModules.length === 0 || !localRuntimeStatus.available) return;
+    if (providerModules.length === 0) return;
     let canceled = false;
     let timer: number | null = null;
 
@@ -960,7 +958,7 @@ function AppContent() {
       window.removeEventListener("online", runNow);
       document.removeEventListener("visibilitychange", runNow);
     };
-  }, [localRuntimeStatus.available, localRuntimeStatus.origin, providerModules]);
+  }, [providerModules]);
 
   async function refreshVaultState() {
     const status = await getVaultStatus();
@@ -3838,15 +3836,15 @@ function AppContent() {
                       <button
                         type="button"
                         onClick={() => void handleCheckNewEpisodes()}
-                        disabled={newEpisodeCheckState.checking || !localRuntimeStatus.available}
+                        disabled={newEpisodeCheckState.checking}
                         className={clsx(
                           "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-bold uppercase tracking-wide transition",
-                          newEpisodeCheckState.checking || !localRuntimeStatus.available
+                          newEpisodeCheckState.checking
                             ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
                             : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
                         )}
                         aria-label="Check for new episodes"
-                        title={localRuntimeStatus.available ? "Scan svetserialu for episodes you don't have yet" : "Start your server to check for new episodes"}
+                        title="Scan svetserialu for episodes you don't have yet"
                       >
                         <RefreshCw className={clsx("h-3.5 w-3.5", newEpisodeCheckState.checking && "animate-spin")} />
                         {newEpisodeCheckState.checking ? "Checking…" : "Check for new episodes"}

@@ -572,6 +572,65 @@ export function createHttpHandlers() {
     sendJson(res, 200, await getNodeStatus());
   };
 
+  const tmdbToImdbHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    const incoming = new URL(req.url || "/api/tmdb-to-imdb", "http://127.0.0.1");
+    const tmdbId = incoming.searchParams.get("tmdbId");
+    if (!tmdbId) return sendJson(res, 400, { error: "Missing tmdbId parameter." });
+    const tmdbKey = process.env.TMDB_API_KEY || (await readLocalEnvValue("TMDB_API_KEY"));
+    if (!tmdbKey) return sendJson(res, 500, { error: "TMDB API key not configured." });
+    try {
+      const mediaType = incoming.searchParams.get("mediaType") || "tv";
+      const url = `https://api.themoviedb.org/3/${mediaType}/${encodeURIComponent(tmdbId)}?api_key=${tmdbKey}&append_to_response=external_ids`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return sendJson(res, 502, { error: "TMDB lookup failed." });
+      const data = await response.json() as { external_ids?: { imdb_id?: string } };
+      const imdbId = data?.external_ids?.imdb_id;
+      if (imdbId && /^tt\d{5,10}$/i.test(imdbId)) {
+        res.setHeader("Cache-Control", "s-maxage=604800, stale-while-revalidate=86400");
+        sendJson(res, 200, { imdbId });
+      } else {
+        sendJson(res, 200, { imdbId: null });
+      }
+    } catch {
+      sendJson(res, 502, { error: "TMDB lookup failed." });
+    }
+  };
+
+  const tmdbSearchHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    const incoming = new URL(req.url || "/api/tmdb-search", "http://127.0.0.1");
+    const title = incoming.searchParams.get("title");
+    if (!title) return sendJson(res, 400, { error: "Missing title parameter." });
+    const tmdbKey = process.env.TMDB_API_KEY || (await readLocalEnvValue("TMDB_API_KEY"));
+    if (!tmdbKey) return sendJson(res, 500, { error: "TMDB API key not configured." });
+    try {
+      const mediaType = incoming.searchParams.get("mediaType") || "tv";
+      const year = incoming.searchParams.get("year");
+      const searchUrl = `https://api.themoviedb.org/3/search/${mediaType}?api_key=${tmdbKey}&query=${encodeURIComponent(title)}${year ? `&year=${encodeURIComponent(year)}` : ""}`;
+      const response = await fetch(searchUrl, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return sendJson(res, 502, { error: "TMDB search failed." });
+      const data = await response.json() as { results?: Array<{ id?: number }> };
+      const results = Array.isArray(data?.results) ? data.results : [];
+      if (results.length === 0) return sendJson(res, 200, { tmdbId: null });
+      const tmdbId = String(results[0]?.id ?? "");
+      let imdbId: string | null = null;
+      if (tmdbId) {
+        const detailsUrl = `https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=${tmdbKey}&append_to_response=external_ids`;
+        const detailsResponse = await fetch(detailsUrl, { signal: AbortSignal.timeout(8000) });
+        if (detailsResponse.ok) {
+          const details = await detailsResponse.json() as { external_ids?: { imdb_id?: string } };
+          const rawImdb = details?.external_ids?.imdb_id;
+          if (rawImdb && /^tt\d{5,10}$/i.test(rawImdb)) imdbId = rawImdb;
+        }
+      }
+      res.setHeader("Cache-Control", "s-maxage=604800, stale-while-revalidate=86400");
+      sendJson(res, 200, { tmdbId: tmdbId || null, imdbId });
+    } catch {
+      sendJson(res, 502, { error: "TMDB search failed." });
+    }
+  };
+
   const controlPlaneProxyHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "GET" && req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     const siteUrl = await readLocalEnvValue("CONVEX_SITE_URL");
@@ -2156,6 +2215,8 @@ export function createHttpHandlers() {
   return {
     runtime,
     statusHandler,
+    tmdbToImdbHandler,
+    tmdbSearchHandler,
     controlPlaneProxyHandler,
     importSvetSerialuHandler,
     svetSerialuAuthVerifyHandler,

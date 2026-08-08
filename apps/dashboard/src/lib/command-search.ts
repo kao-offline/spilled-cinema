@@ -256,11 +256,34 @@ export function buildRemoteCommandResults(input: {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const group = groups.find((entry) => entry.items.some((item) => sameRemoteIdentity(item, result)));
-    if (group) {
-      group.items.push(result);
-    } else {
+    // Merge transitively: a result may match items spread across several
+    // groups (e.g. Bombuj serial "Game of Thrones" + VidKing "Hra o trůny"
+    // only share a title through SvetSerialu's alternate name). Collapse all
+    // matching groups into one before adding the result.
+    const matchingIndexes = groups
+      .map((entry, index) => (entry.items.some((item) => sameRemoteIdentity(item, result)) ? index : -1))
+      .filter((index) => index >= 0);
+
+    if (matchingIndexes.length === 0) {
       groups.push({ primary: result, items: [result] });
+      continue;
+    }
+
+    const targetIndex = matchingIndexes[0];
+    const target = groups[targetIndex];
+    target.items.push(result);
+    for (const index of matchingIndexes.slice(1).reverse()) {
+      const extra = groups[index];
+      for (const item of extra.items) {
+        if (!target.items.includes(item)) {
+          target.items.push(item);
+        }
+      }
+      groups.splice(index, 1);
+    }
+    if (targetIndex !== 0) {
+      const moved = groups.splice(targetIndex, 1)[0];
+      groups.unshift(moved);
     }
   }
 

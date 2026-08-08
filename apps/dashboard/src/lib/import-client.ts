@@ -40,8 +40,8 @@ export type VidkingAvailabilityResult = {
 const VIDKING_AVAILABILITY_CACHE_PREFIX = "spilled.vidking-availability.v1";
 let searchRuntimeBackoffUntil = 0;
 let warnedSearchRuntimeUnavailable = false;
-const SEARCH_CACHE_TTL_MS = 45_000;
-const SEARCH_CACHE_MAX = 100;
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const SEARCH_CACHE_MAX = 200;
 const searchCache = new Map<string, { expiresAt: number; results: Awaited<ReturnType<typeof requestRemoteSearch>> }>();
 const searchInflight = new Map<string, Promise<Awaited<ReturnType<typeof requestRemoteSearch>>>>();
 

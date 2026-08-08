@@ -99,7 +99,7 @@ export async function searchNode(query: string, options: { svetserialuCredential
 
   const search = runParallelProviderSearch(normalizedQuery, options)
     .then((results) => {
-      // Do not turn a temporary provider timeout into 45 seconds of guaranteed
+      // Do not turn a temporary provider timeout into 10 minutes of guaranteed
       // "0 found" responses. Successful searches are safe to cache; empty
       // searches must be allowed to retry immediately.
       if (results.length > 0) {
@@ -116,8 +116,8 @@ export async function searchNode(query: string, options: { svetserialuCredential
   return search;
 }
 
-const REMOTE_SEARCH_CACHE_TTL_MS = 45_000;
-const REMOTE_SEARCH_CACHE_MAX = 200;
+const REMOTE_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const REMOTE_SEARCH_CACHE_MAX = 500;
 const remoteSearchCache = new Map<string, { expiresAt: number; results: RemoteSearchItem[] }>();
 const remoteSearchInflight = new Map<string, Promise<RemoteSearchItem[]>>();
 
@@ -182,7 +182,23 @@ async function runParallelProviderSearch(
       if (!unique.has(key)) unique.set(key, item);
     }
   }
-  return sortUnifiedSearchResults(query, [...unique.values()]).slice(0, 30);
+
+  // Rank the per-provider survivors, then re-attach cross-provider matches for
+  // the top titles so the dashboard can group every available source behind one
+  // result card. Without this, a title that is present on several providers can
+  // drop below the unified cut and show only a single source.
+  const ranked = sortUnifiedSearchResults(query, [...unique.values()]);
+  const top = ranked.slice(0, 30);
+  const kept = new Set(top);
+  for (const item of merged) {
+    if (top.length >= 48) break;
+    if (kept.has(item)) continue;
+    if (top.some((entry) => sameRemoteSearchIdentity(entry, item))) {
+      top.push(item);
+      kept.add(item);
+    }
+  }
+  return sortUnifiedSearchResults(query, top).slice(0, 48);
 }
 
 type RemoteSearchItem = {
@@ -213,6 +229,34 @@ function normalizeBridgeText(value: string | null | undefined) {
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+function remoteSearchTitleKeys(item: RemoteSearchItem) {
+  return [item.title, ...(item.alternateTitles ?? [])]
+    .map(normalizeBridgeText)
+    .filter(Boolean);
+}
+
+function parseRemoteSearchYear(value: string | null | undefined) {
+  const match = value?.match(/\b(19|20)\d{2}\b/);
+  return match ? Number.parseInt(match[0], 10) : null;
+}
+
+function sameRemoteSearchIdentity(left: RemoteSearchItem, right: RemoteSearchItem) {
+  const leftMedia = left.mediaType ?? "movie";
+  const rightMedia = right.mediaType ?? "movie";
+  if (leftMedia !== rightMedia) {
+    return false;
+  }
+
+  const leftYear = parseRemoteSearchYear(left.year);
+  const rightYear = parseRemoteSearchYear(right.year);
+  if (leftYear !== null && rightYear !== null && Math.abs(leftYear - rightYear) > 1) {
+    return false;
+  }
+
+  const rightKeys = new Set(remoteSearchTitleKeys(right));
+  return remoteSearchTitleKeys(left).some((key) => rightKeys.has(key));
 }
 
 export function hasProviderSearchTokenCoverage(
