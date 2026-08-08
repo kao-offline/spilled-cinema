@@ -18,6 +18,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { enrichArtwork, searchArtworkAssets } from "../../../apps/dashboard/src/server/artwork";
 import {
+  hasRequiredSearchTokenCoverage,
   keepHighConfidenceSearchResults,
   scoreSearchCandidate,
   sortUnifiedSearchResults,
@@ -263,21 +264,11 @@ export function hasProviderSearchTokenCoverage(
   query: string,
   item: Pick<RemoteSearchItem, "title" | "slug" | "alternateTitles">,
 ) {
-  const queryTokens = normalizeBridgeText(query).split(" ").filter(Boolean);
-  if (queryTokens.length === 0) return false;
-  const fieldTokens = [
+  return hasRequiredSearchTokenCoverage(query, [
     item.title,
     item.slug,
     ...(item.alternateTitles ?? []),
-  ].flatMap((field) => normalizeBridgeText(field).split(" ").filter(Boolean));
-
-  return queryTokens.every((queryToken) =>
-    fieldTokens.some((fieldToken) =>
-      fieldToken === queryToken ||
-      fieldToken.startsWith(queryToken) ||
-      (queryToken.length >= 4 && fieldToken.length >= 4 && queryToken.startsWith(fieldToken)),
-    ),
-  );
+  ]);
 }
 
 export async function verifySvetSerialuCredentials(credentials?: SvetSerialuCredentials | null) {

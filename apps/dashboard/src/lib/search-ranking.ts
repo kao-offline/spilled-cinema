@@ -22,16 +22,36 @@ const WEAK_SEARCH_TOKENS = new Set([
   "a",
   "an",
   "and",
+  "czech",
   "cz",
+  "download",
+  "dubbed",
+  "english",
+  "episode",
+  "episodes",
   "film",
   "for",
+  "free",
+  "full",
+  "hd",
   "in",
+  "movie",
+  "movies",
   "of",
   "online",
   "or",
+  "season",
+  "seasons",
   "serial",
+  "series",
+  "show",
+  "shows",
+  "stream",
   "the",
   "to",
+  "tv",
+  "watch",
+  "watching",
 ]);
 
 function significantTokens(value: string) {
@@ -48,6 +68,23 @@ function significantTokens(value: string) {
 
 function requiredCoverageTokens(value: string) {
   return tokenize(value).filter((token) => !WEAK_SEARCH_TOKENS.has(token) && token.length >= 2);
+}
+
+// Tolerant token matcher used by the coverage gates. Unlike `tokenFuzzyScore`
+// (which ranks), this is a boolean "close enough" test so small wording
+// changes - a typo, a missing letter, a glued or split word - still hit.
+function queryTokenCovered(queryToken: string, candidateToken: string) {
+  if (!queryToken || !candidateToken) return false;
+  if (queryToken === candidateToken) return true;
+  if (candidateToken.startsWith(queryToken)) return true;
+  if (queryToken.startsWith(candidateToken) && candidateToken.length >= 4) return true;
+  // Glued-word containment ("ultron" inside "ageofultron"), but only for longer
+  // query tokens so a 4-letter query like "silo" is not swallowed by "zbesilost".
+  if (queryToken.length >= 5 && candidateToken.includes(queryToken)) return true;
+
+  const distance = levenshteinDistance(queryToken, candidateToken);
+  const limit = queryToken.length >= 6 || candidateToken.length >= 6 ? 2 : 1;
+  return distance <= limit;
 }
 
 export function hasSignificantSearchTokenMatch(query: string, rawFields: Array<string | null | undefined>) {
@@ -68,7 +105,7 @@ export function hasSignificantSearchTokenMatch(query: string, rawFields: Array<s
 
   const fieldTokens = fields.flatMap(significantTokens);
   return queryTokens.some((queryToken) =>
-    fieldTokens.some((fieldToken) => tokenFuzzyScore(queryToken, fieldToken) >= 46),
+    fieldTokens.some((fieldToken) => queryTokenCovered(queryToken, fieldToken)),
   );
 }
 
@@ -83,15 +120,31 @@ export function hasRequiredSearchTokenCoverage(query: string, rawFields: Array<s
     return true;
   }
 
+  // Compact equality catches split words ("spider man" vs "spiderman").
+  const compactQuery = compactSearchText(query);
+  if (compactQuery.length >= 4 && fields.some((field) => compactSearchText(field) === compactQuery)) {
+    return true;
+  }
+
   const queryTokens = requiredCoverageTokens(query);
   if (queryTokens.length === 0) {
     return false;
   }
 
   const fieldTokens = fields.flatMap(requiredCoverageTokens);
-  return queryTokens.every((queryToken) =>
-    fieldTokens.some((fieldToken) => tokenFuzzyScore(queryToken, fieldToken) >= 46),
-  );
+  let covered = 0;
+  for (const queryToken of queryTokens) {
+    if (fieldTokens.some((fieldToken) => queryTokenCovered(queryToken, fieldToken))) {
+      covered += 1;
+    }
+  }
+
+  if (covered === queryTokens.length) {
+    return true;
+  }
+  // Tolerate one misspelled or extra word in longer queries so "game of thronz"
+  // or "avengers endgame trailer" still find the real title.
+  return queryTokens.length >= 3 && covered >= queryTokens.length - 1;
 }
 
 function levenshteinDistance(a: string, b: string) {
@@ -140,11 +193,11 @@ function tokenFuzzyScore(queryToken: string, candidateToken: string) {
   if (minTokenLength >= 3 && candidateToken.includes(queryToken)) return 54;
 
   const distance = levenshteinDistance(queryToken, candidateToken);
-  const limit = queryToken.length >= 8 || candidateToken.length >= 8 ? 2 : 1;
+  const limit = queryToken.length >= 6 || candidateToken.length >= 6 ? 2 : 1;
   if (distance > limit) return 0;
 
   if (distance === 1) return 46;
-  if (distance === 2) return 28;
+  if (distance === 2) return 46;
   return 0;
 }
 
@@ -157,6 +210,10 @@ export function scoreSearchCandidate(query: string, rawFields: Array<string | nu
   const compactQuery = compactSearchText(query);
   const compactQueryIsShortNumeric = /^\d+$/.test(compactQuery) && compactQuery.length < 4;
   const queryTokens = tokenize(query);
+  // Weak filler words ("the", "movie", "show") should not dilute how many
+  // meaningful tokens matched, so rank only on the significant subset.
+  const scoringTokens = queryTokens.filter((token) => !WEAK_SEARCH_TOKENS.has(token));
+  const effectiveQueryTokens = scoringTokens.length > 0 ? scoringTokens : queryTokens;
   const fields = rawFields
     .map((value) => String(value || "").trim())
     .filter(Boolean);
@@ -185,7 +242,7 @@ export function scoreSearchCandidate(query: string, rawFields: Array<string | nu
     if (!compactQueryIsShortNumeric && compactField.includes(compactQuery) && compactQuery.length >= 4) score += 420;
 
     let matchedTokens = 0;
-    for (const queryToken of queryTokens) {
+    for (const queryToken of effectiveQueryTokens) {
       let bestTokenScore = 0;
       for (const fieldToken of fieldTokens) {
         bestTokenScore = Math.max(bestTokenScore, tokenFuzzyScore(queryToken, fieldToken));
@@ -196,15 +253,15 @@ export function scoreSearchCandidate(query: string, rawFields: Array<string | nu
       score += bestTokenScore;
     }
 
-    if (queryTokens.length > 0) {
-      score += Math.round((matchedTokens / queryTokens.length) * 180);
-      if (matchedTokens === queryTokens.length) {
+    if (effectiveQueryTokens.length > 0) {
+      score += Math.round((matchedTokens / effectiveQueryTokens.length) * 180);
+      if (matchedTokens === effectiveQueryTokens.length) {
         score += 120;
       }
     }
 
-    if (fieldTokens.length > 0 && queryTokens.length > 0) {
-      const firstQueryToken = queryTokens[0];
+    if (fieldTokens.length > 0 && effectiveQueryTokens.length > 0) {
+      const firstQueryToken = effectiveQueryTokens[0];
       const firstFieldToken = fieldTokens[0];
       if (firstFieldToken === firstQueryToken) score += 70;
       else if (tokenFuzzyScore(firstQueryToken, firstFieldToken) >= 46) score += 35;
