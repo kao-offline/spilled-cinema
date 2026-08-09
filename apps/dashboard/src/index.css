@@ -644,54 +644,54 @@ body {
   contain-intrinsic-size: auto 420px;
 }
 
-@media (min-width: 1600px) and (min-height: 800px) {
-  html {
+@media (min-width: 1024px) {
+  html.tv-mode {
     font-size: 20px;
   }
 
-  .text-\[9px\],
-  .text-\[10px\],
-  .text-\[11px\] {
+  .tv-mode .text-\[9px\],
+  .tv-mode .text-\[10px\],
+  .tv-mode .text-\[11px\] {
     font-size: 0.8rem !important;
     line-height: 1.1rem !important;
   }
 
-  .text-xs {
+  .tv-mode .text-xs {
     font-size: 0.9rem;
     line-height: 1.25rem;
   }
 
-  [data-tutorial="homepage-feed-tabs"] > button {
+  .tv-mode [data-tutorial="homepage-feed-tabs"] > button {
     min-height: 2.4rem;
   }
 
-  button:focus-visible,
-  a:focus-visible,
-  input:focus-visible,
-  select:focus-visible,
-  [role="button"]:focus-visible {
+  .tv-mode button:focus-visible,
+  .tv-mode a:focus-visible,
+  .tv-mode input:focus-visible,
+  .tv-mode select:focus-visible,
+  .tv-mode [role="button"]:focus-visible {
     outline: 3px solid rgba(255, 255, 255, 0.94);
     outline-offset: 4px;
   }
 
-  .animate-grid-scroll-reveal,
-  .animate-command-row,
-  .animate-detail-content-open,
-  .animate-detail-content-open-late {
+  .tv-mode .animate-grid-scroll-reveal,
+  .tv-mode .animate-command-row,
+  .tv-mode .animate-detail-content-open,
+  .tv-mode .animate-detail-content-open-late {
     animation-duration: 180ms;
     animation-delay: 0ms;
     filter: none;
   }
 
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
+  .tv-mode::view-transition-group(*),
+  .tv-mode::view-transition-old(*),
+  .tv-mode::view-transition-new(*) {
     animation-duration: 220ms;
   }
 }
 
 @media (min-width: 3000px) and (min-height: 1500px) {
-  html {
+  html.tv-mode {
     font-size: 24px;
   }
 }

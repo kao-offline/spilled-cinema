@@ -16,7 +16,7 @@ export function HomeRail({ rail, onOpenLocal, onImportRemote, layout = "rail" }:
   const scrollBy = (direction: -1 | 1) => {
     const node = scrollerRef.current;
     if (!node) return;
-    const televisionLayout = window.matchMedia("(min-width: 1600px) and (min-height: 800px)").matches;
+    const televisionLayout = document.documentElement.classList.contains("tv-mode");
     node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: televisionLayout ? "auto" : "smooth" });
   };
 

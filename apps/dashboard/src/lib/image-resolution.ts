@@ -47,6 +47,7 @@ export type ImageDeliveryScenario = {
   deviceMemoryGb?: number;
   saveData?: boolean;
   effectiveType?: string;
+  tvMode?: boolean;
 };
 
 export function shouldUseEconomyArtwork(scenario: ImageDeliveryScenario) {
@@ -55,8 +56,9 @@ export function shouldUseEconomyArtwork(scenario: ImageDeliveryScenario) {
     scenario.effectiveType === "slow-2g" ||
     scenario.effectiveType === "2g" ||
     scenario.effectiveType === "3g" ||
+    scenario.tvMode ||
     (scenario.deviceMemoryGb != null && scenario.deviceMemoryGb <= 4) ||
-    (scenario.viewportWidth != null && (scenario.viewportWidth <= 1023 || scenario.viewportWidth >= 1600)),
+    (scenario.viewportWidth != null && scenario.viewportWidth <= 1023),
   );
 }
 
@@ -68,6 +70,7 @@ function browserImageScenario(): ImageDeliveryScenario {
     deviceMemoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
     saveData: connection?.saveData,
     effectiveType: connection?.effectiveType,
+    tvMode: document.documentElement.classList.contains("tv-mode"),
   };
 }
 

@@ -2,7 +2,8 @@
 
 This focused Vitest matrix checks the observable contracts behind the responsive homepage:
 
-- phone, desktop, 1080p TV, 4K TV, and data-saver artwork delivery tiers;
+- phone, desktop, opt-in 1080p/4K TV mode, and data-saver artwork delivery tiers;
+- persisted TV-mode activation and document-root class behavior;
 - independent SvetSerialu and Bombuj feed/filter persistence;
 - homepage provider-tab restoration;
 - malformed and stale browser-storage fallback.

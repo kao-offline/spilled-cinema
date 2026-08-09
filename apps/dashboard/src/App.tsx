@@ -25,6 +25,7 @@ import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
 import { ToastHost } from "./components/ToastHost";
+import { TvModeToggle } from "./components/TvModeToggle";
 import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
 import { preloadHeroImage } from "./lib/hero-assets";
 import { getShowArtwork, mergeTitleMetadata, needsTitleMetadataEnrichment } from "./lib/media-library";
@@ -141,6 +142,7 @@ import {
 import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/private-node-client";
 import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLibraryPath } from "./lib/library-routes";
 import { scanProviderFeeds } from "./lib/library-watcher";
+import { applyTvMode, readTvMode, writeTvMode } from "./lib/tv-mode";
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
@@ -434,6 +436,11 @@ function AppContent() {
   const [activeWatchEpisodeId, setActiveWatchEpisodeId] = useState<string | null>(null);
   const [playerAutoPlayToken, setPlayerAutoPlayToken] = useState<number | null>(null);
   const [activeView, setActiveView] = useState<ViewState>("home");
+  const [tvMode, setTvMode] = useState(() => {
+    const enabled = readTvMode();
+    applyTvMode(enabled);
+    return enabled;
+  });
   const [routePath, setRoutePath] = useState(() => window.location.pathname);
   const [mediaFilter, setMediaFilter] = useState<"all" | "movies" | "series">("all");
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => !hasDismissedWelcome());
@@ -2703,6 +2710,12 @@ function AppContent() {
     });
   }
 
+  function handleTvModeChange(enabled: boolean) {
+    applyTvMode(enabled);
+    writeTvMode(enabled);
+    setTvMode(enabled);
+  }
+
   useEffect(() => {
     const preferences = Object.fromEntries(Object.entries(providerFeedStates).map(([viewId, page]) => [viewId, {
       query: page.query,
@@ -3544,6 +3557,7 @@ function AppContent() {
             void handleEnsureHomepageTextArtwork(slug);
           }}
         />
+        <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
         <ToastHost />
         {welcomeOpen ? (
           <WelcomeModal
@@ -3993,6 +4007,8 @@ function AppContent() {
           }}
         />
       ) : null}
+
+      {!isImmersivePage ? <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} /> : null}
 
       <DownloadLanguageModal
         episode={downloadLanguageChoice?.episode ?? null}
