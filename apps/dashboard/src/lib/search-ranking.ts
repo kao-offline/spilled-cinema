@@ -10,6 +10,23 @@ export function normalizeSearchText(value: string) {
     .trim();
 }
 
+// Strips leading/trailing filler words ("the", "show", "movie") from a query so
+// providers receive a searchable core instead of raw phrasing. Prepositions in
+// the middle of titles are preserved ("game of thrones" stays intact).
+export function trimWeakSearchEdges(value: string) {
+  const tokens = tokenize(value);
+  const significant = (token: string) => !WEAK_SEARCH_TOKENS.has(token);
+  let start = 0;
+  while (start < tokens.length && !significant(tokens[start])) start += 1;
+  let end = tokens.length;
+  while (end > start && !significant(tokens[end - 1])) end -= 1;
+  const trimmed = tokens.slice(start, end);
+  if (trimmed.length === 0 || trimmed.length === tokens.length) {
+    return value.trim();
+  }
+  return trimmed.join(" ");
+}
+
 function compactSearchText(value: string) {
   return normalizeSearchText(value).replace(/\s+/g, "");
 }

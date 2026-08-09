@@ -167,6 +167,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/artwork/refresh", handler: handlers.refreshArtworkHandler },
   { path: "/api/artwork/search", handler: handlers.searchArtworkHandler },
   { path: "/api/artwork/title-metadata", handler: handlers.titleMetadataArtworkHandler },
+  { path: "/api/artwork/episode-previews", handler: handlers.episodePreviewsArtworkHandler },
   { path: "/api/artwork/cast", handler: handlers.castArtworkHandler },
   { path: "/api/artwork/person-credits", handler: handlers.personCreditsArtworkHandler },
   { path: "/api/download-full/start", handler: handlers.startDownloadHandler },

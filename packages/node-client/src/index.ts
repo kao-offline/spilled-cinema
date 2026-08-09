@@ -22,6 +22,7 @@ import {
   keepHighConfidenceSearchResults,
   scoreSearchCandidate,
   sortUnifiedSearchResults,
+  trimWeakSearchEdges,
 } from "../../../apps/dashboard/src/lib/search-ranking";
 import { fetchBombujMovie, searchBombuj } from "../../../apps/dashboard/src/server/bombuj";
 import { checkVidkingAvailabilityBatch, searchVidking } from "../../../apps/dashboard/src/server/vidking";
@@ -147,10 +148,14 @@ async function runParallelProviderSearch(
 
   // Start every provider immediately. Search used to await VidKing before even
   // starting the other providers, turning one deadline into two sequential waits.
+  // Providers receive the weak-word-trimmed query so "the friends show" searches
+  // for "friends" instead of raw phrasing, while ranking still uses the full
+  // query for relevance.
+  const providerQuery = trimWeakSearchEdges(query);
   const [vidking, svet, bomb] = await Promise.allSettled([
-    withSearchBudget(searchVidking(query)),
-    withSearchBudget(searchSvetSerialu(query, options.svetserialuCredentials)),
-    withSearchBudget(searchBombuj(query), bombujTimeoutMs),
+    withSearchBudget(searchVidking(providerQuery)),
+    withSearchBudget(searchSvetSerialu(providerQuery, options.svetserialuCredentials)),
+    withSearchBudget(searchBombuj(providerQuery), bombujTimeoutMs),
   ]);
   const merged = [
     ...(vidking.status === "fulfilled" ? vidking.value : []),

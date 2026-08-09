@@ -39,7 +39,7 @@ import {
 import type { ImportedShow, ResolvedTitle } from "../../dashboard/src/lib/types";
 import type { SvetSerialuCredentials } from "../../dashboard/src/server/svetserialu";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "./player-resolver";
-import { composeHomepageBanner, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
+import { composeHomepageBanner, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbSeasonEpisodePreviews, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
 import { resolveArtworkApiKeys } from "../../dashboard/src/server/shared-artwork-api-keys";
 import {
   findEpisodeDownloadByFileNameFast,
@@ -1094,6 +1094,33 @@ export function createHttpHandlers() {
       });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch title metadata." });
+    }
+  };
+
+  const episodePreviewsArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title: string;
+        altTitle?: string | null;
+        yearHint?: string | null;
+        description?: string | null;
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
+        seasonNumber: number;
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+      }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      sendJson(res, 200, { episodes: await fetchTmdbSeasonEpisodePreviews({
+        title: body.title,
+        altTitle: body.altTitle ?? null,
+        yearHint: body.yearHint ?? undefined,
+        description: body.description ?? null,
+        externalIds: body.externalIds ?? undefined,
+        seasonNumber: body.seasonNumber,
+        apiKeys,
+      }) });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch episode previews." });
     }
   };
 
@@ -2236,6 +2263,7 @@ export function createHttpHandlers() {
     refreshArtworkHandler,
     searchArtworkHandler,
     titleMetadataArtworkHandler,
+    episodePreviewsArtworkHandler,
     castArtworkHandler,
     personCreditsArtworkHandler,
     composeHomepageBannerHandler,

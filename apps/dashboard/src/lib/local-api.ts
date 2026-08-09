@@ -35,6 +35,7 @@ export function isHostedSameOriginApiPath(path: string) {
     path === "/api/artwork/refresh" ||
     path === "/api/artwork/cast" ||
     path === "/api/artwork/title-metadata" ||
+    path === "/api/artwork/episode-previews" ||
     path === "/api/artwork/person-credits" ||
     path === "/api/artwork/homepage-banner"
   );
@@ -59,6 +60,7 @@ function getRuntimeTimeoutMs(path: string) {
     path.startsWith("/api/artwork/search") ||
     path.startsWith("/api/artwork/cast") ||
     path.startsWith("/api/artwork/title-metadata") ||
+    path.startsWith("/api/artwork/episode-previews") ||
     path.startsWith("/api/artwork/person-credits") ||
     path.startsWith("/api/artwork/homepage-banner")
   ) {

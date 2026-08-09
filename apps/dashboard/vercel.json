@@ -14,11 +14,8 @@
     }
   ],
   "functions": {
-    "api/artwork/refresh.ts": {
+    "api/artwork/[action].ts": {
       "maxDuration": 60
-    },
-    "api/artwork/search.ts": {
-      "maxDuration": 30
     },
     "api/node-proxy.js": {
       "maxDuration": 60

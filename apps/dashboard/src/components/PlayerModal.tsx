@@ -14,6 +14,8 @@ import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
 import { resolveTitleItem, searchTitleItems } from "../lib/provider-modules-client";
 import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 import { fetchSkipSegmentsForIds, collectSkipTitleIds, resolveSkipTitleIdsByTitle, type SkipSegment, type SkipTitleIds } from "../lib/intro-skip";
+import { fetchEpisodePreviews, type EpisodePreview } from "../lib/import-client";
+import { prefetchEpisodePreviewImages } from "../lib/episode-preview-cache";
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -222,8 +224,11 @@ export function PlayerModal({
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
+  const [seasonMenuOpen, setSeasonMenuOpen] = useState(false);
   const [episodeTransitioning, setEpisodeTransitioning] = useState(false);
   const [focusedEpisodeIndex, setFocusedEpisodeIndex] = useState<number>(0);
+  const [episodePreviews, setEpisodePreviews] = useState<Record<number, EpisodePreview>>({});
+  const [episodePreviewsLoading, setEpisodePreviewsLoading] = useState(false);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
@@ -334,6 +339,7 @@ export function PlayerModal({
     setSourceDiscoveryState("idle");
     setSelectedSelectorSeason(null);
     setEpisodeSelectorOpen(false);
+    setSeasonMenuOpen(false);
     setEpisodeTransitioning(false);
     setFocusedEpisodeIndex(0);
     setPlaybackRetryNonce(0);
@@ -715,6 +721,31 @@ export function PlayerModal({
     setPlaybackRetryNonce((value) => value + 1);
   }, [playbackError, effectiveEpisode, activeIsLocal, playbackFailures]);
 
+  const previewSeason = selectedSelectorSeason ?? episode?.seasonNumber ?? null;
+  useEffect(() => {
+    if (!show || previewSeason === null) return;
+    let canceled = false;
+    setEpisodePreviewsLoading(true);
+    void fetchEpisodePreviews(show, previewSeason)
+      .then(async (previews) => {
+        if (!canceled) setEpisodePreviews(Object.fromEntries(previews.map((preview) => [preview.episodeNumber, preview])));
+        const cachedPreviews = await prefetchEpisodePreviewImages(previews);
+        if (!canceled) setEpisodePreviews(Object.fromEntries(cachedPreviews.map((preview) => [preview.episodeNumber, preview])));
+      })
+      .catch(() => { if (!canceled) setEpisodePreviews({}); })
+      .finally(() => { if (!canceled) setEpisodePreviewsLoading(false); });
+    return () => { canceled = true; };
+  }, [show?.slug, previewSeason]);
+
+  useEffect(() => {
+    if (!episodeSelectorOpen || !episode || !show) return;
+    const seasonEpisodes = show.episodes
+      .filter((entry) => entry.seasonNumber === (selectedSelectorSeason ?? episode.seasonNumber))
+      .sort((a, b) => (a.episodeNumber ?? 0) - (b.episodeNumber ?? 0));
+    const currentIndex = seasonEpisodes.findIndex((entry) => entry.id === episode.id);
+    setFocusedEpisodeIndex(currentIndex >= 0 ? currentIndex : 0);
+  }, [episodeSelectorOpen, episode?.id, show?.slug, selectedSelectorSeason]);
+
   if (!episode || !effectiveEpisode || !activePlayer) return null;
 
   const sourceLabel = activeIsLocal
@@ -733,11 +764,12 @@ export function PlayerModal({
   ).sort((first, second) => first[0] - second[0]);
   const activeSelectorSeason = selectedSelectorSeason ?? effectiveEpisode.seasonNumber ?? selectorSeasons[0]?.[0] ?? null;
   const activeSelectorEpisodes = selectorSeasons.find(([season]) => season === activeSelectorSeason)?.[1] ?? selectorEpisodes;
+  const carouselCardStep = 205;
 
   const playerTransitionKey = show?.slug ?? effectiveEpisode.showSlug ?? null;
   return (
     <section
-      className="animate-player-open relative h-[100svh] min-h-[100svh] overflow-hidden bg-black text-white max-lg:fixed max-lg:inset-0 max-lg:z-[120] lg:min-h-[100dvh]"
+      className="animate-player-open fixed inset-0 z-[120] h-[100dvh] min-h-0 overflow-hidden overscroll-none bg-black text-white"
       style={playerTransitionKey ? { viewTransitionName: `spilled-hero-${playerTransitionKey}` } : undefined}
     >
       {pageArtwork ? (
@@ -762,7 +794,7 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
-            className="min-h-[100svh] lg:min-h-[100dvh]"
+            className="h-full min-h-0"
             subtitleTracks={localSubtitleTracks}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
@@ -781,7 +813,7 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
-            className="min-h-[100svh] lg:min-h-[100dvh]"
+            className="h-full min-h-0"
             subtitleTracks={remoteSubtitleTracks}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
@@ -819,21 +851,6 @@ export function PlayerModal({
         </div>
 
         <div className="pointer-events-auto flex flex-col items-end gap-2">
-          <div className="relative">
-            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon flex items-center gap-2 px-3 py-2" aria-label="Season">
-              <span className="text-xs font-semibold text-white/80">Season {activeSelectorSeason ?? 1}</span>
-              <ChevronDown className={clsx("h-3.5 w-3.5 text-white/60 transition-transform duration-200", episodeSelectorOpen && "rotate-180")} />
-            </button>
-            {episodeSelectorOpen && selectorSeasons.length > 1 ? (
-              <div className="glass-panel absolute right-0 top-12 w-32 overflow-hidden rounded-xl border border-white/10 py-1">
-                {selectorSeasons.map(([seasonNumber]) => (
-                  <button key={seasonNumber} type="button" onClick={() => setSelectedSelectorSeason(seasonNumber)} className={clsx("flex w-full items-center px-3 py-2 text-sm transition hover:bg-white/10", activeSelectorSeason === seasonNumber ? "text-white font-semibold" : "text-white/60")}>
-                    Season {seasonNumber}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
           <div className="flex gap-2">
             <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
               <Settings className="h-4 w-4" />
@@ -846,75 +863,67 @@ export function PlayerModal({
       </div>
 
       {episodeSelectorOpen ? (
-        <div className="absolute inset-y-0 right-0 z-30 flex justify-end transition-all duration-500" style={{ paddingTop: "max(5rem, env(safe-area-inset-top))", transform: episodeTransitioning ? "translateX(100%)" : "translateX(0)" }}>
-          <div className="pointer-events-auto h-full w-[min(90vw,28rem)] bg-gradient-to-l from-black/95 via-black/90 to-transparent">
-            <div className="flex h-full flex-col px-3">
-              {(() => {
-                const visibleEpisodes = [];
-                for (let offset = -2; offset <= 2; offset++) {
-                  const idx = focusedEpisodeIndex + offset;
-                  if (idx >= 0 && idx < activeSelectorEpisodes.length) {
-                    visibleEpisodes.push({ entry: activeSelectorEpisodes[idx], offset });
-                  }
-                }
-                return visibleEpisodes.map(({ entry, offset }) => {
-                  const isFocused = offset === 0;
-                  const isCurrentPlaying = entry.id === effectiveEpisode.id;
-                  const episodeArtwork = entry.posterUrl ?? show?.posterUrl ?? null;
-                  return (
-                    <div
-                      key={entry.id}
-                      className="w-full shrink-0"
-                      style={{ height: "calc((100dvh - 5rem) / 5 - 0.2rem)" }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (isFocused) {
-                            setEpisodeTransitioning(true);
-                            setTimeout(() => {
-                              setEpisodeSelectorOpen(false);
-                              onSelectEpisode?.(entry);
-                              setTimeout(() => setEpisodeTransitioning(false), 100);
-                            }, 400);
-                          } else {
-                            setFocusedEpisodeIndex(focusedEpisodeIndex + offset);
-                          }
-                        }}
-                        className="w-full h-full"
-                      >
-                        <div className={clsx("relative w-full h-full overflow-hidden rounded-2xl border-2 transition-all duration-300", isFocused ? (isCurrentPlaying ? "border-orange-500/80 shadow-2xl shadow-orange-500/20" : "border-white/30 shadow-xl shadow-white/10") : "border-white/5")}>
-                          {episodeArtwork ? (
-                            <img src={episodeArtwork} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
-                          ) : (
-                            <div className="absolute inset-0 flex items-center justify-center bg-white/5 text-white/20">No image</div>
-                          )}
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent" />
-                          <div className="absolute bottom-0 left-0 right-0 p-3">
-                            <div className={clsx("font-bold text-white", isFocused ? "text-xl" : "text-base")}>{episodeShortLabel(entry)}. {formatEpisodeTitle(entry)}</div>
-                            {isFocused ? (
-                              <>
-                                <div className="mt-1 flex items-center gap-2 text-sm text-white/60">
-                                  {entry.durationSeconds ? <span>{Math.round(entry.durationSeconds / 60)} min</span> : null}
-                                </div>
-                                <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-white/50">{entry.episodeTitle ?? `Episode ${entry.episodeNumber}`}</p>
-                              </>
-                            ) : null}
-                          </div>
-                          {isCurrentPlaying && !isFocused ? (
-                            <div className="absolute top-2 right-2 flex h-5 w-5 items-center justify-center rounded-full bg-orange-500">
-                              <div className="h-1.5 w-1.5 rounded-full bg-white" />
-                            </div>
-                          ) : null}
-                        </div>
-                      </button>
-                    </div>
-                  );
-                });
-              })()}
+        <>
+        <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
+        <aside className="pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }}>
+          <header className="absolute right-2 top-2 z-20 px-2 py-1 sm:right-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <p className="sr-only">Episodes</p>
+              </div>
+              {episodePreviewsLoading ? <LoaderCircle className="h-4 w-4 animate-spin text-white/35" /> : null}
             </div>
+            <div className="relative ml-auto w-fit">
+              <button type="button" onClick={() => setSeasonMenuOpen((open) => !open)} className="flex min-w-28 items-center justify-between gap-3 rounded-xl border border-white/15 bg-black/80 px-3.5 py-2.5 text-xs font-bold text-white shadow-xl backdrop-blur-xl transition hover:border-white/30 hover:bg-black/90" aria-expanded={seasonMenuOpen}>
+                Season {activeSelectorSeason ?? 1}
+                <ChevronDown className={clsx("h-3.5 w-3.5 text-white/55 transition-transform", seasonMenuOpen && "rotate-180")} />
+              </button>
+              {seasonMenuOpen ? <div className="absolute right-0 top-[calc(100%+.4rem)] min-w-32 overflow-hidden rounded-xl border border-white/12 bg-black/95 p-1 shadow-2xl backdrop-blur-2xl">
+                {selectorSeasons.map(([seasonNumber]) => <button key={seasonNumber} type="button" onClick={() => { setSelectedSelectorSeason(seasonNumber); setFocusedEpisodeIndex(0); setSeasonMenuOpen(false); }} className={clsx("flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs font-semibold transition hover:bg-white/10", activeSelectorSeason === seasonNumber ? "bg-white/10 text-white" : "text-white/55")}><span>Season {seasonNumber}</span>{activeSelectorSeason === seasonNumber ? <span className="text-white/70">✓</span> : null}</button>)}
+              </div> : null}
+            </div>
+          </header>
+          <div className="relative h-full min-h-0 flex-1 overflow-hidden p-1 pt-10">
+            {activeSelectorEpisodes.map((entry, index) => {
+              const offset = index - focusedEpisodeIndex;
+              const depth = Math.abs(offset);
+              const isFocused = offset === 0;
+              if (Math.abs(offset) > 2) return null;
+              const isCurrent = entry.id === effectiveEpisode.id;
+              const preview = entry.episodeNumber ? episodePreviews[entry.episodeNumber] : undefined;
+              const artwork = preview?.stillUrl ?? null;
+              const title = preview?.title ?? entry.episodeTitle ?? `Episode ${entry.episodeNumber ?? index + 1}`;
+              const minutes = preview?.runtimeMinutes ?? (entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null);
+              const airDate = preview?.airDate ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${preview.airDate}T00:00:00`)) : null;
+              return (
+                <button key={entry.id} type="button" onClick={() => {
+                  if (!isFocused) { setFocusedEpisodeIndex(index); return; }
+                  if (isCurrent) { setEpisodeSelectorOpen(false); return; }
+                  setEpisodeTransitioning(true);
+                  window.setTimeout(() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); window.setTimeout(() => setEpisodeTransitioning(false), 80); }, 280);
+                }} className={clsx("group absolute left-1/2 top-1/2 isolate aspect-video w-full overflow-hidden rounded-lg bg-black text-left shadow-2xl outline-none transition-all duration-500 ease-out", isFocused ? "border-2 border-red-600" : "border border-white/5")} style={{
+                  zIndex: 10 - depth,
+                  opacity: 1,
+                  transform: `translate(calc(-50% + ${depth * 34}px), calc(-50% + ${offset * carouselCardStep}px)) scale(${depth === 0 ? 1 : depth === 1 ? 0.9 : 0.82})`,
+                  filter: depth === 0 ? "none" : depth === 1 ? "brightness(.8)" : "brightness(.65)",
+                }}>
+                  <div className="absolute inset-0">
+                    <div className="absolute inset-0 bg-white/5">
+                      {artwork ? <img src={artwork} alt="" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.04]" loading="lazy" referrerPolicy="no-referrer" /> : <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-800 via-zinc-950 to-black text-5xl font-black text-white/[.06]">{String(entry.episodeNumber ?? index + 1).padStart(2, "0")}</div>}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/55 to-transparent" />
+                    </div>
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/65 to-transparent px-3 pb-3 pt-16 sm:px-4 sm:pb-4">
+                      <div className="flex items-start justify-between gap-2"><p className={clsx("line-clamp-2 font-bold leading-[1.2] text-white", isFocused ? "text-base sm:text-lg" : "text-sm")}>{entry.episodeNumber ?? index + 1}. {title}</p></div>
+                      <p className="mt-1 text-[10px] font-medium text-white/45">{[minutes ? `${minutes} min` : null, airDate].filter(Boolean).join("  ·  ") || episodeShortLabel(entry)}</p>
+                      {isFocused && preview?.description ? <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-white/52">{preview.description}</p> : null}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
-        </div>
+        </aside>
+        </>
       ) : null}
 
       {episodeTransitioning ? (

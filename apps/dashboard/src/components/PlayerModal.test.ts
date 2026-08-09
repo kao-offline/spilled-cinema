@@ -31,7 +31,7 @@ describe("universal playback modal policy", () => {
 
   it("pins the player to the mobile viewport and respects the safe-area inset", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
-    expect(source).toContain("max-lg:fixed max-lg:inset-0");
+    expect(source).toContain("fixed inset-0 z-[120] h-[100dvh]");
     expect(source).toContain("env(safe-area-inset-top)");
   });
 });
