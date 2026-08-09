@@ -53,6 +53,12 @@ function playbackCacheKey(player: EpisodePlayer) {
 function buildPlaybackProxyUrl(player: EpisodePlayer, episodeId: string, resolvedUrl: string) {
   const streamType = inferStreamType(resolvedUrl);
   if (streamType === "unknown" || streamType === "embed") return null;
+  // A hosted dashboard cannot serve the node's browser-file route. Reusing a
+  // cached stream through the dashboard origin breaks playback on mobile; a
+  // fresh gateway resolution supplies the correct node endpoint instead.
+  const canAddressLocalRuntime = Boolean(window.spilledNative?.serverUrl) ||
+    ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  if (!canAddressLocalRuntime) return null;
   const params = new URLSearchParams({
     url: resolvedUrl,
     name: `${episodeId}.${streamType === "mp4" ? "mp4" : "m3u8"}`,
@@ -498,24 +504,29 @@ export function PlayerModal({
       const cachedRawUrl = cachedProxy?.streamUrl ?? player.streamUrl ?? cachedUrl;
       const cachedRefererUrl = cachedProxy?.refererUrl || player.streamRefererUrl || player.sourcePageUrl || player.embedUrl;
       const playbackUrl = cachedProxy
-        ? buildPlaybackProxyUrl({ ...player, streamRefererUrl: cachedRefererUrl }, targetEpisode.id, cachedRawUrl) ?? cachedUrl
+        ? buildPlaybackProxyUrl({ ...player, streamRefererUrl: cachedRefererUrl }, targetEpisode.id, cachedRawUrl)
         : cachedUrl;
-      const result = {
-        playerAlias: player.alias,
-        playbackUrl,
-        resolvedUrl: cachedRawUrl,
-        refererUrl: cachedRefererUrl,
-        streamType: player.streamType ?? inferStreamType(cachedRawUrl) ?? cachedStreamType,
-        subtitlesUrl: player.subtitlesUrl,
-      } satisfies PlaybackResolveResult;
-      void prewarmPlaybackUrl(result.playbackUrl);
-      removeCachedPlayerFailure("playback", playbackCacheKey(player));
-      setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
-      if (player.streamUrl) {
-        onResolvePlayer?.(targetEpisode.id, player, result);
+      if (!playbackUrl) {
+        // Cached proxy URLs from a hosted dashboard may point at the dashboard
+        // origin. Resolve again so the response includes the live node origin.
+      } else {
+        const result = {
+          playerAlias: player.alias,
+          playbackUrl,
+          resolvedUrl: cachedRawUrl,
+          refererUrl: cachedRefererUrl,
+          streamType: player.streamType ?? inferStreamType(cachedRawUrl) ?? cachedStreamType,
+          subtitlesUrl: player.subtitlesUrl,
+        } satisfies PlaybackResolveResult;
+        void prewarmPlaybackUrl(result.playbackUrl);
+        removeCachedPlayerFailure("playback", playbackCacheKey(player));
+        setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
+        if (player.streamUrl) {
+          onResolvePlayer?.(targetEpisode.id, player, result);
+        }
+        if (!background) setPlayback(result);
+        return result;
       }
-      if (!background) setPlayback(result);
-      return result;
     }
 
     const persistedUrl = !forceFreshResolution && hasReusablePersistedStream(player) ? player.streamUrl?.trim() : "";

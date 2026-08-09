@@ -612,6 +612,7 @@ function mergeImportedEpisode(existingEpisode: LibraryEpisode, nextEpisode: Libr
     playbackPositionSeconds: existingEpisode.playbackPositionSeconds,
     playbackDurationSeconds: existingEpisode.playbackDurationSeconds,
     playbackUpdatedAt: existingEpisode.playbackUpdatedAt,
+    watched: existingEpisode.watched ?? nextEpisode.watched,
     players,
     selectedPlayerAlias,
   };
