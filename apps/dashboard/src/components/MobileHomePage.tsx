@@ -104,7 +104,9 @@ export function MobileHomePage({
       </header>
 
       {searchActive && searchQuery.trim().length > 0 ? (
-        <section className="mx-4 mb-5 overflow-hidden rounded-[22px] border border-white/[0.07] bg-[#111319] shadow-[0_24px_60px_rgba(0,0,0,.38)]">
+        <section className="relative mx-4 mb-5 overflow-hidden rounded-[22px] border border-white/[0.09] bg-white/[0.045] shadow-[0_24px_60px_rgba(0,0,0,.38)] backdrop-blur-2xl">
+          <div className="pointer-events-none absolute -left-12 top-0 h-36 w-36 rounded-full bg-orange-400/10 blur-3xl" />
+          <div className="pointer-events-none absolute right-0 top-10 h-44 w-44 rounded-full bg-cyan-300/8 blur-3xl" />
           <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/36">Search results</span>
             {searchLoading ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : <span className="text-[11px] font-bold text-white/28">{searchResults.length} found</span>}

@@ -11,7 +11,7 @@ type HomeTopChromeProps = {
 export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, activeTab = "home", onTabChange }: HomeTopChromeProps) {
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50 flex h-20 items-center justify-center px-4 sm:h-24 sm:px-8">
-      <nav className="pointer-events-auto absolute left-4 top-4 flex rounded-full border border-white/10 bg-black/38 p-1 shadow-xl backdrop-blur-xl sm:left-8 sm:top-6" aria-label="Homepage sources">
+      <nav data-tutorial="homepage-feed-tabs" className="pointer-events-auto absolute left-4 top-4 flex rounded-full border border-white/10 bg-black/38 p-1 shadow-xl backdrop-blur-xl sm:left-8 sm:top-6" aria-label="Homepage sources">
         {(["home", "svetserialu", "bombuj"] as const).map((tab) => (
           <button key={tab} type="button" onClick={() => onTabChange?.(tab)} className={`rounded-full px-3.5 py-2 text-[10px] font-black uppercase tracking-[.15em] transition sm:px-4 ${activeTab === tab ? "bg-white text-black" : "text-white/48 hover:text-white"}`}>
             {tab === "home" ? "Home" : tab === "svetserialu" ? "SvetSerialu" : "Bombuj"}
@@ -27,6 +27,7 @@ export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, act
         <button
           type="button"
           onClick={onOpenSearch}
+          data-tutorial="search-bar"
           className="group flex h-10 items-center gap-2.5 rounded-full border border-white/[0.08] bg-white/[0.045] px-4 text-white shadow-[0_12px_30px_rgba(0,0,0,0.25)] backdrop-blur-md transition hover:border-white/15 hover:bg-white/[0.08]"
           aria-label="Open search"
         >

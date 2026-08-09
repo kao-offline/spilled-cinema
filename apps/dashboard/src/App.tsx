@@ -3489,52 +3489,66 @@ function AppContent() {
 
   if (isHomeRoute) {
     return (
-      <CinematicHomePage
-        state={state}
-        featuredShow={featuredShow}
-        downloadedCountByShow={downloadedCountByShow}
-        tasteProfile={tasteProfile}
-        searchRemotes={searchRemotes}
-        onOpenLibrary={() => {
+      <>
+        <CinematicHomePage
+          state={state}
+          featuredShow={featuredShow}
+          downloadedCountByShow={downloadedCountByShow}
+          tasteProfile={tasteProfile}
+          searchRemotes={searchRemotes}
+          onOpenLibrary={() => {
           pushRoute(buildLibraryPath());
           setActiveView("home");
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenFavorites={() => {
+          }}
+          onOpenFavorites={() => {
           setActiveView("favorites");
           pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenExplore={() => {
+          }}
+          onOpenExplore={() => {
           setActiveView("explore");
           pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenSettings={() => {
+          }}
+          onOpenSettings={() => {
           setActiveView("settings");
           pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenShow={handleOpenShow}
-        onPlayShow={(show) => {
+          }}
+          onOpenShow={handleOpenShow}
+          onPlayShow={(show) => {
           const episode = show.episodes[show.episodes.length - 1];
           if (episode) {
             handleSelectEpisode(episode);
           } else {
             handleOpenShow(show.slug);
           }
-        }}
-        onImportRemote={async (platform, slug, mediaType) => {
-          await handleImport(platform, slug, mediaType);
-        }}
-        onEnsureHomepageTextArtwork={(slug) => {
-          void handleEnsureHomepageTextArtwork(slug);
-        }}
-      />
+          }}
+          onImportRemote={async (platform, slug, mediaType) => {
+            await handleImport(platform, slug, mediaType);
+          }}
+          onEnsureHomepageTextArtwork={(slug) => {
+            void handleEnsureHomepageTextArtwork(slug);
+          }}
+        />
+        {welcomeOpen ? (
+          <WelcomeModal
+            vaultConnected={vaultStatus.connected}
+            connectedFolderName={vaultStatus.folderName ?? undefined}
+            onClose={handleCloseWelcome}
+            onConnectVault={handleConnectVaultFromWelcome}
+            onOpenSettings={() => {
+              handleOpenSettingsFromWelcome();
+              handleCloseWelcome();
+            }}
+          />
+        ) : null}
+      </>
     );
   }
 

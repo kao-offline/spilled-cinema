@@ -34,9 +34,9 @@ const SEARCH_IMPORT_TARGETS: CoachTarget[] = [
   },
   {
     id: "import",
-    selector: '[data-tutorial="sidebar-import"]',
-    title: "Bring it into Spilled",
-    body: "Import movies and series, then keep their artwork, episodes, subtitles, and progress together.",
+    selector: '[data-tutorial="homepage-feed-tabs"]',
+    title: "Browse live feeds",
+    body: "SvetSerialu and Bombuj bring fresh titles into the same discovery flow as your vault.",
     side: "right",
   },
 ];
@@ -44,16 +44,16 @@ const SEARCH_IMPORT_TARGETS: CoachTarget[] = [
 const LIBRARY_TARGETS: CoachTarget[] = [
   {
     id: "favorites",
-    selector: '[data-tutorial="sidebar-favorites"]',
-    title: "Your shortcuts",
-    body: "Favorites keeps your picks close; Explore and provider feeds help you find the next one.",
+    selector: '[data-tutorial="homepage-settings"]',
+    title: "Tune your setup",
+    body: "Settings controls your vault, artwork, playback, downloads, and connected sources.",
     side: "right",
   },
   {
     id: "downloaded",
-    selector: '[data-tutorial="sidebar-downloaded"]',
-    title: "Watch anywhere",
-    body: "Downloaded titles work offline, while the player remembers progress and seen episodes per episode.",
+    selector: '[data-tutorial="homepage-feed-tabs"]',
+    title: "Watch your way",
+    body: "Open a title to choose a source, continue per episode, mark seen, or save it for offline playback.",
     side: "right",
   },
 ];

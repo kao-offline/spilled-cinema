@@ -645,7 +645,7 @@ export function ShowDetail({
                     onClick={() => onCheckNewEpisodes()}
                     disabled={Boolean(checkNewEpisodesState?.checking)}
                     className={clsx(
-                      "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-bold uppercase tracking-wide transition",
+                      "inline-flex h-9 w-9 items-center justify-center rounded-full border transition",
                       checkNewEpisodesState?.checking
                         ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
                         : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
@@ -654,7 +654,6 @@ export function ShowDetail({
                     title="Scan svetserialu for episodes you don't have yet"
                   >
                     <RefreshCw className={clsx("h-3.5 w-3.5", checkNewEpisodesState?.checking && "animate-spin")} />
-                    {checkNewEpisodesState?.checking ? "Checking…" : "Check for new episodes"}
                   </button>
                 ) : null}
                 <span className="text-xs font-bold text-white/32">{sortedEpisodes.length} available</span>
