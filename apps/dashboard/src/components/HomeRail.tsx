@@ -16,11 +16,12 @@ export function HomeRail({ rail, onOpenLocal, onImportRemote, layout = "rail" }:
   const scrollBy = (direction: -1 | 1) => {
     const node = scrollerRef.current;
     if (!node) return;
-    node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: "smooth" });
+    const televisionLayout = window.matchMedia("(min-width: 1600px) and (min-height: 800px)").matches;
+    node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: televisionLayout ? "auto" : "smooth" });
   };
 
   return (
-    <section className="relative py-3">
+    <section className="ui-virtual-section relative py-3">
       <div className="mb-3 flex items-center justify-between px-5 sm:px-10 lg:px-16">
         <h2 className="text-lg font-black tracking-normal text-white sm:text-xl">{rail.title}</h2>
         <div className={layout === "grid" ? "hidden" : "hidden items-center gap-2 md:flex"}>

@@ -639,6 +639,63 @@ body {
   }
 }
 
+.ui-virtual-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
+
+@media (min-width: 1600px) and (min-height: 800px) {
+  html {
+    font-size: 20px;
+  }
+
+  .text-\[9px\],
+  .text-\[10px\],
+  .text-\[11px\] {
+    font-size: 0.8rem !important;
+    line-height: 1.1rem !important;
+  }
+
+  .text-xs {
+    font-size: 0.9rem;
+    line-height: 1.25rem;
+  }
+
+  [data-tutorial="homepage-feed-tabs"] > button {
+    min-height: 2.4rem;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 3px solid rgba(255, 255, 255, 0.94);
+    outline-offset: 4px;
+  }
+
+  .animate-grid-scroll-reveal,
+  .animate-command-row,
+  .animate-detail-content-open,
+  .animate-detail-content-open-late {
+    animation-duration: 180ms;
+    animation-delay: 0ms;
+    filter: none;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 220ms;
+  }
+}
+
+@media (min-width: 3000px) and (min-height: 1500px) {
+  html {
+    font-size: 24px;
+  }
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 4px;
 }

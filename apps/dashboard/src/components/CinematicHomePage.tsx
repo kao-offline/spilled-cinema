@@ -11,6 +11,7 @@ import { buildHomepageRails, type HomepageRailItem } from "../lib/homepage-rails
 import type { ExploreItem, ImportedShow, LibraryState, UserTasteProfile } from "../lib/types";
 import type { IntegrationId } from "../lib/integrations";
 import { CommandMenu } from "./CommandMenu";
+import { readHomepageTab, writeHomepageTab, type HomepageTab } from "../lib/provider-home-preferences";
 import { HomeHero } from "./HomeHero";
 import { HomeRail } from "./HomeRail";
 import { HomeTopChrome } from "./HomeTopChrome";
@@ -92,9 +93,13 @@ export function CinematicHomePage({
   const [searchLoading, setSearchLoading] = useState(false);
   const [busyResultId, setBusyResultId] = useState<string | null>(null);
   const [trendingItems, setTrendingItems] = useState<ExploreItem[]>([]);
-  const [homeTab, setHomeTab] = useState<"home" | "svetserialu" | "bombuj">("home");
+  const [homeTab, setHomeTab] = useState<HomepageTab>(() => readHomepageTab());
   const requestedArtworkSlugs = useRef(new Set<string>());
   const availabilityRequestKey = useRef<string>("");
+
+  useEffect(() => {
+    writeHomepageTab(homeTab);
+  }, [homeTab]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -419,6 +424,7 @@ export function CinematicHomePage({
           )}
         </main></> : (
           <ProviderHomeSurface
+            key={homeTab}
             provider={homeTab}
             onImport={(item) => { void onImportRemote(item.provider, item.importSlug, item.mediaType); }}
             onOpenVault={(item) => {

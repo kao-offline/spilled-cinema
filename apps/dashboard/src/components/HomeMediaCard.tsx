@@ -1,6 +1,6 @@
 import { Library, MoreHorizontal } from "lucide-react";
 import type { HomepageRailItem, HomepageRailKind } from "../lib/homepage-rails";
-import { balancedBackgroundImage } from "../lib/image-resolution";
+import { balanceImageResolution } from "../lib/image-resolution";
 import { ProviderIcon } from "./ProviderIcon";
 
 type HomeMediaCardProps = {
@@ -23,6 +23,7 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
   const metadata = item.subtitle.split(/\s+\|\s+|\s{2,}/).filter(Boolean);
   const visibleMetadata = metadata.slice(0, 2);
   const primaryAction = item.kind === "local" ? onOpen : onImport;
+  const balancedImageUrl = balanceImageResolution(imageUrl, isBanner ? "backdrop-thumb" : "poster-card");
 
   return (
     <div className={layout === "grid" ? "animate-grid-scroll-reveal group min-w-0 text-left" : isBanner ? "group w-[78vw] max-w-[420px] shrink-0 text-left sm:w-[31rem]" : "group w-36 shrink-0 text-left sm:w-44"}>
@@ -31,10 +32,15 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
         onClick={primaryAction}
         className={isBanner ? "relative block aspect-[16/7] w-full overflow-hidden rounded-2xl bg-white/8 text-left" : "relative block aspect-[2/3] w-full overflow-hidden rounded-xl bg-white/8 text-left"}
       >
-        {imageUrl ? (
-          <div
-            className="absolute inset-0 bg-cover bg-center transition duration-700 group-hover:scale-105"
-            style={balancedBackgroundImage(imageUrl, isBanner ? "backdrop-thumb" : "poster-card")}
+        {balancedImageUrl ? (
+          <img
+            src={balancedImageUrl}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 h-full w-full object-cover object-center transition duration-500 group-hover:scale-[1.03]"
+            loading="lazy"
+            decoding="async"
+            fetchPriority="low"
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center">
