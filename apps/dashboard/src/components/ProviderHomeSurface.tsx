@@ -16,6 +16,22 @@ type ProviderHomeSurfaceProps = {
 type AudioFilter = "all" | "subtitles" | "dubbing";
 type AnimeFilter = "all" | "anime" | "no-anime";
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const PROVIDER_HOME_FILTERS_KEY = "spilled.provider-home-filters.v1";
+
+function readProviderHomeFilters(provider: "svetserialu" | "bombuj") {
+  try {
+    const raw = localStorage.getItem(PROVIDER_HOME_FILTERS_KEY);
+    const saved = raw ? JSON.parse(raw) as Record<string, Partial<{ feedId: string; audioFilter: AudioFilter; animeFilter: AnimeFilter }>> : {};
+    const preference = saved[provider];
+    return {
+      feedId: providerConfig[provider].feeds.some(([id]) => id === preference?.feedId) ? preference?.feedId ?? providerConfig[provider].feeds[0][0] : providerConfig[provider].feeds[0][0],
+      audioFilter: preference?.audioFilter === "subtitles" || preference?.audioFilter === "dubbing" ? preference.audioFilter : "all" as AudioFilter,
+      animeFilter: preference?.animeFilter === "anime" || preference?.animeFilter === "no-anime" ? preference.animeFilter : "all" as AnimeFilter,
+    };
+  } catch {
+    return { feedId: providerConfig[provider].feeds[0][0], audioFilter: "all" as AudioFilter, animeFilter: "all" as AnimeFilter };
+  }
+}
 
 function isAnimeItem(item: ExploreItem) {
   return item.title.toLowerCase().includes("anime") || item.genres.some((genre) => genre.toLowerCase().includes("anime"));
@@ -34,12 +50,13 @@ const providerConfig = {
 
 export function ProviderHomeSurface({ provider, onImport, onOpenVault }: ProviderHomeSurfaceProps) {
   const config = providerConfig[provider];
-  const [feedId, setFeedId] = useState<string>(config.feeds[0][0]);
+  const initialFilters = readProviderHomeFilters(provider);
+  const [feedId, setFeedId] = useState<string>(initialFilters.feedId);
   const [response, setResponse] = useState<ProviderFeedResponse | null>(null);
   const [query, setQuery] = useState("");
   const [searchItems, setSearchItems] = useState<ExploreItem[]>([]);
-  const [audioFilter, setAudioFilter] = useState<AudioFilter>("all");
-  const [animeFilter, setAnimeFilter] = useState<AnimeFilter>("all");
+  const [audioFilter, setAudioFilter] = useState<AudioFilter>(initialFilters.audioFilter);
+  const [animeFilter, setAnimeFilter] = useState<AnimeFilter>(initialFilters.animeFilter);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -48,12 +65,24 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault }: Provide
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    setFeedId(providerConfig[provider].feeds[0][0]);
+    const saved = readProviderHomeFilters(provider);
+    setFeedId(saved.feedId);
     setResponse(null);
     setQuery("");
-    setAudioFilter("all");
-    setAnimeFilter("all");
+    setAudioFilter(saved.audioFilter);
+    setAnimeFilter(saved.animeFilter);
   }, [provider]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PROVIDER_HOME_FILTERS_KEY);
+      const saved = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+      saved[provider] = { feedId, audioFilter, animeFilter };
+      localStorage.setItem(PROVIDER_HOME_FILTERS_KEY, JSON.stringify(saved));
+    } catch {
+      // Preferences are best-effort; the feed remains usable if storage is unavailable.
+    }
+  }, [animeFilter, audioFilter, feedId, provider]);
 
   const loadFeed = useCallback(async (fresh = false) => {
     setLoading(true);
