@@ -457,6 +457,7 @@ function AppContent() {
   const [pendingRemoveShow, setPendingRemoveShow] = useState<ImportedShow | null>(null);
   const activeDownloadPollsRef = useRef(new Set<string>());
   const activeBrowserDownloadControllersRef = useRef(new Map<string, AbortController>());
+  const canceledBrowserDownloadsRef = useRef(new Set<string>());
   const [downloadBackendAvailable, setDownloadBackendAvailable] = useState<boolean | null>(null);
   const [localRuntimeStatus, setLocalRuntimeStatus] = useState<LocalRuntimeStatus>({
     available: false,
@@ -2053,6 +2054,9 @@ function AppContent() {
   }, [vaultSnapshotReady, vaultStatus.connected, vaultStatus.folderName]);
 
   async function persistDownloadJobUpdate(episodeId: string, patch: Partial<PersistentDownloadJob> | null) {
+    if (canceledBrowserDownloadsRef.current.has(episodeId)) {
+      return;
+    }
     setDownloadQueue((prev) => {
       const current = prev[episodeId];
       if (!current) {
@@ -2077,6 +2081,8 @@ function AppContent() {
 
   async function startBrowserManagedDownload(episode: LibraryEpisode) {
     await requireWritableLibraryFolder();
+
+    canceledBrowserDownloadsRef.current.delete(episode.id);
 
     const existing = downloadQueue[episode.id];
     if (existing && (existing.state === "queued" || existing.state === "resolving" || existing.state === "downloading")) {
@@ -3127,6 +3133,7 @@ function AppContent() {
     try {
       const existing = downloadQueue[episode.id];
       if (existing && isBrowserDownloadJobId(existing.jobId)) {
+        canceledBrowserDownloadsRef.current.add(episode.id);
         activeBrowserDownloadControllersRef.current.get(episode.id)?.abort();
         activeBrowserDownloadControllersRef.current.delete(episode.id);
         await removeEpisodeFolderRecord(episode.id).catch(() => undefined);
@@ -3622,6 +3629,11 @@ function AppContent() {
               onResolvePlayerFailure={handlePlayerResolveFailure}
               onPlaybackProgress={handlePlaybackProgress}
               onEpisodeEnded={handleEpisodeEnded}
+              onStartFullDownload={handleStartFullDownload}
+              onCancelFullDownload={handleCancelFullDownload}
+              onDeleteFullDownload={handleDeleteFullDownload}
+              downloadedEpisodeIds={downloadedEpisodeIds}
+              fullDownloadJobsByEpisode={fullDownloadJobsByEpisode}
               autoPlayToken={playerAutoPlayToken}
             />
           ) : activeShowSlug ? (

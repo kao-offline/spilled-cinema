@@ -43,7 +43,16 @@ export function readDownloadQueue(): PersistentDownloadQueue {
       return {};
     }
 
-    return parsed as PersistentDownloadQueue;
+    const queue = parsed as PersistentDownloadQueue;
+    // Browser/FFmpeg jobs cannot be resumed after a page reload because their
+    // controller and wasm filesystem live in the old tab. Never resurrect one.
+    const resumable = Object.fromEntries(
+      Object.entries(queue).filter(([, item]) => !item?.jobId?.startsWith("browser:")),
+    ) as PersistentDownloadQueue;
+    if (Object.keys(resumable).length !== Object.keys(queue).length) {
+      writeDownloadQueue(resumable);
+    }
+    return resumable;
   } catch {
     return {};
   }
@@ -63,7 +72,9 @@ export function replaceDownloadQueue(queue: unknown): PersistentDownloadQueue {
     return {};
   }
 
-  const nextQueue = queue as PersistentDownloadQueue;
+  const nextQueue = Object.fromEntries(
+    Object.entries(queue as PersistentDownloadQueue).filter(([, item]) => !item?.jobId?.startsWith("browser:")),
+  ) as PersistentDownloadQueue;
   writeDownloadQueue(nextQueue);
   return nextQueue;
 }

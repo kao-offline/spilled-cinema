@@ -377,6 +377,22 @@ export async function startBrowserResolvedDownload(episode: LibraryEpisode): Pro
   ];
 
   const streamCandidates = buildBrowserStreamCandidates(sortedPlayers);
+  // A resolved stream URL is already the browser's best path: FFmpeg.wasm can
+  // fetch and mux it locally, without creating a server-side download job.
+  // Keep runtime resolution below for embed-only providers and gateway-scoped
+  // URLs that need node credentials or provider-specific headers.
+  const directCandidate = streamCandidates.find((candidate) => candidate.streamUrl || candidate.resolvedUrl);
+  if (directCandidate) {
+    const directUrl = directCandidate.streamUrl ?? directCandidate.resolvedUrl;
+    if (directUrl) {
+      return {
+        downloadUrl: directUrl,
+        resolvedUrl: directUrl,
+        refererUrl: directCandidate.sourcePageUrl ?? directCandidate.embedUrl,
+      };
+    }
+  }
+
   const isHostedDeployment = !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   let runtimeError: string | null = null;
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ChevronDown, List, LoaderCircle, RotateCw, Settings } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Download, List, LoaderCircle, RotateCw, Settings, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -16,6 +16,7 @@ import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataP
 import { fetchSkipSegmentsForIds, collectSkipTitleIds, resolveSkipTitleIdsByTitle, type SkipSegment, type SkipTitleIds } from "../lib/intro-skip";
 import { fetchEpisodePreviews, type EpisodePreview } from "../lib/import-client";
 import { prefetchEpisodePreviewImages } from "../lib/episode-preview-cache";
+import type { FullDownloadJob } from "../lib/full-download-client";
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -28,6 +29,11 @@ type PlayerModalProps = {
   onResolvePlayerFailure?: (episodeId: string, player: EpisodePlayer, error: string) => void;
   onPlaybackProgress?: (episodeId: string, progress: { currentTime: number; duration: number }) => void;
   onEpisodeEnded?: (episodeId: string) => void;
+  onStartFullDownload?: (episode: LibraryEpisode) => void;
+  onCancelFullDownload?: (episode: LibraryEpisode) => void;
+  onDeleteFullDownload?: (episode: LibraryEpisode) => void;
+  downloadedEpisodeIds?: Set<string>;
+  fullDownloadJobsByEpisode?: Record<string, FullDownloadJob>;
   autoPlayToken?: number | null;
 };
 
@@ -218,6 +224,11 @@ export function PlayerModal({
   onResolvePlayerFailure,
   onPlaybackProgress,
   onEpisodeEnded,
+  onStartFullDownload,
+  onCancelFullDownload,
+  onDeleteFullDownload,
+  downloadedEpisodeIds,
+  fullDownloadJobsByEpisode,
   autoPlayToken = null,
 }: PlayerModalProps) {
   const [expandedLangs, setExpandedLangs] = useState<Set<string>>(new Set());
@@ -785,6 +796,9 @@ export function PlayerModal({
   const activeSelectorSeason = selectedSelectorSeason ?? effectiveEpisode.seasonNumber ?? selectorSeasons[0]?.[0] ?? null;
   const activeSelectorEpisodes = selectorSeasons.find(([season]) => season === activeSelectorSeason)?.[1] ?? selectorEpisodes;
   const carouselCardStep = 205;
+  const activeDownloadJob = fullDownloadJobsByEpisode?.[effectiveEpisode.id];
+  const activeDownloadBusy = Boolean(activeDownloadJob && ["queued", "resolving", "downloading"].includes(activeDownloadJob.state));
+  const activeDownloaded = Boolean(downloadedEpisodeIds?.has(effectiveEpisode.id) || activeDownloadJob?.state === "completed");
 
   const playerTransitionKey = show?.slug ?? effectiveEpisode.showSlug ?? null;
   return (
@@ -878,6 +892,34 @@ export function PlayerModal({
 
         <div className="pointer-events-auto flex flex-col items-end gap-2">
           <div className="flex gap-2">
+            {onStartFullDownload ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeDownloadBusy) onCancelFullDownload?.(effectiveEpisode);
+                    else if (activeDownloaded) onDeleteFullDownload?.(effectiveEpisode);
+                    else onStartFullDownload(effectiveEpisode);
+                  }}
+                  className={clsx(
+                    "spilled-glass-icon h-10 gap-2 px-3 sm:w-auto",
+                    activeDownloaded && "border-emerald-300/30 bg-emerald-400/15 text-emerald-100",
+                    activeDownloadBusy && "border-orange-300/30 bg-orange-400/15 text-orange-100",
+                  )}
+                  aria-label={activeDownloadBusy ? "Cancel download" : activeDownloaded ? "Remove downloaded file" : "Download episode"}
+                  title={activeDownloadBusy ? `Downloading ${activeDownloadJob?.percent ?? 0}%` : activeDownloaded ? "Remove downloaded file" : "Download for offline"}
+                >
+                  {activeDownloadBusy ? (
+                    <>
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                      <span className="text-[10px] font-black tabular-nums">{activeDownloadJob?.percent ?? 0}%</span>
+                      <span className="mx-0.5 h-4 w-px bg-white/20" />
+                      <X className="h-4 w-4" />
+                    </>
+                  ) : activeDownloaded ? <><Trash2 className="h-4 w-4" /><span className="hidden text-[10px] font-black uppercase tracking-[.15em] sm:inline">Saved</span></> : <><Download className="h-4 w-4" /><span className="hidden text-[10px] font-black uppercase tracking-[.15em] sm:inline">Download</span></>}
+                </button>
+              </div>
+            ) : null}
             <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
               <Settings className="h-4 w-4" />
             </button>
