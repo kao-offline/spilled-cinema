@@ -820,11 +820,12 @@ export class SpilledCinemaNodeRuntime {
       };
     }
     if (Date.now() - startedAt > Math.min(input.ticket.maxDurationMs, policy.limits.maxDurationMs)) {
-      throw new Error("Remote RPC exceeded its ticket duration.");
+      responsePayload = { ok: false, error: "Remote RPC exceeded its ticket duration." };
     }
-    const responseBytes = Buffer.from(JSON.stringify(responsePayload), "utf8");
+    let responseBytes = Buffer.from(JSON.stringify(responsePayload), "utf8");
     if (responseBytes.length > input.ticket.maxResponseBytes) {
-      throw new Error("Remote RPC response exceeds its ticket quota.");
+      responsePayload = { ok: false, error: "Remote RPC response exceeds its ticket quota." };
+      responseBytes = Buffer.from(JSON.stringify(responsePayload), "utf8");
     }
     return encryptNodeResponse({
       request: input.envelope,

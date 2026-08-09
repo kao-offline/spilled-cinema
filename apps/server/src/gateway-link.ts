@@ -80,6 +80,22 @@ export class ManagedGatewayLink {
     }
   }
 
+  reconnectNow(reason = "Gateway link refresh requested.") {
+    if (this.stopped) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopHeartbeat();
+    const socket = this.socket;
+    this.socket = null;
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      console.warn(`[managed-gateway] ${reason} Reconnecting now.`);
+      socket.terminate();
+    }
+    void this.connect();
+  }
+
   private async connect() {
     if (this.stopped) return;
     try {
@@ -118,8 +134,8 @@ export class ManagedGatewayLink {
         if (this.socket === socket) {
           this.stopHeartbeat();
           this.socket = null;
+          this.scheduleReconnect();
         }
-        this.scheduleReconnect();
       });
       socket.on("error", (error) => {
         console.warn(`[managed-gateway] node link error: ${error.message}`);

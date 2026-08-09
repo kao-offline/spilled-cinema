@@ -774,7 +774,7 @@ async function startManagedGateway() {
     console.log("[managed-gateway] node link started with stored enrollment credential");
   }
 
-  const applyOnce = async () => {
+  const applyOnce = async (forceReconnect = false) => {
     const application = await handlers.runtime.createGatewayEnrollmentApplication({
       enrollmentCredential: process.env.SPILLED_GATEWAY_ENROLLMENT?.trim() || undefined,
     });
@@ -789,17 +789,25 @@ async function startManagedGateway() {
     }
     createLink(application.enrollmentCredential);
     gatewayLink?.setEnrollmentCredential(application.enrollmentCredential);
+    if (forceReconnect || !gatewayLink?.getStatus().connected) {
+      gatewayLink?.reconnectNow("Enrollment accepted.");
+    }
     console.log("[managed-gateway] node application accepted; verification is pending");
   };
 
-  const apply = async () => {
-    try {
-      await applyOnce();
-    } catch (error) {
-      console.warn(`[managed-gateway] enrollment refresh failed; node link continues with previous credential (${error instanceof Error ? error.message : "unknown error"})`);
-    }
+  let refreshInFlight: Promise<void> | null = null;
+  const apply = (forceReconnect = false) => {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = applyOnce(forceReconnect)
+      .catch((error) => {
+        console.warn(`[managed-gateway] enrollment refresh failed; retrying shortly (${error instanceof Error ? error.message : "unknown error"})`);
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+    return refreshInFlight;
   };
-  refreshManagedGatewayApplication = apply;
+  refreshManagedGatewayApplication = () => apply(true);
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -816,7 +824,14 @@ async function startManagedGateway() {
     }
   }
 
-  gatewayEnrollmentTimer = setInterval(() => void apply(), 30 * 60_000);
+  let lastPeriodicEnrollmentAt = Date.now();
+  gatewayEnrollmentTimer = setInterval(() => {
+    const disconnected = !gatewayLink?.getStatus().connected;
+    const periodicRefreshDue = Date.now() - lastPeriodicEnrollmentAt >= 30 * 60_000;
+    if (!disconnected && !periodicRefreshDue) return;
+    if (periodicRefreshDue) lastPeriodicEnrollmentAt = Date.now();
+    void apply(disconnected);
+  }, 30_000);
   gatewayEnrollmentTimer.unref?.();
 }
 
