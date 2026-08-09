@@ -12,6 +12,7 @@ import type { ExploreItem, ImportedShow, LibraryState, UserTasteProfile } from "
 import type { IntegrationId } from "../lib/integrations";
 import { CommandMenu } from "./CommandMenu";
 import { readHomepageTab, writeHomepageTab, type HomepageTab } from "../lib/provider-home-preferences";
+import { findImportedShowBySource, selectPrimaryImportSource } from "../lib/import-guard";
 import { HomeHero } from "./HomeHero";
 import { HomeRail } from "./HomeRail";
 import { HomeTopChrome } from "./HomeTopChrome";
@@ -30,7 +31,7 @@ type CinematicHomePageProps = {
   onOpenSettings: () => void;
   onOpenShow: (slug: string) => void;
   onPlayShow: (show: ImportedShow) => void;
-  onImportRemote: (platform: IntegrationId, slug: string, mediaType?: "movie" | "serial") => Promise<void>;
+  onImportRemote: (platform: IntegrationId, slug: string, mediaType?: "movie" | "serial", context?: { title?: string; posterUrl?: string | null }) => Promise<unknown>;
   onEnsureHomepageTextArtwork: (slug: string) => void;
 };
 
@@ -325,22 +326,8 @@ export function CinematicHomePage({
     if (result.kind !== "remote-title" || result.saved) return;
     setBusyResultId(result.id);
     try {
-      const importTargets = result.sourceMatches
-        .filter((source) => source.availability !== "unavailable")
-        .sort((left, right) => {
-          if (left.provider === "vidking" && right.provider !== "vidking") return 1;
-          if (right.provider === "vidking" && left.provider !== "vidking") return -1;
-          if (left.provider === result.provider && left.importSlug === result.importSlug) return -1;
-          if (right.provider === result.provider && right.importSlug === result.importSlug) return 1;
-          return 0;
-        });
-      const seen = new Set<string>();
-      for (const source of importTargets) {
-        const key = `${source.provider}:${source.importSlug}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        await onImportRemote(source.provider, source.importSlug, source.mediaType);
-      }
+      const source = selectPrimaryImportSource(result.sourceMatches, result);
+      if (source) await onImportRemote(source.provider, source.importSlug, source.mediaType, { title: result.title, posterUrl: result.posterUrl });
     } finally {
       setBusyResultId(null);
     }
@@ -354,7 +341,7 @@ export function CinematicHomePage({
 
   const handleImportRailRemote = async (item: HomepageRailItem) => {
     if (item.kind !== "remote") return;
-    await onImportRemote(item.provider as IntegrationId, item.importSlug, item.mediaType);
+    await onImportRemote(item.provider as IntegrationId, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
   };
 
   const handleImportFromEmpty = () => {
@@ -426,7 +413,8 @@ export function CinematicHomePage({
           <ProviderHomeSurface
             key={homeTab}
             provider={homeTab}
-            onImport={(item) => { void onImportRemote(item.provider, item.importSlug, item.mediaType); }}
+            isInVault={(item) => Boolean(findImportedShowBySource(state.shows, item.provider, item.importSlug))}
+            onImport={(item) => { void onImportRemote(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl }); }}
             onOpenVault={(item) => {
               const show = state.shows.find((entry) => entry.slug === item.slug || entry.slug === `bombuj-${item.slug}`);
               if (show) onOpenShow(show.slug);

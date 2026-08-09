@@ -654,7 +654,7 @@ export function ShowDetail({
         ) : null}
 
         {sortedEpisodes.length > 1 ? (
-          <section className="mb-9" aria-labelledby="episode-browser-heading">
+          <section className="tv-episode-browser mb-9" aria-labelledby="episode-browser-heading">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div id="episode-browser-heading" className="inline-flex items-center gap-2 text-2xl font-black text-white">
                 <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
@@ -688,14 +688,14 @@ export function ShowDetail({
             ) : null}
             <div className="no-scrollbar mb-4 flex gap-2 overflow-x-auto pb-1">
               {seasons.map(([seasonNumber, episodes]) => (
-                <button key={seasonNumber} type="button" onClick={() => setSelectedSeason(seasonNumber)} className={clsx("shrink-0 rounded-full border px-4 py-2 text-xs font-black transition", activeSeason === seasonNumber ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.035] text-white/52 hover:bg-white/[0.08] hover:text-white")}>
+                <button key={seasonNumber} type="button" onClick={() => setSelectedSeason(seasonNumber)} className={clsx("tv-episode-season shrink-0 rounded-full border px-4 py-2 text-xs font-black transition", activeSeason === seasonNumber ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.035] text-white/52 hover:bg-white/[0.08] hover:text-white")}>
                   Season {seasonNumber} <span className="ml-1 opacity-50">{episodes.length}</span>
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="tv-episode-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {activeSeasonEpisodes.map((episode) => (
-                <button key={episode.id} type="button" onClick={() => onSelectEpisode(episode)} className="group min-w-0 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3 text-left transition hover:border-white/18 hover:bg-white/[0.065] active:scale-[0.98]">
+                <button key={episode.id} type="button" onClick={() => onSelectEpisode(episode)} className="tv-episode-card group min-w-0 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3 text-left transition hover:border-white/18 hover:bg-white/[0.065] active:scale-[0.98]">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-[10px] font-black uppercase tracking-[0.18em] text-white/35">{episodeShortLabel(episode)}</span>
                     <Play className="h-3.5 w-3.5 fill-white/65 text-white/65 transition group-hover:fill-white group-hover:text-white" />

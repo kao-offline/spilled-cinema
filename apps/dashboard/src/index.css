@@ -665,6 +665,42 @@ body {
     min-height: 2.4rem;
   }
 
+  .tv-mode .tv-episode-browser {
+    margin-inline: -0.5rem;
+    padding: 1.25rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 1.4rem;
+    background: rgba(255, 255, 255, 0.035);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  }
+
+  .tv-mode .tv-episode-season {
+    min-height: 3rem;
+    padding-inline: 1.25rem;
+  }
+
+  .tv-mode .tv-episode-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .tv-mode .tv-episode-card {
+    min-height: 6rem;
+    padding: 1rem;
+    border-radius: 1rem;
+  }
+
+  .tv-mode .player-episode-selector {
+    width: min(100vw, 46rem);
+    padding-left: 3rem;
+    padding-right: 1rem;
+  }
+
+  .tv-mode .player-episode-selector header button {
+    min-height: 3rem;
+    min-width: 9rem;
+  }
+
   .tv-mode button:focus-visible,
   .tv-mode a:focus-visible,
   .tv-mode input:focus-visible,

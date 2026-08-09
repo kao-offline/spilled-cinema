@@ -26,6 +26,8 @@ import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
 import { ToastHost } from "./components/ToastHost";
 import { TvModeToggle } from "./components/TvModeToggle";
+import { ImportActivityPopup, type ImportActivity } from "./components/ImportActivityPopup";
+import { RemoteImportPreview } from "./components/RemoteImportPreview";
 import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
 import { preloadHeroImage } from "./lib/hero-assets";
 import { getShowArtwork, mergeTitleMetadata, needsTitleMetadataEnrichment } from "./lib/media-library";
@@ -143,10 +145,19 @@ import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/pr
 import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLibraryPath } from "./lib/library-routes";
 import { scanProviderFeeds } from "./lib/library-watcher";
 import { applyTvMode, readTvMode, writeTvMode } from "./lib/tv-mode";
+import { createImportGate, findImportedShowBySource, importSourceKey } from "./lib/import-guard";
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
 };
+
+function providerDisplayName(provider: IntegrationId) {
+  if (provider === "svetserialu") return "SvetSerialu";
+  if (provider === "bombuj") return "Bombuj";
+  if (provider === "vidking") return "VidKing";
+  if (provider === "cineby") return "Cineby";
+  return provider;
+}
 
 function runRouteTransition(update: () => void) {
   const transitionDocument = document as ViewTransitionDocument;
@@ -431,6 +442,8 @@ function AppContent() {
   const [importSlug, setImportSlug] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importActivity, setImportActivity] = useState<ImportActivity | null>(null);
+  const [pendingRemoteImport, setPendingRemoteImport] = useState<RemoteSearchResult | null>(null);
   const [importPlatformFilter, setImportPlatformFilter] = useState<ImportPlatformFilter>("all");
   const [activeShowSlug, setActiveShowSlug] = useState<string | null>(null);
   const [activeWatchEpisodeId, setActiveWatchEpisodeId] = useState<string | null>(null);
@@ -527,6 +540,8 @@ function AppContent() {
   const standbyResolverActiveRef = useRef(false);
   const playerPrefetchKeysRef = useRef(new Set<string>());
   const companionSourceImportsRef = useRef(new Set<string>());
+  const importGateRef = useRef(createImportGate());
+  const importActivityTimerRef = useRef<number | null>(null);
   const metadataEnrichmentActiveRef = useRef(false);
   const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
   const libraryWatcherActiveRef = useRef(false);
@@ -1639,20 +1654,7 @@ function AppContent() {
   }
 
   function findImportedShowForItem(item: Pick<ExploreItem, "provider" | "importSlug">) {
-    return state.shows.find((show) => {
-      if (item.provider === "vidking") {
-        const match = item.importSlug.match(/^(movie|tv)\/(\d+)/i);
-        return match ? show.slug === `vidking-${match[1].toLowerCase()}-${match[2]}` : show.slug === item.importSlug;
-      }
-      if (item.provider === "bombuj") {
-        return show.slug === `bombuj-${item.importSlug}`;
-      }
-      if (item.provider === "cineby") {
-        const match = item.importSlug.match(/^(movie|tv)\/(\d+)/i);
-        return match ? show.slug === `cineby-${match[1].toLowerCase()}-${match[2]}` : show.slug === item.importSlug;
-      }
-      return show.slug === item.importSlug;
-    }) ?? null;
+    return findImportedShowBySource(state.shows, item.provider, item.importSlug);
   }
 
   const activeProviderFeedItems = useMemo(() => {
@@ -2392,37 +2394,78 @@ function AppContent() {
     }
   }
 
+  function announceImport(activity: ImportActivity, dismissAfterMs?: number) {
+    if (importActivityTimerRef.current !== null) window.clearTimeout(importActivityTimerRef.current);
+    setImportActivity(activity);
+    importActivityTimerRef.current = dismissAfterMs
+      ? window.setTimeout(() => {
+          setImportActivity((current) => current?.key === activity.key ? null : current);
+          importActivityTimerRef.current = null;
+        }, dismissAfterMs)
+      : null;
+  }
+
   async function handleImport(
     platform: IntegrationId,
     overrideSlug?: string,
     mediaType?: "movie" | "serial",
-    options: { discoverCompanions?: boolean } = {},
+    options: { discoverCompanions?: boolean; title?: string; posterUrl?: string | null } = {},
   ) {
     const slug = (overrideSlug ?? importSlug).trim().toLowerCase();
     if (!slug) {
       setImportMessage("Enter a show slug, for example `upload` or `see`.");
-      return;
+      return null;
+    }
+
+    const key = importSourceKey(platform, slug);
+    const providerLabel = providerDisplayName(platform);
+    const existing = findImportedShowBySource(stateRef.current.shows, platform, slug);
+    if (existing) {
+      announceImport({ key, title: existing.title, providerLabel, posterUrl: existing.posterUrl, status: "already" }, 2600);
+      setImportMessage(`${existing.title} is already in your vault.`);
+      return existing;
+    }
+
+    const gateDecision = importGateRef.current.request(key);
+    if (gateDecision !== "started") {
+      announceImport({
+        key,
+        title: options.title ?? slug,
+        providerLabel,
+        posterUrl: options.posterUrl,
+        status: gateDecision === "duplicate" ? "importing" : "busy",
+        message: gateDecision === "duplicate" ? "This title is already being imported" : "Finish the current import first",
+      }, gateDecision === "busy" ? 2400 : undefined);
+      return null;
     }
 
     setImporting(true);
     setImportMessage(null);
+    announceImport({ key, title: options.title ?? slug, providerLabel, posterUrl: options.posterUrl, status: "importing" });
 
     try {
-      const show = await importProviderItem(platform, slug, mediaType, state.settings.artworkSources);
+      const show = await importProviderItem(platform, slug, mediaType, stateRef.current.settings.artworkSources);
 
       const nextState = upsertImportedShow(show);
+      stateRef.current = nextState;
       setState(nextState);
       setTasteProfile(recordImportedShowSignal(show));
       setImportSlug("");
       setImportMessage(
         `${show.title}: imported ${show.episodes.length} episode entries across ${show.availableSeasons.length} season(s).`,
       );
-      if (options.discoverCompanions !== false) {
+      announceImport({ key, title: show.title, providerLabel, posterUrl: show.posterUrl ?? options.posterUrl, status: "added" }, 2800);
+      if (options.discoverCompanions === true) {
         void discoverCompanionSources(show);
       }
+      return show;
     } catch (error) {
-      setImportMessage(error instanceof Error ? error.message : "Failed to import show.");
+      const message = error instanceof Error ? error.message : "Failed to import show.";
+      setImportMessage(message);
+      announceImport({ key, title: options.title ?? slug, providerLabel, posterUrl: options.posterUrl, status: "error", message }, 4200);
+      return null;
     } finally {
+      importGateRef.current.release(key);
       setImporting(false);
     }
   }
@@ -2475,7 +2518,7 @@ function AppContent() {
     }
     setImportSlug(result.slug);
     setImportSearchResults([]);
-    await handleImport(platform, result.slug, result.mediaType);
+    await handleImport(platform, result.slug, result.mediaType, { title: result.title, posterUrl: result.posterUrl });
   }
 
   function handleQueryChange(value: string) {
@@ -2642,7 +2685,7 @@ function AppContent() {
       return;
     }
 
-    void handleImport(item.provider, item.importSlug, item.mediaType);
+    void handleImport(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
   }
 
   function handleLibraryQueryChange(value: string) {
@@ -2745,7 +2788,7 @@ function AppContent() {
     const nextState = removeShow(show.slug);
     setState(nextState);
     if (activeShowSlug === show.slug) {
-      handleCloseShow();
+      handleBackHomeFromShow();
     }
   }
 
@@ -3439,6 +3482,18 @@ function AppContent() {
     setState(nextState);
   }
 
+  function handleGoHomeFromPlayer() {
+    runRouteTransition(() => {
+      const nextState = selectEpisode(undefined);
+      stateRef.current = nextState;
+      setState(nextState);
+      setActiveWatchEpisodeId(null);
+      setActiveShowSlug(null);
+      setActiveView("home");
+      pushRoute("/");
+    });
+  }
+
   function handleEpisodeEnded(episodeId: string) {
     setState(markEpisodeWatched(episodeId));
   }
@@ -3507,6 +3562,10 @@ function AppContent() {
   const showHeader = !isImmersivePage;
   const currentRoute = parseLibraryPath(routePath);
   const isHomeRoute = currentRoute.kind === "home";
+  const pendingRemotePlatform = pendingRemoteImport ? remoteResultPlatform(pendingRemoteImport) : null;
+  const pendingRemoteExisting = pendingRemoteImport && pendingRemotePlatform
+    ? findImportedShowBySource(state.shows, pendingRemotePlatform, pendingRemoteImport.slug)
+    : null;
 
   if (isHomeRoute) {
     return (
@@ -3550,14 +3609,15 @@ function AppContent() {
             handleOpenShow(show.slug);
           }
           }}
-          onImportRemote={async (platform, slug, mediaType) => {
-            await handleImport(platform, slug, mediaType);
+          onImportRemote={async (platform, slug, mediaType, context) => {
+            await handleImport(platform, slug, mediaType, context);
           }}
           onEnsureHomepageTextArtwork={(slug) => {
             void handleEnsureHomepageTextArtwork(slug);
           }}
         />
         <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
+        <ImportActivityPopup activity={importActivity} />
         <ToastHost />
         {welcomeOpen ? (
           <WelcomeModal
@@ -3636,6 +3696,7 @@ function AppContent() {
               episode={selectedEpisodeWithLocal}
               show={selectedEpisodeShow}
               onClose={handleClosePlayer}
+              onHome={handleGoHomeFromPlayer}
               onSelectPlayer={handleSelectPlayer}
               onSelectEpisode={handleSelectEpisode}
               onSetEpisodeWatched={handleSetEpisodeWatched}
@@ -3774,7 +3835,7 @@ function AppContent() {
               onResetFilters={handleResetExploreFilters}
               onLoadMore={handleLoadMoreExplore}
               onImport={(item) => {
-                void handleImport(item.provider, item.importSlug, item.mediaType);
+                void handleImport(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
               }}
               onOpenVault={handleOpenDiscoveryItem}
             />
@@ -3798,7 +3859,7 @@ function AppContent() {
                 void handleLoadMoreProviderFeed();
               }}
               onImport={(item) => {
-                void handleImport(item.provider, item.importSlug, item.mediaType);
+                void handleImport(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
               }}
               onOpenVault={handleOpenDiscoveryItem}
             />
@@ -3918,8 +3979,10 @@ function AppContent() {
                                   const typeLabel =
                                     r.mediaType === "movie" ? "Movie" : r.mediaType === "serial" ? "Serial" : "Title";
                                   return (
-                                    <div
+                                    <button
+                                      type="button"
                                       key={`${platform ?? "unknown"}-${r.slug}`}
+                                      onClick={() => setPendingRemoteImport(r)}
                                       className="group relative w-40 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#14151b] shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
                                     >
                                       <div
@@ -3941,18 +4004,7 @@ function AppContent() {
                                             <span className="rounded-full bg-black/70 px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.18em] text-white/85 whitespace-nowrap shadow-sm">
                                               {platformLabel}
                                             </span>
-                                            <button
-                                              onClick={() => {
-                                                if (!platform) return;
-                                                setImportSlug(r.slug);
-                                                handleImport(platform, r.slug, r.mediaType);
-                                              }}
-                                              disabled={importing || !platform}
-                                              className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-black/90 shadow-sm transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 whitespace-nowrap"
-                                              title="Import to Vault"
-                                            >
-                                              Add
-                                            </button>
+                                            <span className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-black/90 shadow-sm whitespace-nowrap">View</span>
                                           </div>
                                         </div>
 
@@ -3964,7 +4016,7 @@ function AppContent() {
                                           </div>
                                         )}
                                       </div>
-                                    </div>
+                                    </button>
                                   );
                                 })}
                               </div>
@@ -4009,6 +4061,26 @@ function AppContent() {
       ) : null}
 
       {!isImmersivePage ? <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} /> : null}
+      <ImportActivityPopup activity={importActivity} />
+
+      {pendingRemoteImport && pendingRemotePlatform ? (
+        <RemoteImportPreview
+          title={pendingRemoteImport.title}
+          providerLabel={providerDisplayName(pendingRemotePlatform)}
+          mediaType={pendingRemoteImport.mediaType}
+          year={pendingRemoteImport.year}
+          posterUrl={pendingRemoteImport.posterUrl}
+          busy={importing}
+          alreadyImported={Boolean(pendingRemoteExisting)}
+          onClose={() => setPendingRemoteImport(null)}
+          onImport={() => {
+            const item = pendingRemoteImport;
+            setPendingRemoteImport(null);
+            setImportSlug(item.slug);
+            void handleImport(pendingRemotePlatform, item.slug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
+          }}
+        />
+      ) : null}
 
       <DownloadLanguageModal
         episode={downloadLanguageChoice?.episode ?? null}

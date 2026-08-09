@@ -13,6 +13,7 @@ type ProviderHomeSurfaceProps = {
   provider: "svetserialu" | "bombuj";
   onImport: (item: ExploreItem) => void;
   onOpenVault: (item: ExploreItem) => void;
+  isInVault?: (item: ExploreItem) => boolean;
 };
 
 type AudioFilter = ProviderHomeAudioFilter;
@@ -34,7 +35,7 @@ const providerConfig = {
   },
 };
 
-export function ProviderHomeSurface({ provider, onImport, onOpenVault }: ProviderHomeSurfaceProps) {
+export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault }: ProviderHomeSurfaceProps) {
   const config = providerConfig[provider];
   const validFeedIds = config.feeds.map(([id]) => id);
   const initialFilters = readProviderHomePreference(provider, validFeedIds);
@@ -123,11 +124,12 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault }: Provide
   }, [provider, query]);
 
   const displayedItems = useMemo(() => {
-    const items = query.trim().length >= 2 ? searchItems : response?.items ?? [];
+    const sourceItems = query.trim().length >= 2 ? searchItems : response?.items ?? [];
+    const items = sourceItems.map((item) => item.inVault || !isInVault?.(item) ? item : { ...item, inVault: true });
     const audioItems = audioFilter === "all" ? items : items.filter((item) => item.audioBuckets.includes(audioFilter));
     if (animeFilter === "all") return audioItems;
     return audioItems.filter((item) => animeFilter === "anime" ? isAnimeItem(item) : !isAnimeItem(item));
-  }, [animeFilter, audioFilter, query, response?.items, searchItems]);
+  }, [animeFilter, audioFilter, isInVault, query, response?.items, searchItems]);
 
   const itemByRailId = useMemo(() => new Map(displayedItems.map((item) => [`provider:${item.id}`, item])), [displayedItems]);
   const rails = useMemo<HomepageRail[]>(() => {

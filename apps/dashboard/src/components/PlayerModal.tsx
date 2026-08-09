@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ChevronDown, Download, List, LoaderCircle, RotateCw, Settings, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -22,6 +22,7 @@ type PlayerModalProps = {
   episode: LibraryEpisode | null;
   show?: ImportedShow | null;
   onClose: () => void;
+  onHome: () => void;
   onSelectPlayer: (episodeId: string, alias: PlayerAlias) => void;
   onSelectEpisode?: (episode: LibraryEpisode) => void;
   onSetEpisodeWatched?: (episodeId: string, watched: boolean) => void;
@@ -217,6 +218,7 @@ export function PlayerModal({
   episode,
   show,
   onClose,
+  onHome,
   onSelectPlayer,
   onSelectEpisode,
   onSetEpisodeWatched,
@@ -884,6 +886,9 @@ export function PlayerModal({
           <button onClick={onClose} className="spilled-glass-icon h-10 w-10" aria-label="Back to episode detail">
             <ArrowLeft className="h-4 w-4" />
           </button>
+          <button onClick={onHome} className="spilled-glass-icon h-10 w-10" aria-label="Go to homepage">
+            <Home className="h-4 w-4" />
+          </button>
         </div>
 
         <div className="pointer-events-none absolute left-1/2 top-[max(1.25rem,env(safe-area-inset-top))] max-w-[52vw] -translate-x-1/2 truncate px-3 text-center text-sm font-black text-white drop-shadow-lg sm:max-w-[60vw] sm:text-base">
@@ -933,7 +938,7 @@ export function PlayerModal({
       {episodeSelectorOpen ? (
         <>
         <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
-        <aside className="pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)", touchAction: "pan-y" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }} onTouchStart={(event) => { selectorTouchStartRef.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={(event) => { const start = selectorTouchStartRef.current; selectorTouchStartRef.current = null; const end = event.changedTouches[0]?.clientY; if (start == null || end == null || Math.abs(end - start) < 28) return; setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (end < start ? 1 : -1)))); }}>
+        <aside className="player-episode-selector pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)", touchAction: "pan-y" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }} onTouchStart={(event) => { selectorTouchStartRef.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={(event) => { const start = selectorTouchStartRef.current; selectorTouchStartRef.current = null; const end = event.changedTouches[0]?.clientY; if (start == null || end == null || Math.abs(end - start) < 28) return; setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (end < start ? 1 : -1)))); }}>
           <header className="absolute right-2 top-[4.5rem] z-20 px-2 py-1 sm:right-3">
             <div className="mb-2 flex items-center justify-between">
               <div>

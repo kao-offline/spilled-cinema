@@ -70,7 +70,7 @@ function browserImageScenario(): ImageDeliveryScenario {
     deviceMemoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
     saveData: connection?.saveData,
     effectiveType: connection?.effectiveType,
-    tvMode: document.documentElement.classList.contains("tv-mode"),
+    tvMode: typeof document !== "undefined" && document.documentElement.classList.contains("tv-mode"),
   };
 }
 
