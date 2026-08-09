@@ -16,6 +16,7 @@ import type {
   ExploreSectionKey,
 } from "../lib/types";
 import type { IntegrationId } from "../lib/integrations";
+import { showToast } from "./ToastHost";
 
 type ExploreViewProps = {
   query: string;
@@ -1053,6 +1054,9 @@ function ExploreItemModal({
 }
 
 export function ExploreView(props: ExploreViewProps) {
+  useEffect(() => {
+    if (props.error) showToast(props.error);
+  }, [props.error]);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<ExploreItem | null>(null);
   const [genreFacetQuery, setGenreFacetQuery] = useState("");
@@ -1221,7 +1225,6 @@ export function ExploreView(props: ExploreViewProps) {
         </div>
 
         {props.loading ? <div className="mb-6 text-sm text-white/45">Loading live provider catalog...</div> : null}
-        {props.error ? <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">{props.error}</div> : null}
 
         <div className="min-w-0 space-y-10">
           {sections.map((section) => (

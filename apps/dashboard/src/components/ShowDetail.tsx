@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
-import { ArrowLeft, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
@@ -438,7 +438,7 @@ export function ShowDetail({
                                   <span className="spilled-episode-code">{episodeShortLabel(episode)}</span>
                                    <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
                                    {episode.watched ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-400/18 text-emerald-200" title="Watched"><Check className="h-3 w-3" /></span> : null}
-                                   {hasCzSubs ? <span className="spilled-subtitle-tag" title="Czech subtitles">CZ TIT</span> : null}
+                                   {hasCzSubs ? <span className="spilled-subtitle-tag inline-flex h-5 w-5 items-center justify-center" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
                                  </button>
                                  {episode.directors?.length ? (
                                    <div className="flex min-w-0 items-center gap-1 text-xs text-white/40 mt-0.5 pl-11">
@@ -679,7 +679,7 @@ export function ShowDetail({
                     <Play className="h-3.5 w-3.5 fill-white/65 text-white/65 transition group-hover:fill-white group-hover:text-white" />
                   </div>
                   <div className="truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
-                  {hasCzechSubtitles(episode) ? <div className="mt-1 text-[9px] font-black uppercase tracking-[0.14em] text-sky-200/70">Czech subtitles</div> : null}
+                  {hasCzechSubtitles(episode) ? <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-sky-300/10 text-sky-200/80" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
                 </button>
               ))}
             </div>

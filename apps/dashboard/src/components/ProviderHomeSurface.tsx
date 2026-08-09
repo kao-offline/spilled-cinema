@@ -5,6 +5,7 @@ import { fetchProviderFeed, searchProviderModuleItems } from "../lib/provider-mo
 import type { ExploreItem, ProviderFeedResponse } from "../lib/types";
 import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import { HomeRail } from "./HomeRail";
+import { showToast } from "./ToastHost";
 
 type ProviderHomeSurfaceProps = {
   provider: "svetserialu" | "bombuj";
@@ -41,6 +42,9 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault }: Provide
   const [animeFilter, setAnimeFilter] = useState<AnimeFilter>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (error) showToast(error);
+  }, [error]);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -172,7 +176,6 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault }: Provide
       </section>
 
       <main className="relative z-10 -mt-8 pb-24">
-        {error ? <div className="mx-5 mb-5 rounded-xl border border-rose-400/15 bg-rose-400/8 px-4 py-3 text-sm text-rose-100 sm:mx-10 lg:mx-16">{error}</div> : null}
         {loading && rails.length === 0 ? <div className="px-5 py-14 text-sm font-semibold text-white/38 sm:px-10 lg:px-16">Loading…</div> : null}
         {!loading && rails.length === 0 ? <div className="px-5 py-14 text-sm font-semibold text-white/38 sm:px-10 lg:px-16">No titles found.</div> : null}
         {rails.map((rail) => <HomeRail key={rail.id} rail={rail} layout="grid" onOpenLocal={() => {}} onImportRemote={(railItem) => { const item = itemByRailId.get(railItem.id); if (item) item.inVault ? onOpenVault(item) : onImport(item); }} />)}

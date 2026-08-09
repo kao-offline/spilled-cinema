@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import type { ExploreItem, ProviderFeedManifest, ProviderModuleManifest } from "../lib/types";
 import { formatEpisodeTitle } from "../lib/episode-title";
+import { showToast } from "./ToastHost";
 
 type ProviderFeedPageProps = {
   module: ProviderModuleManifest;
@@ -321,6 +322,9 @@ export function ProviderFeedPage({
   const [visibleCount, setVisibleCount] = useState(FEED_CHUNK_SIZE);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const providerLabel = module.displayName;
+  useEffect(() => {
+    if (error) showToast(error);
+  }, [error]);
   const filteredItems = useMemo(() => {
     if (animeFilterMode === "all") {
       return items;
@@ -404,12 +408,6 @@ export function ProviderFeedPage({
           Refresh
         </button>
       </div>
-
-      {error ? (
-        <div className="relative mt-6 rounded-[24px] border border-rose-400/14 bg-rose-400/8 px-5 py-4 text-sm text-rose-100">
-          {error}
-        </div>
-      ) : null}
 
       {loading && items.length === 0 ? (
         <div className="relative mt-8 flex min-h-[18rem] items-center justify-center rounded-[28px] border border-white/8 bg-white/[0.03] text-white/54">

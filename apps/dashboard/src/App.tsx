@@ -24,6 +24,7 @@ import { DownloadEngineModal } from "./components/DownloadEngineModal";
 import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
+import { ToastHost } from "./components/ToastHost";
 import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
 import { preloadHeroImage } from "./lib/hero-assets";
 import { getShowArtwork, mergeTitleMetadata, needsTitleMetadataEnrichment } from "./lib/media-library";
@@ -3536,6 +3537,7 @@ function AppContent() {
             void handleEnsureHomepageTextArtwork(slug);
           }}
         />
+        <ToastHost />
         {welcomeOpen ? (
           <WelcomeModal
             vaultConnected={vaultStatus.connected}
@@ -4022,6 +4024,7 @@ function AppContent() {
           }}
         />
       ) : null}
+      <ToastHost />
     </div>
   );
 }
