@@ -9,6 +9,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "audit:vault-playback": "node scripts/audit-vault-playback.mjs",
+    "audit:search": "tsx scripts/evaluate-search.ts",
     "preview": "vite preview"
   },
   "dependencies": {

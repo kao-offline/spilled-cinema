@@ -67,14 +67,22 @@ function ResultSourceIcons({ result }: { result: CommandSearchResult }) {
   }
 
   return (
-    <span className="flex shrink-0 items-center -space-x-1">
-      {result.sourceMatches.slice(0, 4).map((source) => (
-        <ProviderIcon
-          key={`${source.provider}:${source.importSlug}`}
-          provider={source.provider}
-          className="h-5 w-5 border border-[#080a0f]"
-        />
-      ))}
+    <span
+      className="flex shrink-0 items-center gap-1"
+      title={`Found on ${result.sourceMatches.length} ${result.sourceMatches.length === 1 ? "source" : "sources"}`}
+    >
+      <span className="flex -space-x-1">
+        {result.sourceMatches.slice(0, 4).map((source) => (
+          <ProviderIcon
+            key={`${source.provider}:${source.importSlug}`}
+            provider={source.provider}
+            className="h-5 w-5 border border-[#080a0f]"
+          />
+        ))}
+      </span>
+      {result.sourceMatches.length > 1 ? (
+        <span className="text-[9px] font-black uppercase tracking-[0.12em] text-white/38">{result.sourceMatches.length} sources</span>
+      ) : null}
     </span>
   );
 }

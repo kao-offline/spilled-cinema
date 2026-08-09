@@ -100,6 +100,7 @@ import {
 import { downloadResolvedVideoInBrowser } from "./lib/browser-ffmpeg";
 import { formatEpisodeTitle } from "./lib/episode-title";
 import { scoreSearchCandidate } from "./lib/search-ranking";
+import { prioritizeImportSearchResults, resolveImportInput } from "./lib/import-search";
 import { buildRuntimeUrl } from "./lib/local-api";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
 import { resetLocalNodeProbeCache } from "./lib/local-api";
@@ -342,108 +343,6 @@ function filterImportSearchResults(results: RemoteSearchResult[], platformFilter
     return results;
   }
   return results.filter((result) => remoteResultPlatform(result) === platformFilter);
-}
-
-function prioritizeImportSearchResults(results: RemoteSearchResult[]) {
-  return results.slice(0, 6);
-}
-
-function resolveImportInput(rawValue: string): {
-  mode: "direct" | "search";
-  platform?: IntegrationId;
-  slug?: string;
-  mediaType?: "movie" | "serial";
-  query?: string;
-} {
-  const value = rawValue.trim();
-  if (!value) {
-    return { mode: "search", query: "" };
-  }
-
-  const vidkingSlug = value.match(/^(movie|tv)\/(\d+)(?:\/(\d+)\/(\d+))?$/i);
-  if (vidkingSlug) {
-    return {
-      mode: "direct",
-      platform: "vidking",
-      slug: value.toLowerCase(),
-      mediaType: vidkingSlug[1].toLowerCase() === "tv" ? "serial" : "movie",
-    };
-  }
-
-  try {
-    const parsed = new URL(value);
-    const host = parsed.hostname.toLowerCase();
-    const path = parsed.pathname.replace(/\/+$/, "");
-
-    if (host.includes("vidking.net")) {
-      const parts = path.split("/").filter(Boolean);
-      const embedIndex = parts.findIndex((part) => part === "embed");
-      const type = parts[embedIndex + 1];
-      const tmdbId = parts[embedIndex + 2];
-      if ((type === "movie" || type === "tv") && tmdbId) {
-        return {
-          mode: "direct",
-          platform: "vidking",
-          slug: parts.slice(embedIndex + 1, embedIndex + 5).join("/").trim().toLowerCase(),
-          mediaType: type === "tv" ? "serial" : "movie",
-        };
-      }
-    }
-
-    if (host.includes("svetserialu")) {
-      const serialMatch = path.match(/\/serial\/([^/?#]+)/i);
-      if (serialMatch?.[1]) {
-        return {
-          mode: "direct",
-          platform: "svetserialu",
-          slug: serialMatch[1].trim().toLowerCase(),
-          mediaType: "serial",
-        };
-      }
-    }
-
-    if (host.includes("bombuj")) {
-      const tail = path.split("/").filter(Boolean).pop() ?? "";
-      const filmMatch = tail.match(/^online-film-(.+)$/i);
-      if (filmMatch?.[1]) {
-        return {
-          mode: "direct",
-          platform: "bombuj",
-          slug: filmMatch[1].trim().toLowerCase(),
-          mediaType: "movie",
-        };
-      }
-
-      const serialMatch = tail.match(/^online-serial-(.+)$/i);
-      if (serialMatch?.[1]) {
-        return {
-          mode: "direct",
-          platform: "bombuj",
-          slug: serialMatch[1].trim().toLowerCase(),
-          mediaType: "serial",
-        };
-      }
-    }
-
-    if (host.includes("cineby.at")) {
-      const parts = path.split("/").filter(Boolean);
-      if ((parts[0] === "movie" || parts[0] === "tv") && parts[1]) {
-        return {
-          mode: "direct",
-          platform: "cineby",
-          slug: parts.slice(0, 3).join("/").trim().toLowerCase(),
-          mediaType: parts[0] === "tv" ? "serial" : "movie",
-        };
-      }
-    }
-  } catch {
-    // Non-URL input falls through to title search.
-  }
-
-  return {
-    mode: "search",
-    query: value,
-  };
 }
 
 function parseShowAndSeasonEpisodeFromFileName(fileName: string): { showKey: string; seasonEpisodeKey: string } | null {
@@ -3390,6 +3289,15 @@ function AppContent() {
         return current;
       }
 
+      // The import already has usable artwork in many cases.  Homepage
+      // enrichment also returns a poster while it searches for a baked-logo
+      // banner, so never let that background request replace the banner with
+      // a poster (or clear an existing WLogo banner) just because no new
+      // banner was found.
+      if (!artwork?.bannerUrl) {
+        return current;
+      }
+
       const nextState = {
         ...current,
         shows: current.shows.map((entry) =>
@@ -3397,13 +3305,13 @@ function AppContent() {
             ? {
                 ...entry,
                 homepagePosterUrl: artwork?.posterUrl ?? entry.homepagePosterUrl ?? null,
-                homepageBannerUrl: artwork?.bannerUrl ?? null,
+                homepageBannerUrl: artwork.bannerUrl,
                 artwork: {
                   ...(entry.artwork ?? {}),
                   posterUrl: artwork?.posterUrl ?? entry.artwork?.posterUrl ?? entry.posterUrl ?? null,
-                  bannerWithLogoUrl: artwork?.bannerUrl ?? entry.artwork?.bannerWithLogoUrl ?? null,
+                  bannerWithLogoUrl: artwork.bannerUrl,
                 },
-                homepageArtworkVersion: artwork?.bannerUrl ? HOMEPAGE_ARTWORK_VERSION : null,
+                homepageArtworkVersion: HOMEPAGE_ARTWORK_VERSION,
               }
             : entry,
         ),

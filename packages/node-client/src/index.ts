@@ -157,12 +157,25 @@ async function runParallelProviderSearch(
     withSearchBudget(searchSvetSerialu(providerQuery, options.svetserialuCredentials)),
     withSearchBudget(searchBombuj(providerQuery), bombujTimeoutMs),
   ]);
-  const merged = [
+  const initialMerged = [
     ...(vidking.status === "fulfilled" ? vidking.value : []),
     ...(svet.status === "fulfilled" ? svet.value : []),
     ...(bomb.status === "fulfilled" ? bomb.value : []),
-  ]
-    .filter((item) => hasProviderSearchTokenCoverage(query, item))
+  ];
+
+  // A provider hit is often a better spelling/translation than the user's raw
+  // query. Use it to probe providers that did not return that identity, then
+  // attach only strict same-title/year/media matches. This turns e.g. a Czech
+  // Bombuj hit into a canonical VidKing lookup without broadening the result.
+  const crossProviderMatches = await runCrossProviderEnrichment(query, initialMerged, {
+    vidking: (value) => withSearchBudget(searchVidking(value), Math.min(timeoutMs, 5_000)),
+    svetserialu: (value) => withSearchBudget(searchSvetSerialu(value, options.svetserialuCredentials), Math.min(timeoutMs, 5_000)),
+    bombuj: (value) => withSearchBudget(searchBombuj(value), Math.min(bombujTimeoutMs, 5_000)),
+  });
+
+  const crossProviderSet = new Set(crossProviderMatches);
+  const merged = [...initialMerged, ...crossProviderMatches]
+    .filter((item) => crossProviderSet.has(item) || hasProviderSearchTokenCoverage(query, item))
     .map<RemoteSearchItem>((item, index) => ({
       ...item,
       matchScore: Math.max(
@@ -227,6 +240,62 @@ type RemoteSearchItem = {
   };
 };
 
+type SearchProviderId = "vidking" | "svetserialu" | "bombuj";
+type ProviderSearchers = Record<SearchProviderId, (query: string) => Promise<RemoteSearchItem[]>>;
+
+function remoteSearchProvider(item: RemoteSearchItem) {
+  const value = item.provider ?? item.platform;
+  return value === "vidking" || value === "svetserialu" || value === "bombuj" ? value : null;
+}
+
+export type CrossProviderSearchTask = {
+  provider: SearchProviderId;
+  query: string;
+  seed: RemoteSearchItem;
+};
+
+export function buildCrossProviderSearchTasks(query: string, results: RemoteSearchItem[], maximumSeeds = 2) {
+  const normalizedOriginal = normalizeBridgeText(query);
+  const seeds: RemoteSearchItem[] = [];
+  for (const item of sortUnifiedSearchResults(query, results)) {
+    if (!seeds.some((seed) => sameRemoteSearchIdentity(seed, item))) seeds.push(item);
+    if (seeds.length >= maximumSeeds) break;
+  }
+
+  const tasks: CrossProviderSearchTask[] = [];
+  for (const seed of seeds) {
+    const queries = [seed.title, ...(seed.alternateTitles ?? [])]
+      .map((value) => value.trim())
+      .filter((value, index, all) => value.length >= 2 && normalizeBridgeText(value) !== normalizedOriginal && all.findIndex((entry) => normalizeBridgeText(entry) === normalizeBridgeText(value)) === index)
+      .slice(0, 1);
+    if (queries.length === 0) continue;
+
+    for (const provider of ["vidking", "svetserialu", "bombuj"] as const) {
+      if (results.some((item) => remoteSearchProvider(item) === provider && sameRemoteSearchIdentity(seed, item))) continue;
+      for (const followupQuery of queries) tasks.push({ provider, query: followupQuery, seed });
+    }
+  }
+  return tasks;
+}
+
+async function runCrossProviderEnrichment(query: string, results: RemoteSearchItem[], searchers: ProviderSearchers) {
+  const tasks = buildCrossProviderSearchTasks(query, results);
+  if (tasks.length === 0) return [];
+  const settled = await Promise.allSettled(tasks.map(async (task) => {
+    const candidates = await searchers[task.provider](task.query);
+    return candidates.filter((candidate) => sameRemoteSearchIdentity(task.seed, candidate));
+  }));
+  const unique = new Map<string, RemoteSearchItem>();
+  for (const outcome of settled) {
+    if (outcome.status !== "fulfilled") continue;
+    for (const item of outcome.value) {
+      const provider = remoteSearchProvider(item) ?? "unknown";
+      unique.set(`${provider}:${item.importSlug ?? item.slug}`, item);
+    }
+  }
+  return [...unique.values()];
+}
+
 function normalizeBridgeText(value: string | null | undefined) {
   return String(value ?? "")
     .toLowerCase()
@@ -267,11 +336,13 @@ function sameRemoteSearchIdentity(left: RemoteSearchItem, right: RemoteSearchIte
 
 export function hasProviderSearchTokenCoverage(
   query: string,
-  item: Pick<RemoteSearchItem, "title" | "slug" | "alternateTitles">,
+  item: Pick<RemoteSearchItem, "title" | "slug" | "alternateTitles" | "year" | "yearLabel">,
 ) {
   return hasRequiredSearchTokenCoverage(query, [
     item.title,
     item.slug,
+    item.year,
+    item.yearLabel,
     ...(item.alternateTitles ?? []),
   ]);
 }

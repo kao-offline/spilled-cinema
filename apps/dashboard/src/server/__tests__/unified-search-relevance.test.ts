@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasProviderSearchTokenCoverage } from "../../../../../packages/node-client/src";
+import { buildCrossProviderSearchTasks, hasProviderSearchTokenCoverage } from "../../../../../packages/node-client/src";
 import { hasRequiredSearchTokenCoverage, scoreSearchCandidate } from "../../lib/search-ranking";
 
 describe("unified provider search relevance", () => {
@@ -90,5 +90,44 @@ describe("unified provider search relevance", () => {
     expect(forward).toBeGreaterThan(0);
     expect(swapped).toBeGreaterThan(0);
     expect(forward).toBeGreaterThan(swapped);
+  });
+});
+
+describe("cross-provider discovery", () => {
+  it("uses a corrected Bombuj hit to probe VidKing and SvetSerialu", () => {
+    const seed = {
+      title: "Avengers: Endgame",
+      slug: "avengers-endgame",
+      platform: "bombuj",
+      mediaType: "movie" as const,
+      year: "2019",
+    };
+    const tasks = buildCrossProviderSearchTasks("avengrs endgam", [seed]);
+    expect(tasks.map((task) => `${task.provider}:${task.query}`)).toEqual([
+      "vidking:Avengers: Endgame",
+      "svetserialu:Avengers: Endgame",
+    ]);
+  });
+
+  it("does not probe a provider that already has the same identity", () => {
+    const tasks = buildCrossProviderSearchTasks("avengrs endgam", [
+      { title: "Avengers: Endgame", slug: "avengers-endgame", platform: "bombuj", mediaType: "movie", year: "2019" },
+      { title: "Avengers: Endgame", slug: "movie/299534", platform: "vidking", mediaType: "movie", year: "2019" },
+    ]);
+    expect(tasks.some((task) => task.provider === "vidking")).toBe(false);
+  });
+
+  it("does not issue redundant follow-ups for an unchanged exact query", () => {
+    expect(buildCrossProviderSearchTasks("Silo", [
+      { title: "Silo", slug: "silo", platform: "svetserialu", mediaType: "serial", year: "2023" },
+    ])).toEqual([]);
+  });
+
+  it("keeps remakes as separate enrichment seeds", () => {
+    const tasks = buildCrossProviderSearchTasks("dun", [
+      { title: "Dune", slug: "dune-1984", platform: "bombuj", mediaType: "movie", year: "1984" },
+      { title: "Dune", slug: "dune-2021", platform: "bombuj", mediaType: "movie", year: "2021" },
+    ]);
+    expect(tasks.filter((task) => task.provider === "vidking")).toHaveLength(2);
   });
 });
