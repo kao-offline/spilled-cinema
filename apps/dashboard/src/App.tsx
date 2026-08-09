@@ -374,6 +374,7 @@ function toggleListValue(values: string[], value: string) {
 
 type ProviderFeedPageState = {
   query: string;
+  animeFilterMode: "all" | "anime" | "no-anime";
   feed: ProviderFeedResponse | null;
   feedLoading: boolean;
   feedError: string | null;
@@ -386,6 +387,7 @@ type ProviderFeedPageState = {
 function createEmptyProviderFeedPageState(): ProviderFeedPageState {
   return {
     query: "",
+    animeFilterMode: "all",
     feed: null,
     feedLoading: false,
     feedError: null,
@@ -490,7 +492,19 @@ function AppContent() {
   const [enabledProviderFeeds, setEnabledProviderFeeds] = useState<EnabledProviderFeed[]>(() =>
     sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), initialProviderModules),
   );
-  const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>({});
+  const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>(() => {
+    try {
+      const raw = localStorage.getItem("spilled.provider-feed-preferences.v1");
+      const saved = raw ? JSON.parse(raw) as Record<string, Partial<ProviderFeedPageState>> : {};
+      return Object.fromEntries(Object.entries(saved).map(([viewId, preference]) => [viewId, {
+        ...createEmptyProviderFeedPageState(),
+        query: typeof preference.query === "string" ? preference.query : "",
+        animeFilterMode: preference.animeFilterMode === "anime" || preference.animeFilterMode === "no-anime" ? preference.animeFilterMode : "all",
+      }]));
+    } catch {
+      return {};
+    }
+  });
   const [newEpisodeCheckState, setNewEpisodeCheckState] = useState<{ checking: boolean; message: string | null; error: boolean }>({
     checking: false,
     message: null,
@@ -1494,6 +1508,10 @@ function AppContent() {
   const downloadedShows = useMemo(
     () => state.shows.filter((show) => (downloadedCountByShow[show.slug] ?? 0) > 0),
     [downloadedCountByShow, state.shows],
+  );
+  const downloadedEpisodeSizes = useMemo(
+    () => Object.fromEntries(Object.entries(state.offlineDownloads).map(([episodeId, entry]) => [episodeId, entry.sizeBytes ?? 0])),
+    [state.offlineDownloads],
   );
   const remoteByPlatform = useMemo(() => {
     return remoteResults.reduce(
@@ -2678,6 +2696,14 @@ function AppContent() {
     });
   }
 
+  useEffect(() => {
+    const preferences = Object.fromEntries(Object.entries(providerFeedStates).map(([viewId, page]) => [viewId, {
+      query: page.query,
+      animeFilterMode: page.animeFilterMode,
+    }]));
+    localStorage.setItem("spilled.provider-feed-preferences.v1", JSON.stringify(preferences));
+  }, [providerFeedStates]);
+
   function handleBackHomeFromShow() {
     runRouteTransition(() => {
       pushRoute("/");
@@ -3637,8 +3663,11 @@ function AppContent() {
           ) : activeView === "downloaded" ? (
             <DownloadedView
               shows={downloadedShows}
-              downloadedCountByShow={downloadedCountByShow}
+              downloadedEpisodeIds={downloadedEpisodeIds}
+              downloadedEpisodeSizes={downloadedEpisodeSizes}
               onOpenShow={handleOpenShow}
+              onPlayEpisode={handleSelectEpisode}
+              onDeleteEpisode={handleDeleteFullDownload}
             />
           ) : activeView === "settings" ? (
             <SettingsView 
@@ -3713,6 +3742,8 @@ function AppContent() {
               feed={activeProviderFeedMeta.feed}
               items={activeProviderFeedItems}
               query={activeProviderFeedPageState.query}
+              animeFilterMode={activeProviderFeedPageState.animeFilterMode}
+              onAnimeFilterModeChange={(animeFilterMode) => updateProviderFeedPageState(activeProviderFeedMeta.viewId, { animeFilterMode })}
               loading={activeProviderFeedPageState.query.trim() ? activeProviderFeedPageState.searchLoading : activeProviderFeedPageState.feedLoading}
               error={activeProviderFeedPageState.query.trim() ? activeProviderFeedPageState.searchError : activeProviderFeedPageState.feedError}
               stale={activeProviderFeedPageState.feed?.stale ?? false}

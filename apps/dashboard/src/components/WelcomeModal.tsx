@@ -28,15 +28,15 @@ const SEARCH_IMPORT_TARGETS: CoachTarget[] = [
   {
     id: "search",
     selector: '[data-tutorial="search-bar"]',
-    title: "Search here",
-    body: "Search imported titles, try a movie name, or explore something new from this bar.",
+    title: "Find your next watch",
+    body: "Search your vault, browse live provider feeds, or paste a link to start an import.",
     side: "bottom",
   },
   {
     id: "import",
     selector: '[data-tutorial="sidebar-import"]',
-    title: "Import Tool",
-    body: "Open this when you want to add a movie or series into your library.",
+    title: "Bring it into Spilled",
+    body: "Import movies and series, then keep their artwork, episodes, subtitles, and progress together.",
     side: "right",
   },
 ];
@@ -45,15 +45,15 @@ const LIBRARY_TARGETS: CoachTarget[] = [
   {
     id: "favorites",
     selector: '[data-tutorial="sidebar-favorites"]',
-    title: "Favorites",
-    body: "Your saved picks live here.",
+    title: "Your shortcuts",
+    body: "Favorites keeps your picks close; Explore and provider feeds help you find the next one.",
     side: "right",
   },
   {
     id: "downloaded",
     selector: '[data-tutorial="sidebar-downloaded"]',
-    title: "Downloaded",
-    body: "Open the titles you already saved locally.",
+    title: "Watch anywhere",
+    body: "Downloaded titles work offline, while the player remembers progress and seen episodes per episode.",
     side: "right",
   },
 ];
@@ -233,21 +233,21 @@ function MobileTutorialStep({ stepIndex, onClose, onBack, onNext, onSelectStep, 
           </div>
 
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-            {isSearchStep ? "Search and import" : "Browse your library"}
+            {isSearchStep ? "Discover and import" : "Your watch space"}
           </h2>
           <p className="mt-3 text-sm leading-7 text-white/58">
             {isSearchStep
-              ? "Use the search bar at the top to find movies and series. Tap the result to play it or add it to your vault."
-              : "Your imported titles show up on the home rails. Use the dock at the bottom to jump to Favorites, Explore, or back to your Vault."}
+              ? "Search your collection, browse provider feeds, or paste a link. Open a result to import it or play it right away."
+              : "Your vault is the home base. Favorites, Explore, provider feeds, downloads, and Settings are always one move away."}
           </p>
 
           <div className="mt-5 flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.045] p-4">
             {isSearchStep ? <Search className="h-4 w-4 shrink-0 text-white/45" /> : <Compass className="h-4 w-4 shrink-0 text-white/45" />}
             <div className="flex items-center gap-2 text-sm text-white/70">
               {isSearchStep ? (
-                <span>Search any movie, series, or paste a link to import it instantly.</span>
+                <span>Search, import, save artwork, choose a source, and keep watching from where you left off.</span>
               ) : (
-                <span>Favorites and Explore are always one tap away in the dock.</span>
+                <span>Use the player for episodes, the vault for offline viewing, and Settings for your setup.</span>
               )}
             </div>
           </div>
@@ -363,12 +363,12 @@ export function WelcomeModal({
           </div>
 
           <h2 className="mt-2 text-xl font-semibold tracking-tight text-white">
-            {stepIndex === 1 ? "Search and import" : "Browse your library"}
+            {stepIndex === 1 ? "Discover and import" : "Your watch space"}
           </h2>
           <p className="mt-2 text-sm leading-6 text-white/56">
             {stepIndex === 1
-              ? "These are the real controls you will use to search and bring titles into Spilled."
-              : "These are the main library sections you will use once titles are inside your collection."}
+              ? "Search your collection, browse provider feeds, and import a title in a couple of taps."
+              : "Library, Favorites, Explore, Downloads, and Settings keep the whole experience in one place."}
           </p>
 
           <div className="mt-4 flex items-center justify-between">
@@ -430,11 +430,11 @@ export function WelcomeModal({
               </div>
 
               <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-[2rem]">
-                Set up your vault
+                Welcome to Spilled
               </h2>
 
               <p className="mt-3 max-w-lg text-sm leading-7 text-white/58">
-                Connect a local vault first so Spilled has a place to save downloads and episode data.
+                Connect a vault for downloads and offline playback. You can still explore, import, and stream while you set it up.
               </p>
             </div>
           </div>

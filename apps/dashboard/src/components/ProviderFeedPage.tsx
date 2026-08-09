@@ -10,6 +10,8 @@ type ProviderFeedPageProps = {
   feed: ProviderFeedManifest;
   items: ExploreItem[];
   query: string;
+  animeFilterMode: AnimeFilterMode;
+  onAnimeFilterModeChange: (mode: AnimeFilterMode) => void;
   loading: boolean;
   error: string | null;
   stale: boolean;
@@ -304,6 +306,8 @@ export function ProviderFeedPage({
   module,
   items,
   query,
+  animeFilterMode,
+  onAnimeFilterModeChange,
   loading,
   error,
   generatedAt,
@@ -315,7 +319,6 @@ export function ProviderFeedPage({
 }: ProviderFeedPageProps) {
   const [selectedItem, setSelectedItem] = useState<ExploreItem | null>(null);
   const [visibleCount, setVisibleCount] = useState(FEED_CHUNK_SIZE);
-  const [animeFilterMode, setAnimeFilterMode] = useState<AnimeFilterMode>("all");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const providerLabel = module.displayName;
   const filteredItems = useMemo(() => {
@@ -381,7 +384,7 @@ export function ProviderFeedPage({
             <button
               key={option.id}
               type="button"
-              onClick={() => setAnimeFilterMode(option.id)}
+      onClick={() => onAnimeFilterModeChange(option.id)}
               className={clsx(
                 "rounded-full px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] transition-colors",
                 animeFilterMode === option.id ? "bg-white text-black" : "text-white/52 hover:text-white",
