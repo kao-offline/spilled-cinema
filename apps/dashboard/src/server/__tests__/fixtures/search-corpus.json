@@ -29,7 +29,10 @@
     { "id": "the-office-uk", "title": "The Office", "year": "2001", "mediaType": "serial", "aliases": [], "franchise": "The Office" },
     { "id": "friends", "title": "Friends", "year": "1994", "mediaType": "serial", "aliases": ["Přátelé"], "franchise": "Friends" },
     { "id": "silo", "title": "Silo", "year": "2023", "mediaType": "serial", "aliases": [], "franchise": "Silo" },
-    { "id": "madness", "title": "Zběsilost", "year": "2015", "mediaType": "movie", "aliases": [], "franchise": "" }
+    { "id": "madness", "title": "Zběsilost", "year": "2015", "mediaType": "movie", "aliases": [], "franchise": "" },
+    { "id": "1899-series", "title": "1899", "year": "2022", "mediaType": "serial", "aliases": [], "franchise": "1899" },
+    { "id": "1899-paris", "title": "Fête de Paris 1899: Concours d'automobiles fleuries", "year": "1899", "mediaType": "movie", "aliases": [], "franchise": "" },
+    { "id": "1923-series", "title": "1923", "year": "2022", "mediaType": "serial", "aliases": [], "franchise": "Yellowstone" }
   ],
   "queries": [
     { "query": "avengrs endgam", "expected": "avengers-endgame", "tags": ["typo", "franchise"] },
@@ -57,6 +60,8 @@
     { "query": "pratele", "expected": "friends", "tags": ["czech"] },
     { "query": "office 2001", "expected": "the-office-uk", "tags": ["year", "remake"] },
     { "query": "office 2005", "expected": "the-office-us", "tags": ["year", "remake"] },
-    { "query": "silo", "expected": "silo", "reject": ["madness"], "tags": ["short", "false-positive"] }
+    { "query": "silo", "expected": "silo", "reject": ["madness"], "tags": ["short", "false-positive"] },
+    { "query": "1899", "expected": "1899-series", "tags": ["numeric-title", "series", "false-positive"] },
+    { "query": "1923", "expected": "1923-series", "tags": ["numeric-title", "series"] }
   ]
 }

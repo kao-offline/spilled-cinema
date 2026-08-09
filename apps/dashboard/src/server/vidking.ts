@@ -279,7 +279,11 @@ function buildPlayer(input: {
   };
 }
 
-function createSearchItem(candidate: Awaited<ReturnType<typeof searchTmdbTitleCandidates>>[number], index: number): ExploreItem | null {
+export function createVidkingSearchItem(
+  candidate: Awaited<ReturnType<typeof searchTmdbTitleCandidates>>[number],
+  index: number,
+  query: string,
+): ExploreItem | null {
   const tmdbMatch = candidate.id.match(/^tmdb:(movie|tv):(\d+)$/i);
   if (!tmdbMatch) {
     return null;
@@ -316,7 +320,10 @@ function createSearchItem(candidate: Awaited<ReturnType<typeof searchTmdbTitleCa
     availableNow: true,
     availability: "checking",
     availabilityReason: "Checking VidKing availability.",
-    matchScore: Math.max(candidate.matchScore, scoreSearchCandidate(candidate.title, [candidate.title, candidate.year], index)),
+    // Preserve relevance to what the user typed. Scoring a candidate against
+    // its own title made every result look exact, so long unrelated titles
+    // containing a numeric query (notably the series "1899") outranked it.
+    matchScore: Math.max(candidate.matchScore, scoreSearchCandidate(query, [candidate.title, candidate.originalTitle, candidate.year], index)),
     searchSignals: {
       source: "tmdb",
       popularity: candidate.popularity ?? null,
@@ -434,7 +441,7 @@ export async function searchVidking(query: string) {
   const candidates = await searchTmdbTitleCandidates(query, 16);
   return keepHighConfidenceSearchResults(
     candidates
-      .map(createSearchItem)
+      .map((candidate, index) => createVidkingSearchItem(candidate, index, query))
       .filter((item): item is ExploreItem => item !== null)
       .sort(compareSearchScores),
   ).slice(0, 12);

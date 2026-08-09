@@ -24,3 +24,9 @@ result whose normalized title differs from the raw query creates bounded probes
 for providers that do not already contain that exact title/media/year identity.
 The live probes are capped at one canonical query per seed, two seeds, and five
 seconds per provider call. Exact unchanged queries do not create redundant work.
+
+Standalone four-digit series titles such as `1899` and `1923` are tested as
+literal titles, not release-year filters. A four-digit token remains a year when
+it has title context, such as `Dune 1984`. VidKing candidate tests also verify
+that TMDB candidates are scored against the user's query rather than against
+their own titles.

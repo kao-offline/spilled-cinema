@@ -357,6 +357,13 @@ function parseSearchYear(value: string | null | undefined) {
   return match ? Number.parseInt(match[0], 10) : null;
 }
 
+function parseRequestedSearchYear(value: string) {
+  const tokens = tokenize(value);
+  // A lone four-digit value may be the literal title (1899, 1923). Treat it
+  // as a year only when another title token supplies context ("Dune 1984").
+  return tokens.length > 1 ? parseSearchYear(value) : null;
+}
+
 export type SearchScoreBreakdown = {
   text: number;
   identity: number;
@@ -387,7 +394,7 @@ export function explainUnifiedSearchResultScore(query: string, item: UnifiedSear
   const voteCount = Math.max(0, signals?.voteCount ?? 0);
   let popularity = Math.min(4_000, Math.round(popularityValue * 12)) + Math.min(4_000, Math.round(Math.log10(voteCount + 1) * 1_200));
   const candidateYear = parseSearchYear(signals?.releaseDate ?? item.year);
-  const requestedYear = parseSearchYear(query);
+  const requestedYear = parseRequestedSearchYear(query);
   const currentYear = new Date().getFullYear();
   let year = 0;
   if (requestedYear !== null && candidateYear !== null) {
