@@ -8,12 +8,14 @@ import { HomeRail } from "./HomeRail";
 import { showToast } from "./ToastHost";
 import { balancedBackgroundImage } from "../lib/image-resolution";
 import { readProviderHomePreference, writeProviderHomePreference, type ProviderHomeAnimeFilter, type ProviderHomeAudioFilter } from "../lib/provider-home-preferences";
+import { importSourceKey } from "../lib/import-guard";
 
 type ProviderHomeSurfaceProps = {
   provider: "svetserialu" | "bombuj";
   onImport: (item: ExploreItem) => void;
   onOpenVault: (item: ExploreItem) => void;
   isInVault?: (item: ExploreItem) => boolean;
+  importActivity?: { key: string; status: "importing" | "added" | "already" | "busy" | "error" } | null;
 };
 
 type AudioFilter = ProviderHomeAudioFilter;
@@ -35,7 +37,7 @@ const providerConfig = {
   },
 };
 
-export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault }: ProviderHomeSurfaceProps) {
+export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault, importActivity }: ProviderHomeSurfaceProps) {
   const config = providerConfig[provider];
   const validFeedIds = config.feeds.map(([id]) => id);
   const initialFilters = readProviderHomePreference(provider, validFeedIds);
@@ -94,7 +96,7 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
     } finally {
       setLoading(false);
     }
-  }, [feedId, loading, provider, query, response?.continueCursor]);
+  }, [feedId, loading, provider, query, response]);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -144,6 +146,8 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
       provider: item.provider,
       importSlug: item.importSlug,
       mediaType: item.mediaType,
+      inVault: item.inVault,
+      importStatus: importActivity?.key === importSourceKey(item.provider, item.importSlug) ? importActivity.status : undefined,
     });
     const movies = displayedItems.filter((item) => item.mediaType === "movie");
     const series = displayedItems.filter((item) => item.mediaType === "serial");
@@ -151,19 +155,19 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
     if (movies.length) nextRails.push({ id: "provider-movies", title: query.trim() ? "Movie results" : "Latest movies", kind: "poster", items: movies.map(toRailItem) });
     if (series.length) nextRails.push({ id: "provider-series", title: query.trim() ? "Series results" : feedId === "new-series" ? "New series" : "Latest episodes", kind: "poster", items: series.map(toRailItem) });
     return nextRails;
-  }, [displayedItems, feedId, query]);
+  }, [displayedItems, feedId, importActivity, query]);
 
   const heroArtwork = displayedItems[0]?.backdropUrl ?? displayedItems[0]?.posterUrl ?? null;
 
   return (
     <div className="min-h-screen bg-[#05060a] text-white">
-      <section className="relative flex min-h-[82vh] items-center justify-center overflow-hidden bg-[#0b0d12] px-6 pb-16 pt-28">
+      <section className="relative flex min-h-[58vh] items-center justify-center overflow-hidden bg-[#0b0d12] px-4 pb-12 pt-10 lg:min-h-[82vh] lg:px-6 lg:pb-16 lg:pt-28">
         {heroArtwork ? <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-30 blur-[2px]" style={balancedBackgroundImage(heroArtwork, "backdrop-hero")} /> : null}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_25%,rgba(135,103,67,.26),transparent_35%),linear-gradient(90deg,rgba(5,6,10,.94),rgba(5,6,10,.45),rgba(5,6,10,.82))]" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#05060a]/25 via-transparent to-[#05060a]" />
         <div className="relative w-full max-w-4xl text-center">
           <h1 className="text-3xl font-black tracking-[-.045em] text-white sm:text-5xl">{config.title}</h1>
-          <label className="mx-auto mt-7 flex h-16 max-w-3xl items-center gap-4 rounded-2xl border border-white/18 bg-black/45 px-5 shadow-[0_24px_80px_rgba(0,0,0,.48)] backdrop-blur-xl focus-within:border-white/45 sm:h-20 sm:px-7">
+          <label className="mx-auto mt-6 flex h-14 max-w-3xl items-center gap-3 rounded-2xl border border-white/18 bg-black/45 px-4 shadow-[0_24px_80px_rgba(0,0,0,.48)] backdrop-blur-xl focus-within:border-white/45 sm:mt-7 sm:h-20 sm:gap-4 sm:px-7">
             <Search className="h-5 w-5 shrink-0 text-white/45" />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles…" className="min-w-0 flex-1 bg-transparent text-lg font-semibold tracking-tight text-white outline-none placeholder:text-white/30 sm:text-2xl" />
           </label>
@@ -180,7 +184,12 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
       <main className="relative z-10 -mt-8 pb-24">
         {loading && rails.length === 0 ? <div className="px-5 py-14 text-sm font-semibold text-white/38 sm:px-10 lg:px-16">Loading…</div> : null}
         {!loading && rails.length === 0 ? <div className="px-5 py-14 text-sm font-semibold text-white/38 sm:px-10 lg:px-16">No titles found.</div> : null}
-        {rails.map((rail) => <HomeRail key={rail.id} rail={rail} layout="grid" onOpenLocal={() => {}} onImportRemote={(railItem) => { const item = itemByRailId.get(railItem.id); if (item) item.inVault ? onOpenVault(item) : onImport(item); }} />)}
+        {rails.map((rail) => <HomeRail key={rail.id} rail={rail} layout="grid" onOpenLocal={() => {}} onImportRemote={(railItem) => {
+          const item = itemByRailId.get(railItem.id);
+          if (!item) return;
+          if (item.inVault) onOpenVault(item);
+          else onImport(item);
+        }} />)}
         <div ref={loadMoreRef} className="flex h-24 items-center justify-center text-xs font-bold uppercase tracking-[.2em] text-white/25">
           {loading && rails.length > 0 ? "Loading more…" : response?.continueCursor ? "Scroll for more" : ""}
         </div>

@@ -31,6 +31,17 @@ type WebKitFullscreenVideo = HTMLVideoElement & {
   webkitExitFullscreen?: () => void;
 };
 
+function setIOSInlinePlayback(video: HTMLVideoElement, inline: boolean) {
+  video.playsInline = inline;
+  if (inline) {
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+  } else {
+    video.removeAttribute("playsinline");
+    video.removeAttribute("webkit-playsinline");
+  }
+}
+
 type LockableScreenOrientation = ScreenOrientation & {
   lock?: (orientation: "landscape") => Promise<void>;
   unlock?: () => void;
@@ -662,6 +673,7 @@ export function UniversalVideoPlayer({
     const handleWebKitEndFullscreen = () => {
       setFullscreen(false);
       setCssFullscreen(false);
+      if (video) setIOSInlinePlayback(video, true);
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     video?.addEventListener("webkitbeginfullscreen", handleWebKitBeginFullscreen);
@@ -811,10 +823,14 @@ export function UniversalVideoPlayer({
     if (appleTouchDevice && typeof video.webkitEnterFullscreen === "function") {
       try {
         // This must happen synchronously inside the tap handler on iOS.
+        // Installed iOS PWAs can expose the WebKit method while refusing it
+        // when the dynamically-created video is still forced to play inline.
+        setIOSInlinePlayback(video, false);
         video.webkitEnterFullscreen();
         setFullscreen(true);
         return;
       } catch {
+        setIOSInlinePlayback(video, true);
         // Continue to the standard API or app-level fallback.
       }
     }
@@ -834,10 +850,12 @@ export function UniversalVideoPlayer({
     // iPhone Safari exposes fullscreen on the video element rather than arbitrary containers.
     if (typeof video.webkitEnterFullscreen === "function") {
       try {
+        setIOSInlinePlayback(video, false);
         video.webkitEnterFullscreen();
         setFullscreen(true);
         return;
       } catch {
+        setIOSInlinePlayback(video, true);
         // Fall through to an app-level fullscreen surface on older embedded browsers.
       }
     }

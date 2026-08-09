@@ -3,6 +3,12 @@ export type ProviderHomeAudioFilter = "all" | "subtitles" | "dubbing";
 export type ProviderHomeAnimeFilter = "all" | "anime" | "no-anime";
 export type HomepageTab = "home" | ProviderHomeId;
 
+export const HOMEPAGE_SOURCE_TABS: ReadonlyArray<{ id: HomepageTab; label: string }> = [
+  { id: "home", label: "Home" },
+  { id: "svetserialu", label: "SvetSerialu" },
+  { id: "bombuj", label: "Bombuj" },
+];
+
 export type ProviderHomePreference = {
   feedId: string;
   audioFilter: ProviderHomeAudioFilter;

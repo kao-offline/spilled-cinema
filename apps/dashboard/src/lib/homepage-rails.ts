@@ -30,6 +30,8 @@ export type HomepageRailItem =
       provider: string;
       importSlug: string;
       mediaType: "movie" | "serial";
+      inVault?: boolean;
+      importStatus?: "importing" | "added" | "already" | "busy" | "error";
     };
 
 export type HomepageRail = {
@@ -81,6 +83,7 @@ function remoteRailItem(item: ExploreItem): HomepageRailItem {
     provider: item.provider,
     importSlug: item.importSlug,
     mediaType: item.mediaType,
+    inVault: item.inVault,
   };
 }
 

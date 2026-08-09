@@ -12,12 +12,13 @@ import type { ExploreItem, ImportedShow, LibraryState, UserTasteProfile } from "
 import type { IntegrationId } from "../lib/integrations";
 import { CommandMenu } from "./CommandMenu";
 import { readHomepageTab, writeHomepageTab, type HomepageTab } from "../lib/provider-home-preferences";
-import { findImportedShowBySource, selectPrimaryImportSource } from "../lib/import-guard";
+import { findImportedShowBySource, importSourceKey, selectPrimaryImportSource } from "../lib/import-guard";
 import { HomeHero } from "./HomeHero";
 import { HomeRail } from "./HomeRail";
 import { HomeTopChrome } from "./HomeTopChrome";
 import { MobileHomePage } from "./MobileHomePage";
 import { ProviderHomeSurface } from "./ProviderHomeSurface";
+import type { ImportActivity } from "./ImportActivityPopup";
 
 type CinematicHomePageProps = {
   state: LibraryState;
@@ -33,6 +34,7 @@ type CinematicHomePageProps = {
   onPlayShow: (show: ImportedShow) => void;
   onImportRemote: (platform: IntegrationId, slug: string, mediaType?: "movie" | "serial", context?: { title?: string; posterUrl?: string | null }) => Promise<unknown>;
   onEnsureHomepageTextArtwork: (slug: string) => void;
+  importActivity?: ImportActivity | null;
 };
 
 function normalizeRemoteResult(raw: RemoteCommandResult & {
@@ -85,6 +87,7 @@ export function CinematicHomePage({
   onPlayShow,
   onImportRemote,
   onEnsureHomepageTextArtwork,
+  importActivity,
 }: CinematicHomePageProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const [mobileSearchActive, setMobileSearchActive] = useState(false);
@@ -260,10 +263,17 @@ export function CinematicHomePage({
     return [...local, ...uniqueRemote, ...peopleResults];
   }, [commandQuery, downloadedCountByShow, peopleResults, remoteResults, state.shows]);
 
-  const rails = useMemo(
+  const baseRails = useMemo(
     () => buildHomepageRails({ shows: state.shows, downloadedCountByShow, trendingItems }),
     [downloadedCountByShow, state.shows, trendingItems],
   );
+  const rails = useMemo(() => baseRails.map((rail) => ({
+    ...rail,
+    items: rail.items.map((item) => {
+      if (item.kind !== "remote" || !importActivity || importActivity.key !== importSourceKey(item.provider as IntegrationId, item.importSlug)) return item;
+      return { ...item, importStatus: importActivity.status };
+    }),
+  })), [baseRails, importActivity]);
 
   useEffect(() => {
     const missingArtworkSlugs = rails
@@ -341,12 +351,31 @@ export function CinematicHomePage({
 
   const handleImportRailRemote = async (item: HomepageRailItem) => {
     if (item.kind !== "remote") return;
+    const existing = findImportedShowBySource(state.shows, item.provider as IntegrationId, item.importSlug);
+    if (existing) {
+      onOpenShow(existing.slug);
+      return;
+    }
     await onImportRemote(item.provider as IntegrationId, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
   };
 
   const handleImportFromEmpty = () => {
     onOpenLibrary();
   };
+
+  const providerSurface = homeTab === "home" ? null : (
+    <ProviderHomeSurface
+      key={homeTab}
+      provider={homeTab}
+      importActivity={importActivity}
+      isInVault={(item) => Boolean(findImportedShowBySource(state.shows, item.provider, item.importSlug))}
+      onImport={(item) => { void onImportRemote(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl }); }}
+      onOpenVault={(item) => {
+        const show = findImportedShowBySource(state.shows, item.provider, item.importSlug);
+        if (show) onOpenShow(show.slug);
+      }}
+    />
+  );
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
@@ -372,6 +401,9 @@ export function CinematicHomePage({
           if (featuredShow && latestFeaturedEpisode) onPlayShow(featuredShow);
           else openSearch();
         }}
+        activeTab={homeTab}
+        onTabChange={setHomeTab}
+        providerContent={providerSurface}
       />
 
       <div className="hidden lg:block">
@@ -409,18 +441,7 @@ export function CinematicHomePage({
               </div>
             </section>
           )}
-        </main></> : (
-          <ProviderHomeSurface
-            key={homeTab}
-            provider={homeTab}
-            isInVault={(item) => Boolean(findImportedShowBySource(state.shows, item.provider, item.importSlug))}
-            onImport={(item) => { void onImportRemote(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl }); }}
-            onOpenVault={(item) => {
-              const show = state.shows.find((entry) => entry.slug === item.slug || entry.slug === `bombuj-${item.slug}`);
-              if (show) onOpenShow(show.slug);
-            }}
-          />
-        )}
+        </main></> : providerSurface}
       </div>
 
       <CommandMenu

@@ -3615,6 +3615,7 @@ function AppContent() {
           onEnsureHomepageTextArtwork={(slug) => {
             void handleEnsureHomepageTextArtwork(slug);
           }}
+          importActivity={importActivity}
         />
         <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
         <ImportActivityPopup activity={importActivity} />

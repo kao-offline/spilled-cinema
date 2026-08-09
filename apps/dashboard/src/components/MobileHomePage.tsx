@@ -1,5 +1,6 @@
-import { LoaderCircle, MoreHorizontal } from "lucide-react";
+import { Check, Library, LoaderCircle, MoreHorizontal, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import type { CommandSearchResult } from "../lib/command-search";
 import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import type { ImportedShow } from "../lib/types";
@@ -7,6 +8,8 @@ import { balancedBackgroundImage } from "../lib/image-resolution";
 import { MobileDock } from "./MobileDock";
 import { CommandResultRow } from "./CommandResultRow";
 import { MobileBrandSearch } from "./MobileBrandSearch";
+import { HomeSourceTabs } from "./HomeSourceTabs";
+import type { HomepageTab } from "../lib/provider-home-preferences";
 
 type MobileHomePageProps = {
   featuredShow: ImportedShow | null;
@@ -27,6 +30,9 @@ type MobileHomePageProps = {
   onOpenLocal: (item: HomepageRailItem) => void;
   onImportRemote: (item: HomepageRailItem) => void;
   onPlayFeatured: () => void;
+  activeTab: HomepageTab;
+  onTabChange: (tab: HomepageTab) => void;
+  providerContent?: ReactNode;
 };
 
 function getItemImage(item: HomepageRailItem, kind: "banner" | "poster") {
@@ -39,6 +45,17 @@ function getItemImage(item: HomepageRailItem, kind: "banner" | "poster") {
   return item.kind === "local"
     ? item.homepagePosterUrl ?? item.posterUrl ?? item.backdropUrl ?? null
     : item.posterUrl ?? item.backdropUrl ?? null;
+}
+
+function MobileImportBadge({ item }: { item: HomepageRailItem }) {
+  if (item.kind !== "remote" || (!item.inVault && !item.importStatus)) return null;
+  const label = item.importStatus === "importing" ? "Importing" : item.importStatus === "added" ? "Added" : item.importStatus === "error" ? "Failed" : item.importStatus === "busy" ? "Busy" : "In vault";
+  return (
+    <span className="absolute left-2 top-2 z-10 inline-flex h-6 items-center gap-1 rounded-full border border-white/14 bg-black/72 px-2 text-[8px] font-black uppercase tracking-[.1em] text-white shadow-lg backdrop-blur-xl">
+      {item.importStatus === "importing" ? <LoaderCircle className="h-2.5 w-2.5 animate-spin" /> : item.importStatus === "error" ? <TriangleAlert className="h-2.5 w-2.5 text-red-200" /> : item.importStatus ? <Check className="h-2.5 w-2.5 text-emerald-200" /> : <Library className="h-2.5 w-2.5 text-emerald-200" />}
+      {label}
+    </span>
+  );
 }
 
 export function MobileHomePage({
@@ -60,6 +77,9 @@ export function MobileHomePage({
   onOpenLocal,
   onImportRemote,
   onPlayFeatured,
+  activeTab,
+  onTabChange,
+  providerContent,
 }: MobileHomePageProps) {
   const [searchActive, setSearchActive] = useState(false);
   const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
@@ -101,9 +121,10 @@ export function MobileHomePage({
           onOpenLibrary={onOpenLibrary}
           onOpenSettings={onOpenSettings}
         />
+        <HomeSourceTabs activeTab={activeTab} onTabChange={onTabChange} compact className="mt-3 w-full" />
       </header>
 
-      {searchActive && searchQuery.trim().length > 0 ? (
+      {activeTab === "home" && searchActive && searchQuery.trim().length > 0 ? (
         <section className="relative mx-4 mb-5 overflow-hidden rounded-[22px] border border-white/[0.09] bg-white/[0.045] shadow-[0_24px_60px_rgba(0,0,0,.38)] backdrop-blur-2xl">
           <div className="pointer-events-none absolute -left-12 top-0 h-36 w-36 rounded-full bg-orange-400/10 blur-3xl" />
           <div className="pointer-events-none absolute right-0 top-10 h-44 w-44 rounded-full bg-cyan-300/8 blur-3xl" />
@@ -136,7 +157,7 @@ export function MobileHomePage({
         </section>
       ) : null}
 
-      <main className="space-y-7">
+      {activeTab === "home" ? <main className="space-y-7">
         <section className="px-4 pt-1">
           <button
             type="button"
@@ -179,8 +200,10 @@ export function MobileHomePage({
                     <button
                       type="button"
                       onClick={() => activateItem(item)}
+                      disabled={item.kind === "remote" && item.importStatus === "importing"}
                       className="mobile-home-card relative block aspect-[2/3] w-full overflow-hidden rounded-[15px] bg-[#181a20] text-left transition active:scale-[0.96]"
                     >
+                      <MobileImportBadge item={item} />
                       {image ? <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(image, "poster-card")} /> : null}
                       <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/35 to-transparent" />
                     </button>
@@ -218,8 +241,10 @@ export function MobileHomePage({
                     key={item.id}
                     type="button"
                     onClick={() => activateItem(item)}
+                    disabled={item.kind === "remote" && item.importStatus === "importing"}
                     className="relative aspect-[16/7] w-[82vw] max-w-[430px] shrink-0 snap-center overflow-hidden rounded-[20px] bg-[#181a20]"
                   >
+                    <MobileImportBadge item={item} />
                     {image ? <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(image, "backdrop-thumb")} /> : null}
                   </button>
                 );
@@ -227,7 +252,7 @@ export function MobileHomePage({
             </div>
           </section>
         ))}
-      </main>
+      </main> : providerContent}
 
       <MobileDock active="home" onHome={() => undefined} onLibrary={onOpenLibrary} onFavorites={onOpenFavorites} onExplore={onOpenExplore} />
     </div>

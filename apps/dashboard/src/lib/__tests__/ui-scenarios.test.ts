@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { balanceImageResolution, shouldUseEconomyArtwork } from "../image-resolution";
 import {
+  HOMEPAGE_SOURCE_TABS,
   readHomepageTab,
   readProviderHomePreference,
   writeHomepageTab,
@@ -17,6 +18,11 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("responsive UI scenario matrix", () => {
+  it("keeps Home, SvetSerialu, and Bombuj available in every homepage layout", () => {
+    expect(HOMEPAGE_SOURCE_TABS.map((tab) => tab.id)).toEqual(["home", "svetserialu", "bombuj"]);
+    expect(HOMEPAGE_SOURCE_TABS.map((tab) => tab.label)).toEqual(["Home", "SvetSerialu", "Bombuj"]);
+  });
+
   it.each([
     { name: "phone", viewportWidth: 390, memory: 4, economy: true, heroSize: "w780" },
     { name: "desktop", viewportWidth: 1366, memory: 8, economy: false, heroSize: "w1280" },
