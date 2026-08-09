@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import type { ExploreItem, ProviderFeedManifest, ProviderModuleManifest } from "../lib/types";
 import { formatEpisodeTitle } from "../lib/episode-title";
+import { balanceImageResolution } from "../lib/image-resolution";
 import { showToast } from "./ToastHost";
 
 type ProviderFeedPageProps = {
@@ -109,6 +110,7 @@ function ProviderFeedItemCard({
   onClick: (item: ExploreItem) => void;
 }) {
   const artwork = getFeedArtwork(item);
+  const artworkUrl = balanceImageResolution(artwork.src, artwork.isBannerLike ? "backdrop-thumb" : "poster-card");
   const episodeLabel = buildEpisodeLabel(item);
 
   return (
@@ -118,22 +120,26 @@ function ProviderFeedItemCard({
       className="group relative overflow-hidden rounded-[24px] border border-white/8 bg-[#11141b] text-left shadow-[0_20px_52px_rgba(0,0,0,0.24)] transition-all duration-500 hover:-translate-y-1 hover:border-white/18"
     >
       <div className="relative aspect-[2/3] overflow-hidden">
-        {artwork.src ? (
+        {artworkUrl ? (
           <>
             <img
-              src={artwork.src}
+              src={artworkUrl}
               alt=""
               aria-hidden="true"
               className="absolute inset-0 h-full w-full scale-110 object-cover object-center opacity-26 blur-2xl transition-transform duration-700 group-hover:scale-[1.14]"
+              loading="lazy"
+              decoding="async"
             />
             <div className="absolute inset-[10px] overflow-hidden rounded-[18px] border border-white/8 bg-black/24">
               <img
-                src={artwork.src}
+                src={artworkUrl}
                 alt={item.title}
                 className={clsx(
                   "absolute inset-0 h-full w-full transition-transform duration-700 group-hover:scale-[1.03]",
                   artwork.isBannerLike ? "object-contain object-center p-1.5" : "object-cover object-center",
                 )}
+                loading="lazy"
+                decoding="async"
               />
             </div>
           </>
@@ -183,6 +189,7 @@ function ProviderFeedItemModal({
   }
 
   const artwork = getFeedArtwork(item);
+  const artworkUrl = balanceImageResolution(artwork.src, artwork.isBannerLike ? "backdrop-thumb" : "poster-detail");
   const metadata = [
     item.episode ? formatEpisodeTitle({
       showTitle: item.title,
@@ -212,21 +219,25 @@ function ProviderFeedItemModal({
         </button>
         <div className="grid min-h-[24rem] lg:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
           <div className="relative min-h-[16rem]">
-            {artwork.src ? (
+            {artworkUrl ? (
               <>
                 <img
-                  src={artwork.src}
+                  src={artworkUrl}
                   alt=""
                   aria-hidden="true"
                   className="absolute inset-0 h-full w-full scale-110 object-cover object-center opacity-30 blur-2xl"
+                  loading="eager"
+                  decoding="async"
                 />
                 <img
-                  src={artwork.src}
+                  src={artworkUrl}
                   alt={item.title}
                   className={clsx(
                     "absolute inset-0 h-full w-full",
                     artwork.isBannerLike ? "object-contain object-center p-4" : "object-cover object-center",
                   )}
+                  loading="eager"
+                  decoding="async"
                 />
               </>
             ) : (

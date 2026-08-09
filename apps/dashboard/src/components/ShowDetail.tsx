@@ -195,6 +195,9 @@ export function ShowDetail({
   const movieBusy = isBusy(movieJob);
   const movieDownloaded = Boolean(movieEpisode && (downloadedEpisodeIds.has(movieEpisode.id) || movieJob?.state === "completed"));
   const moviePercent = movieJob?.percent ?? 0;
+  const seriesDownloadJob = latestEpisode ? fullDownloadJobsByEpisode[latestEpisode.id] : undefined;
+  const seriesDownloadBusy = isBusy(seriesDownloadJob);
+  const seriesDownloaded = Boolean(latestEpisode && (downloadedEpisodeIds.has(latestEpisode.id) || seriesDownloadJob?.state === "completed"));
 
   const heroMetadata = getTitleMetadataParts(show);
 
@@ -510,6 +513,25 @@ export function ShowDetail({
                   ) : null}
                 </div>
               ) : null}
+              {!movieEpisode && latestEpisode ? (
+                <>
+                  <button
+                    onClick={() => {
+                      if (!seriesDownloadBusy && !seriesDownloaded) onStartFullDownload(latestEpisode);
+                    }}
+                    className={clsx(
+                      "inline-flex h-9 items-center gap-2 rounded-full border px-4 text-sm font-black transition",
+                      seriesDownloaded ? "border-emerald-300/25 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-white/10 text-white hover:bg-white/16",
+                    )}
+                    title={seriesDownloaded ? "Latest episode saved" : "Download latest episode"}
+                  >
+                    {seriesDownloadBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    {seriesDownloadBusy ? `${seriesDownloadJob?.percent ?? 0}%` : seriesDownloaded ? "LATEST SAVED" : "DOWNLOAD LATEST"}
+                  </button>
+                  {seriesDownloadBusy ? <button onClick={() => onCancelFullDownload(latestEpisode)} className="inline-flex h-9 items-center gap-2 rounded-full border border-red-300/20 bg-red-400/16 px-4 text-sm font-black text-red-100 hover:bg-red-400/24"><X className="h-4 w-4" /> CANCEL</button> : null}
+                  {seriesDownloaded ? <button onClick={() => onDeleteFullDownload(latestEpisode)} className="inline-flex h-9 items-center gap-2 rounded-full border border-red-300/20 bg-red-400/16 px-4 text-sm font-black text-red-100 hover:bg-red-400/24"><Trash2 className="h-4 w-4" /> DELETE</button> : null}
+                </>
+              ) : null}
             </div>
 
             <div className="pointer-events-auto relative">
@@ -698,7 +720,7 @@ export function ShowDetail({
               <button key={`${actor.name}:${index}`} type="button" onClick={() => setSelectedActor(actor)} className="flex min-w-0 items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3 py-3 text-left transition hover:border-white/16 hover:bg-white/[0.055]">
                 <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-white/10">
                   {actor.profileUrl ? (
-                    <img src={actor.profileUrl} alt={actor.name} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                    <img src={balanceImageResolution(actor.profileUrl, "poster-thumb") ?? actor.profileUrl} alt={actor.name} className="h-full w-full object-cover" loading="lazy" decoding="async" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-sm font-black text-white/54">{initialsForName(actor.name)}</div>
                   )}
@@ -763,7 +785,7 @@ export function ShowDetail({
               <div className="flex min-w-0 items-center gap-4 pr-12">
                 <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-white/8 ring-1 ring-white/10">
                     {selectedActor.profileUrl ? (
-                      <img src={selectedActor.profileUrl} alt={selectedActor.name} className="h-full w-full object-cover" />
+                      <img src={balanceImageResolution(selectedActor.profileUrl, "poster-thumb") ?? selectedActor.profileUrl} alt={selectedActor.name} className="h-full w-full object-cover" loading="lazy" decoding="async" />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-2xl font-black text-white/54">{initialsForName(selectedActor.name)}</div>
                     )}

@@ -6,6 +6,7 @@ import type { ExploreItem, ProviderFeedResponse } from "../lib/types";
 import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import { HomeRail } from "./HomeRail";
 import { showToast } from "./ToastHost";
+import { balancedBackgroundImage } from "../lib/image-resolution";
 
 type ProviderHomeSurfaceProps = {
   provider: "svetserialu" | "bombuj";
@@ -185,7 +186,7 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault }: Provide
   return (
     <div className="min-h-screen bg-[#05060a] text-white">
       <section className="relative flex min-h-[82vh] items-center justify-center overflow-hidden bg-[#0b0d12] px-6 pb-16 pt-28">
-        {heroArtwork ? <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-30 blur-[2px]" style={{ backgroundImage: `url(${heroArtwork})` }} /> : null}
+        {heroArtwork ? <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-30 blur-[2px]" style={balancedBackgroundImage(heroArtwork, "backdrop-hero")} /> : null}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_25%,rgba(135,103,67,.26),transparent_35%),linear-gradient(90deg,rgba(5,6,10,.94),rgba(5,6,10,.45),rgba(5,6,10,.82))]" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#05060a]/25 via-transparent to-[#05060a]" />
         <div className="relative w-full max-w-4xl text-center">
