@@ -36,6 +36,8 @@ import {
   selectEpisode,
   updateSelectedPlayer,
   updateEpisodePlaybackProgress,
+  markEpisodeWatched,
+  setEpisodeWatched,
   updateEpisodePlayerFailure,
   updateEpisodePlayerResolution,
   upsertImportedShow,
@@ -2676,6 +2678,14 @@ function AppContent() {
     });
   }
 
+  function handleBackHomeFromShow() {
+    runRouteTransition(() => {
+      pushRoute("/");
+      setActiveView("home");
+      setActiveShowSlug(null);
+    });
+  }
+
   function handleRemoveShow(slug: string) {
     const show = state.shows.find((entry) => entry.slug === slug) ?? null;
     if (!show) {
@@ -3382,6 +3392,14 @@ function AppContent() {
     setState(nextState);
   }
 
+  function handleEpisodeEnded(episodeId: string) {
+    setState(markEpisodeWatched(episodeId));
+  }
+
+  function handleSetEpisodeWatched(episodeId: string, watched: boolean) {
+    setState(setEpisodeWatched(episodeId, watched));
+  }
+
   function handleCloseWelcome() {
     dismissWelcome();
     setWelcomeOpen(false);
@@ -3557,9 +3575,11 @@ function AppContent() {
               onClose={handleClosePlayer}
               onSelectPlayer={handleSelectPlayer}
               onSelectEpisode={handleSelectEpisode}
+              onSetEpisodeWatched={handleSetEpisodeWatched}
               onResolvePlayer={handleResolvePlayer}
               onResolvePlayerFailure={handlePlayerResolveFailure}
               onPlaybackProgress={handlePlaybackProgress}
+              onEpisodeEnded={handleEpisodeEnded}
               autoPlayToken={playerAutoPlayToken}
             />
           ) : activeShowSlug ? (
@@ -3568,9 +3588,10 @@ function AppContent() {
               relatedShows={state.shows.filter((entry) => entry.slug !== activeShowSlug).slice(0, 8)}
               libraryState={state}
               tasteProfile={tasteProfile}
-              onBack={handleCloseShow}
+              onBack={handleBackHomeFromShow}
               onOpenRelatedShow={handleOpenShow}
               onSelectEpisode={handleSelectEpisode}
+              onSetEpisodeWatched={handleSetEpisodeWatched}
               onRemoveShow={() => handleRemoveShow(activeShowSlug)}
               onToggleFavorite={() => handleToggleFavorite(activeShowSlug)}
               onUpdateArtwork={(artwork) => handleUpdateShowArtwork(activeShowSlug, artwork)}

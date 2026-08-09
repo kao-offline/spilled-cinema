@@ -304,7 +304,8 @@ async function main() {
     passInFlight = false;
   }
   if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
-    setInterval(() => void main().catch((error) => console.error("[verifier]", error)), 60_000);
+    const intervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
+    setInterval(() => void main().catch((error) => console.error("[verifier]", error)), Math.max(intervalMs, 60_000));
   }
 }
 

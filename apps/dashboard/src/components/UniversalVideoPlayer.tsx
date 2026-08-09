@@ -111,6 +111,7 @@ type UniversalVideoPlayerProps = {
   skipSegments?: SkipSegment[];
   onSkipIntro?: (segment: SkipSegment) => void;
   onProgress?: (progress: { currentTime: number; duration: number }) => void;
+  onEnded?: () => void;
   onError?: (message: string) => void;
 };
 
@@ -184,6 +185,7 @@ export function UniversalVideoPlayer({
   skipSegments = [],
   onSkipIntro,
   onProgress,
+  onEnded,
   onError,
 }: UniversalVideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -193,6 +195,7 @@ export function UniversalVideoPlayer({
   const initialTimeRef = useRef(initialTime);
   const onErrorRef = useRef(onError);
   const onProgressRef = useRef(onProgress);
+  const onEndedRef = useRef(onEnded);
   const hlsRef = useRef<Hls | null>(null);
   const dashRef = useRef<MediaPlayerClass | null>(null);
   const lastAutoPlayTokenRef = useRef<number | null>(null);
@@ -255,6 +258,10 @@ export function UniversalVideoPlayer({
   useEffect(() => {
     onProgressRef.current = onProgress;
   }, [onProgress]);
+
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
 
   useEffect(() => {
     try {
@@ -504,6 +511,10 @@ export function UniversalVideoPlayer({
 
     const syncNow = () => sync(true);
     const syncThrottled = () => sync(false);
+    const markEnded = () => {
+      sync(true);
+      onEndedRef.current?.();
+    };
     const syncProgress = () => {
       skipSmallBufferGap();
       sync(false);
@@ -517,6 +528,7 @@ export function UniversalVideoPlayer({
     videoElement.addEventListener("loadedmetadata", restoreInitialTime, { once: true });
     videoElement.addEventListener("volumechange", syncNow);
     videoElement.addEventListener("ratechange", syncNow);
+    videoElement.addEventListener("ended", markEnded);
     videoElement.addEventListener("waiting", markWaiting);
     videoElement.addEventListener("seeking", prioritizeSeekTarget);
     videoElement.addEventListener("playing", markPlaying);

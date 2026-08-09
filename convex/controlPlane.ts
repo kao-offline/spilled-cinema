@@ -604,7 +604,7 @@ export const recordGatewayHeartbeatV2 = internalMutation({
     const payload = {
       nodeId: args.nodeId,
       gatewayAttestedAt: now,
-      expiresAt: now + Math.min(Math.max(args.ttlMs, 15_000), 120_000),
+      expiresAt: now + Math.min(Math.max(args.ttlMs, 30_000), 300_000),
       capacityClass: args.capacityClass,
       protocolVersion: args.protocolVersion,
     };

@@ -15,6 +15,7 @@ import { HomeHero } from "./HomeHero";
 import { HomeRail } from "./HomeRail";
 import { HomeTopChrome } from "./HomeTopChrome";
 import { MobileHomePage } from "./MobileHomePage";
+import { ProviderHomeSurface } from "./ProviderHomeSurface";
 
 type CinematicHomePageProps = {
   state: LibraryState;
@@ -91,6 +92,7 @@ export function CinematicHomePage({
   const [searchLoading, setSearchLoading] = useState(false);
   const [busyResultId, setBusyResultId] = useState<string | null>(null);
   const [trendingItems, setTrendingItems] = useState<ExploreItem[]>([]);
+  const [homeTab, setHomeTab] = useState<"home" | "svetserialu" | "bombuj">("home");
   const requestedArtworkSlugs = useRef(new Set<string>());
   const availabilityRequestKey = useRef<string>("");
 
@@ -381,9 +383,9 @@ export function CinematicHomePage({
       />
 
       <div className="hidden lg:block">
-        <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} />
+        <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} activeTab={homeTab} onTabChange={setHomeTab} />
 
-        <HomeHero
+        {homeTab === "home" ? <><HomeHero
           featuredShow={featuredShow}
           downloadedCount={featuredShow ? downloadedCountByShow[featuredShow.slug] ?? 0 : 0}
           onPlay={() => {
@@ -415,7 +417,16 @@ export function CinematicHomePage({
               </div>
             </section>
           )}
-        </main>
+        </main></> : (
+          <ProviderHomeSurface
+            provider={homeTab}
+            onImport={(item) => { void onImportRemote(item.provider, item.importSlug, item.mediaType); }}
+            onOpenVault={(item) => {
+              const show = state.shows.find((entry) => entry.slug === item.slug || entry.slug === `bombuj-${item.slug}`);
+              if (show) onOpenShow(show.slug);
+            }}
+          />
+        )}
       </div>
 
       <CommandMenu

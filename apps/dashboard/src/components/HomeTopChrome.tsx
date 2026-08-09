@@ -4,11 +4,21 @@ type HomeTopChromeProps = {
   onOpenSearch: () => void;
   onOpenLibrary: () => void;
   onOpenSettings: () => void;
+  activeTab?: "home" | "svetserialu" | "bombuj";
+  onTabChange?: (tab: "home" | "svetserialu" | "bombuj") => void;
 };
 
-export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings }: HomeTopChromeProps) {
+export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, activeTab = "home", onTabChange }: HomeTopChromeProps) {
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50 flex h-20 items-center justify-center px-4 sm:h-24 sm:px-8">
+      <nav className="pointer-events-auto absolute left-4 top-4 flex rounded-full border border-white/10 bg-black/38 p-1 shadow-xl backdrop-blur-xl sm:left-8 sm:top-6" aria-label="Homepage sources">
+        {(["home", "svetserialu", "bombuj"] as const).map((tab) => (
+          <button key={tab} type="button" onClick={() => onTabChange?.(tab)} className={`rounded-full px-3.5 py-2 text-[10px] font-black uppercase tracking-[.15em] transition sm:px-4 ${activeTab === tab ? "bg-white text-black" : "text-white/48 hover:text-white"}`}>
+            {tab === "home" ? "Home" : tab === "svetserialu" ? "SvetSerialu" : "Bombuj"}
+          </button>
+        ))}
+      </nav>
+
       <button type="button" onClick={onOpenLibrary} className="pointer-events-auto transition-transform hover:scale-105" aria-label="Open library">
         <img src="/Spilled.svg" alt="Spilled" className="h-9 w-auto brightness-0 invert sm:h-11" />
       </button>

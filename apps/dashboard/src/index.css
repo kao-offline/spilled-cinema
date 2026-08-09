@@ -171,8 +171,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  max-height: 23rem;
+  overflow-y: auto;
   padding-right: 0.75rem;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .spilled-season-tab {
@@ -287,6 +292,29 @@ body {
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes grid-scroll-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(28px) scale(0.97);
+  }
+  18%, 78% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.985);
+  }
+}
+
+@supports (animation-timeline: view()) {
+  .animate-grid-scroll-reveal {
+    animation: grid-scroll-reveal linear both;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+  }
 }
 
 @keyframes hero-progress {

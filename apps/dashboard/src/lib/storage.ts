@@ -999,9 +999,27 @@ export function updateEpisodePlaybackProgress(
               playbackPositionSeconds: currentTime,
               playbackDurationSeconds: duration && duration > 0 ? duration : episode.playbackDurationSeconds,
               playbackUpdatedAt: Date.now(),
+              watched: episode.watched || Boolean(duration && duration > 0 && currentTime >= Math.max(30, duration * 0.9)),
             }
           : episode,
       ),
+    })),
+  };
+  writeLibraryState(nextState);
+  return nextState;
+}
+
+export function markEpisodeWatched(episodeId: string) {
+  return setEpisodeWatched(episodeId, true);
+}
+
+export function setEpisodeWatched(episodeId: string, watched: boolean) {
+  const state = readLibraryState();
+  const nextState = {
+    ...state,
+    shows: state.shows.map((show) => ({
+      ...show,
+      episodes: show.episodes.map((episode) => episode.id === episodeId ? { ...episode, watched, playbackUpdatedAt: Date.now() } : episode),
     })),
   };
   writeLibraryState(nextState);

@@ -36,6 +36,7 @@ export type LibraryEpisode = {
   playbackPositionSeconds?: number;
   playbackDurationSeconds?: number;
   playbackUpdatedAt?: number;
+  watched?: boolean;
   importedAt: number;
 };
 

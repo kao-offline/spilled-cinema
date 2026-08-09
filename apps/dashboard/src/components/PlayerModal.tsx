@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, List, LoaderCircle, RotateCw, Settings } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, List, LoaderCircle, RotateCw, Settings } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -23,9 +23,11 @@ type PlayerModalProps = {
   onClose: () => void;
   onSelectPlayer: (episodeId: string, alias: PlayerAlias) => void;
   onSelectEpisode?: (episode: LibraryEpisode) => void;
+  onSetEpisodeWatched?: (episodeId: string, watched: boolean) => void;
   onResolvePlayer?: (episodeId: string, player: EpisodePlayer, playback: PlaybackResolveResult) => void;
   onResolvePlayerFailure?: (episodeId: string, player: EpisodePlayer, error: string) => void;
   onPlaybackProgress?: (episodeId: string, progress: { currentTime: number; duration: number }) => void;
+  onEpisodeEnded?: (episodeId: string) => void;
   autoPlayToken?: number | null;
 };
 
@@ -205,9 +207,11 @@ export function PlayerModal({
   onClose,
   onSelectPlayer,
   onSelectEpisode,
+  onSetEpisodeWatched,
   onResolvePlayer,
   onResolvePlayerFailure,
   onPlaybackProgress,
+  onEpisodeEnded,
   autoPlayToken = null,
 }: PlayerModalProps) {
   const [expandedLangs, setExpandedLangs] = useState<Set<string>>(new Set());
@@ -233,6 +237,8 @@ export function PlayerModal({
   const playbackErrorRetryRef = useRef<string | null>(null);
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
   const lastProgressSaveRef = useRef(0);
+  const onEpisodeEndedRef = useRef(onEpisodeEnded);
+  const selectorTouchStartRef = useRef<number | null>(null);
   const [skipSegments, setSkipSegments] = useState<SkipSegment[]>([]);
 
   const effectiveEpisode = useMemo(() => {
@@ -682,6 +688,9 @@ export function PlayerModal({
     lastProgressSaveRef.current = now;
     onPlaybackProgress(effectiveEpisode.id, progress);
   }, [effectiveEpisode?.id, onPlaybackProgress]);
+  useEffect(() => {
+    onEpisodeEndedRef.current = onEpisodeEnded;
+  }, [onEpisodeEnded]);
   const handlePlaybackError = useCallback((message: string) => {
     setPlaybackError(message);
     if (!activePlayer || activeIsLocal) return;
@@ -784,7 +793,7 @@ export function PlayerModal({
       <div className="absolute inset-0">
         {activeIsLocal ? (
           <UniversalVideoPlayer
-            key={`${activePlayer.alias}:${localPlaybackSrc}`}
+            key={`${effectiveEpisode.id}:${activePlayer.alias}:${localPlaybackSrc}`}
             src={localPlaybackSrc}
             poster={pageArtwork ?? undefined}
             title={pageTitle}
@@ -800,10 +809,11 @@ export function PlayerModal({
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
             skipSegments={skipSegments}
             onProgress={handlePlayerProgress}
+            onEnded={() => { if (effectiveEpisode) onEpisodeEndedRef.current?.(effectiveEpisode.id); }}
           />
         ) : remotePlaybackSrc ? (
           <UniversalVideoPlayer
-            key={`${playback?.playerAlias}:${remotePlaybackSrc}`}
+            key={`${effectiveEpisode.id}:${playback?.playerAlias ?? "player"}:${remotePlaybackSrc}`}
             src={remotePlaybackSrc}
             poster={pageArtwork ?? undefined}
             title={pageTitle}
@@ -819,6 +829,7 @@ export function PlayerModal({
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
             skipSegments={skipSegments}
             onProgress={handlePlayerProgress}
+            onEnded={() => { if (effectiveEpisode) onEpisodeEndedRef.current?.(effectiveEpisode.id); }}
             onError={handlePlaybackError}
           />
         ) : (
@@ -850,6 +861,10 @@ export function PlayerModal({
           </button>
         </div>
 
+        <div className="pointer-events-none absolute left-1/2 top-[max(1.25rem,env(safe-area-inset-top))] max-w-[52vw] -translate-x-1/2 truncate px-3 text-center text-sm font-black text-white drop-shadow-lg sm:max-w-[60vw] sm:text-base">
+          {pageTitle}
+        </div>
+
         <div className="pointer-events-auto flex flex-col items-end gap-2">
           <div className="flex gap-2">
             <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
@@ -865,8 +880,8 @@ export function PlayerModal({
       {episodeSelectorOpen ? (
         <>
         <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
-        <aside className="pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }}>
-          <header className="absolute right-2 top-2 z-20 px-2 py-1 sm:right-3">
+        <aside className="pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)", touchAction: "pan-y" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }} onTouchStart={(event) => { selectorTouchStartRef.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={(event) => { const start = selectorTouchStartRef.current; selectorTouchStartRef.current = null; const end = event.changedTouches[0]?.clientY; if (start == null || end == null || Math.abs(end - start) < 28) return; setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (end < start ? 1 : -1)))); }}>
+          <header className="absolute right-2 top-[4.5rem] z-20 px-2 py-1 sm:right-3">
             <div className="mb-2 flex items-center justify-between">
               <div>
                 <p className="sr-only">Episodes</p>
@@ -896,7 +911,7 @@ export function PlayerModal({
               const minutes = preview?.runtimeMinutes ?? (entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null);
               const airDate = preview?.airDate ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${preview.airDate}T00:00:00`)) : null;
               return (
-                <button key={entry.id} type="button" onClick={() => {
+                <div key={entry.id} onClick={() => {
                   if (!isFocused) { setFocusedEpisodeIndex(index); return; }
                   if (isCurrent) { setEpisodeSelectorOpen(false); return; }
                   setEpisodeTransitioning(true);
@@ -907,7 +922,7 @@ export function PlayerModal({
                   transform: `translate(calc(-50% + ${depth * 34}px), calc(-50% + ${offset * carouselCardStep}px)) scale(${depth === 0 ? 1 : depth === 1 ? 0.9 : 0.82})`,
                   filter: depth === 0 ? "none" : depth === 1 ? "brightness(.8)" : "brightness(.65)",
                 }}>
-                  <div className="absolute inset-0">
+                  <button type="button" className="absolute inset-0 text-left" aria-label={`Select ${title}`}>
                     <div className="absolute inset-0 bg-white/5">
                       {artwork ? <img src={artwork} alt="" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.04]" loading="lazy" referrerPolicy="no-referrer" /> : <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-800 via-zinc-950 to-black text-5xl font-black text-white/[.06]">{String(entry.episodeNumber ?? index + 1).padStart(2, "0")}</div>}
                       <div className="absolute inset-0 bg-gradient-to-t from-black/55 to-transparent" />
@@ -917,8 +932,22 @@ export function PlayerModal({
                       <p className="mt-1 text-[10px] font-medium text-white/45">{[minutes ? `${minutes} min` : null, airDate].filter(Boolean).join("  ·  ") || episodeShortLabel(entry)}</p>
                       {isFocused && preview?.description ? <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-white/52">{preview.description}</p> : null}
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  {onSetEpisodeWatched ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSetEpisodeWatched(entry.id, !entry.watched);
+                      }}
+                      className={clsx("absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-md transition", entry.watched ? "border-emerald-300/30 bg-emerald-400/22 text-emerald-100" : "border-white/20 bg-black/55 text-white/70 hover:bg-black/75 hover:text-white")}
+                      title={entry.watched ? "Mark as unseen" : "Mark as seen"}
+                      aria-label={entry.watched ? `Mark ${title} as unseen` : `Mark ${title} as seen`}
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
           </div>

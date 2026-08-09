@@ -145,7 +145,9 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export class NodeLink extends DurableObject<Env> {
-  private static readonly HEARTBEAT_INTERVAL_MS = 10_000;
+  // The control plane keeps a 90s lease, so a transient missed alarm does
+  // not immediately make an otherwise-connected node disappear.
+  private static readonly HEARTBEAT_INTERVAL_MS = 30_000;
 
   private attachment(socket: WebSocket) {
     return socket.deserializeAttachment() as

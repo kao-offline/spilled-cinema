@@ -683,7 +683,7 @@ export class SpilledCinemaNodeRuntime {
         relayPercent: 0,
       },
       publishedAt: Date.now(),
-      ttlMs: 60_000,
+      ttlMs: 300_000,
     };
 
     return {

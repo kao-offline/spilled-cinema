@@ -123,7 +123,7 @@ export function readControlPlaneReporterOptionsFromEnv(): ControlPlaneReporterOp
 
   return {
     baseUrl,
-    intervalMs: Number.parseInt(process.env.SPILLED_CONTROL_PLANE_INTERVAL_MS || "30000", 10),
+    intervalMs: Number.parseInt(process.env.SPILLED_CONTROL_PLANE_INTERVAL_MS || "120000", 10),
     fetchTimeoutMs: Number.parseInt(process.env.SPILLED_CONTROL_PLANE_FETCH_TIMEOUT_MS || "8000", 10),
   };
 }

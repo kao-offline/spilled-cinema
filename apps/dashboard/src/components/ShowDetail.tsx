@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
-import { ArrowLeft, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
@@ -20,6 +20,7 @@ type ShowDetailProps = {
   onBack: () => void;
   onOpenRelatedShow?: (slug: string) => void;
   onSelectEpisode: (episode: LibraryEpisode) => void;
+  onSetEpisodeWatched: (episodeId: string, watched: boolean) => void;
   onRemoveShow: () => void;
   onToggleFavorite: () => void;
   onUpdateArtwork: (artwork: {
@@ -139,6 +140,7 @@ export function ShowDetail({
   onBack,
   onOpenRelatedShow,
   onSelectEpisode,
+  onSetEpisodeWatched,
   onRemoveShow,
   onToggleFavorite,
   onUpdateArtwork,
@@ -348,7 +350,7 @@ export function ShowDetail({
       <section className="min-h-screen bg-[#08090d] px-5 py-6 text-white">
         <button onClick={onBack} className="inline-flex h-11 items-center gap-2 rounded-full bg-white/10 px-4 text-sm font-bold text-white hover:bg-white/16">
           <ArrowLeft className="h-4 w-4" />
-          Back to library
+          Back to home
         </button>
         <div className="mt-10 text-sm font-bold text-white/70">Show not found.</div>
       </section>
@@ -373,7 +375,7 @@ export function ShowDetail({
         <div className="relative z-20 flex min-h-[100svh] flex-col px-4 pb-28 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between px-5 pt-6 sm:px-8 lg:px-12">
             <div className="pointer-events-auto flex items-center gap-3">
-              <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to library">
+              <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to home">
                 <ArrowLeft className="h-5 w-5" />
               </button>
               <img src="/Spilled.svg" alt="Spilled" className="hidden h-11 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
@@ -435,6 +437,7 @@ export function ShowDetail({
                                 >
                                   <span className="spilled-episode-code">{episodeShortLabel(episode)}</span>
                                    <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
+                                   {episode.watched ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-400/18 text-emerald-200" title="Watched"><Check className="h-3 w-3" /></span> : null}
                                    {hasCzSubs ? <span className="spilled-subtitle-tag" title="Czech subtitles">CZ TIT</span> : null}
                                  </button>
                                  {episode.directors?.length ? (
@@ -445,6 +448,23 @@ export function ShowDetail({
                                  ) : null}
 
                                 <div className="flex shrink-0 items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onSetEpisodeWatched(episode.id, !episode.watched);
+                                    }}
+                                    className={clsx(
+                                      "spilled-episode-action",
+                                      episode.watched
+                                        ? "bg-emerald-400/16 text-emerald-100 ring-emerald-300/15 hover:bg-emerald-400/24"
+                                        : "bg-white/[0.07] text-white/58 ring-white/[0.08] hover:bg-white/12 hover:text-white",
+                                    )}
+                                    title={episode.watched ? "Mark as unseen" : "Mark as seen"}
+                                    aria-label={episode.watched ? `Mark ${episodeTitle} as unseen` : `Mark ${episodeTitle} as seen`}
+                                  >
+                                    <Check className="h-4 w-4" />
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={(event) => {

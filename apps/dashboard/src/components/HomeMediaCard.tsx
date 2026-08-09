@@ -8,9 +8,10 @@ type HomeMediaCardProps = {
   railKind: HomepageRailKind;
   onOpen: () => void;
   onImport: () => void;
+  layout?: "rail" | "grid";
 };
 
-export function HomeMediaCard({ item, railKind, onOpen, onImport }: HomeMediaCardProps) {
+export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail" }: HomeMediaCardProps) {
   const isBanner = railKind === "banner";
   const imageUrl = isBanner
     ? item.kind === "local"
@@ -24,7 +25,7 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport }: HomeMediaCar
   const primaryAction = item.kind === "local" ? onOpen : onImport;
 
   return (
-    <div className={isBanner ? "group w-[78vw] max-w-[420px] shrink-0 text-left sm:w-[31rem]" : "group w-36 shrink-0 text-left sm:w-44"}>
+    <div className={layout === "grid" ? "animate-grid-scroll-reveal group min-w-0 text-left" : isBanner ? "group w-[78vw] max-w-[420px] shrink-0 text-left sm:w-[31rem]" : "group w-36 shrink-0 text-left sm:w-44"}>
       <button
         type="button"
         onClick={primaryAction}
