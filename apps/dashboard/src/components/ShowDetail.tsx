@@ -381,7 +381,7 @@ export function ShowDetail({
               <img src="/Spilled.svg" alt="Spilled" className="hidden h-11 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
             </div>
 
-            <div className="pointer-events-auto absolute left-1/2 top-4 w-[min(58vw,23rem)] -translate-x-1/2 sm:top-6 sm:w-[min(74vw,23rem)]">
+            <div className="hidden">
               {sortedEpisodes.length > 1 ? (
                 <div className="relative">
                   <button
@@ -561,7 +561,7 @@ export function ShowDetail({
                 </span>
               ))}
             </div>
-            <p className="line-clamp-4 max-w-[44rem] text-[13px] font-medium leading-snug text-white/88 drop-shadow-[0_2px_14px_rgba(0,0,0,0.85)] sm:line-clamp-none sm:text-base">
+            <p className="line-clamp-4 max-w-[44rem] text-[13px] font-medium leading-snug text-white/88 drop-shadow-[0_2px_14px_rgba(0,0,0,0.85)] sm:text-base">
               {displayDescription}
             </p>
 
