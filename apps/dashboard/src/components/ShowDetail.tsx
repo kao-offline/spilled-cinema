@@ -678,8 +678,10 @@ export function ShowDetail({
                     <span className="text-[10px] font-black uppercase tracking-[0.18em] text-white/35">{episodeShortLabel(episode)}</span>
                     <Play className="h-3.5 w-3.5 fill-white/65 text-white/65 transition group-hover:fill-white group-hover:text-white" />
                   </div>
-                  <div className="truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
-                  {hasCzechSubtitles(episode) ? <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-sky-300/10 text-sky-200/80" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="min-w-0 truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
+                    {hasCzechSubtitles(episode) ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-300/10 text-sky-200/80" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
+                  </div>
                 </button>
               ))}
             </div>
