@@ -113,7 +113,7 @@ const controlPlaneUrl = (
   (managedGatewayEnabled ? "https://cheerful-lynx-4.convex.site/server" : "")
 ).replace(/\/$/, "");
 const gatewayUrl = process.env.SPILLED_GATEWAY_URL?.trim() ||
-  (managedGatewayEnabled ? "https://spilled-node-gateway.hrdykrystof.workers.dev" : "");
+  (managedGatewayEnabled ? "https://spilled-node-gateway.4thsj85ywn.workers.dev" : "");
 const gatewayJwksUrl = process.env.SPILLED_CONTROL_PLANE_JWKS_URL?.trim() ||
   (controlPlaneUrl ? `${controlPlaneUrl}/v2/jwks` : "");
 const publicTempRoot = resolve(process.env.SPILLED_PUBLIC_TEMP_PATH || tmpdir(), "spilled-public-jobs");
