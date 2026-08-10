@@ -1,7 +1,7 @@
 {
   "name": "@spilledcinema/verifier-windows",
   "private": true,
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Native Spilled Verifier tray app with logs, restart, and self-update",
   "author": "Overload Studio",
   "main": "main.js",

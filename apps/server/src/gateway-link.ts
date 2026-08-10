@@ -184,7 +184,7 @@ export class ManagedGatewayLink {
       void this.connect();
     }, delay);
     this.reconnectTimer.unref?.();
-    if (this.reconnectAttempts >= 4) {
+    if (this.reconnectAttempts === 4) {
       this.options.onReconnectStalled?.();
     }
   }

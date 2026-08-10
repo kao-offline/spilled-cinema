@@ -303,10 +303,13 @@ async function main() {
   } finally {
     passInFlight = false;
   }
-  if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
-    const intervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
-    setInterval(() => void main().catch((error) => console.error("[verifier]", error)), Math.max(intervalMs, 60_000));
-  }
 }
 
 await main();
+if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
+  const configuredIntervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
+  const intervalMs = Number.isFinite(configuredIntervalMs)
+    ? Math.max(configuredIntervalMs, 60_000)
+    : 600_000;
+  setInterval(() => void main().catch((error) => console.error("[verifier]", error)), intervalMs);
+}
