@@ -82,4 +82,54 @@ describe("SvetSerialu import", () => {
     });
     expect(episode.selectedPlayerAlias).toBe(episode.players[0].alias);
   });
+
+  it("keeps 350 episodes ordered while resolving sources through the bounded fast queue", async () => {
+    const episodeCount = 350;
+    let activeSources = 0;
+    let maximumActiveSources = 0;
+    const sourceLink = (episode: number) => Buffer.from(`/sources/filemoon/scale-${episode}`, "utf8").toString("base64");
+    const episodeHtml = (episode: number, includeListId = false) => `
+      ${includeListId ? '<a href="/episodes-list?tvShowId=999">Episodes</a>' : ""}
+      <div class="LangGroup"><div class="LangHeader">CZ</div><div class="tabshe">
+        <a class="source_link filemoon" data-iframe="${sourceLink(episode)}">FileMoon</a>
+      </div></div>`;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/serial/scale-show")) {
+        return new Response(`
+          <h1 class="nunito">Scale Show</h1><span class="year nunito">2026</span>
+          <a href="/serial/scale-show/s1e1" class="button starwatch">Watch</a>
+        `, { status: 200 });
+      }
+      if (url.includes("/episodes-list?tvShowId=999&season=1&episode=1")) {
+        return new Response(`<option value="1">1</option>${Array.from({ length: episodeCount }, (_, index) => {
+          const episode = index + 1;
+          return `<a href="/serial/scale-show/s1e${episode}" class="seasonLinks"><span class="ep_numb">${episode}</span><span class="ep_name">Episode ${episode}</span></a>`;
+        }).join("")}`, { status: 200 });
+      }
+      const episodeMatch = url.match(/\/serial\/scale-show\/s1e(\d+)$/);
+      if (episodeMatch) {
+        const episode = Number.parseInt(episodeMatch[1], 10);
+        return new Response(episodeHtml(episode, episode === 1), { status: 200 });
+      }
+      const sourceMatch = url.match(/\/sources\/filemoon\/scale-(\d+)$/);
+      if (sourceMatch) {
+        activeSources += 1;
+        maximumActiveSources = Math.max(maximumActiveSources, activeSources);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        activeSources -= 1;
+        return new Response(`<iframe src="https://filemoon.sx/e/scale-${sourceMatch[1]}"></iframe>`, { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const { fetchSvetSerialuShow } = await import("../svetserialu");
+    const show = await fetchSvetSerialuShow("scale-show");
+    expect(show.episodes).toHaveLength(episodeCount);
+    expect(show.episodes[0].episodeNumber).toBe(1);
+    expect(show.episodes.at(-1)?.episodeNumber).toBe(episodeCount);
+    expect(show.episodes.every((episode) => episode.players[0]?.embedUrl.startsWith("https://filemoon.sx/e/scale-"))).toBe(true);
+    expect(maximumActiveSources).toBeGreaterThan(4);
+    expect(maximumActiveSources).toBeLessThanOrEqual(64);
+  });
 });

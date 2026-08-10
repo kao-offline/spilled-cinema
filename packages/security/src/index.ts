@@ -196,7 +196,15 @@ function transportAad(envelope: Pick<
   EncryptedRequestEnvelopeV2,
   "version" | "requestId" | "ticketId" | "issuedAt" | "expiresAt" | "nonce" | "clientEphemeralKey"
 >) {
-  return Buffer.from(stableStringify(envelope), "utf8");
+  return Buffer.from(stableStringify({
+    version: envelope.version,
+    requestId: envelope.requestId,
+    ticketId: envelope.ticketId,
+    issuedAt: envelope.issuedAt,
+    expiresAt: envelope.expiresAt,
+    nonce: envelope.nonce,
+    clientEphemeralKey: envelope.clientEphemeralKey,
+  }), "utf8");
 }
 
 export function encryptNodeRequest(input: {
@@ -206,6 +214,7 @@ export function encryptNodeRequest(input: {
   issuedAt: number;
   expiresAt: number;
   plaintext: Buffer | string;
+  acceptEncoding?: "gzip";
 }): EncryptedRequestEnvelopeV2 {
   return createEncryptedNodeRequest(input).envelope;
 }
@@ -217,6 +226,7 @@ export function createEncryptedNodeRequest(input: {
   issuedAt: number;
   expiresAt: number;
   plaintext: Buffer | string;
+  acceptEncoding?: "gzip";
 }) {
   const ephemeral = generateKeyPairSync("x25519");
   const ephemeralPublicKey = ephemeral.publicKey.export({ type: "spki", format: "pem" }).toString();
@@ -229,6 +239,7 @@ export function createEncryptedNodeRequest(input: {
     expiresAt: input.expiresAt,
     nonce: base64UrlEncode(nonce),
     clientEphemeralKey: ephemeralPublicKey,
+    ...(input.acceptEncoding ? { acceptEncoding: input.acceptEncoding } : {}),
   };
   const sharedSecret = diffieHellman({
     privateKey: ephemeral.privateKey,
@@ -281,7 +292,7 @@ export function decryptNodeRequest(
 
 function responseAad(response: Pick<
   EncryptedResponseEnvelopeV2,
-  "version" | "requestId" | "ticketId" | "issuedAt" | "nonce"
+  "version" | "requestId" | "ticketId" | "issuedAt" | "nonce" | "contentEncoding"
 >) {
   return Buffer.from(stableStringify(response), "utf8");
 }
@@ -291,6 +302,7 @@ export function encryptNodeResponse(input: {
   nodeTransportPrivateKey: string;
   plaintext: Buffer | string;
   issuedAt?: number;
+  contentEncoding?: "gzip";
 }): EncryptedResponseEnvelopeV2 {
   const sharedSecret = diffieHellman({
     privateKey: createPrivateKey(input.nodeTransportPrivateKey),
@@ -304,6 +316,7 @@ export function encryptNodeResponse(input: {
     ticketId: input.request.ticketId,
     issuedAt: input.issuedAt ?? Date.now(),
     nonce: base64UrlEncode(nonce),
+    ...(input.contentEncoding ? { contentEncoding: input.contentEncoding } : {}),
   };
   const plaintext = typeof input.plaintext === "string" ? Buffer.from(input.plaintext, "utf8") : input.plaintext;
   const cipherNonce = createHash("sha256").update(nonce).digest().subarray(0, 12);
@@ -345,6 +358,7 @@ export function decryptNodeResponse(input: {
     ticketId: input.response.ticketId,
     issuedAt: input.response.issuedAt,
     nonce: input.response.nonce,
+    ...(input.response.contentEncoding ? { contentEncoding: input.response.contentEncoding } : {}),
   }), ciphertext, base64UrlDecode(input.response.authenticationTag));
 }
 

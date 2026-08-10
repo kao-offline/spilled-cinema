@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import {
   decryptNodeRequest,
   decryptNodeResponse,
@@ -183,6 +184,46 @@ describe("node v2 transport security", () => {
       ok: true,
       result: { echoed: { query: "Silo" } },
     });
+
+    const largeUnsigned = {
+      ...unsigned,
+      ticketId: "ticket-rpc-large",
+      maxRequestBytes: 64 * 1024,
+      maxResponseBytes: 4 * 1024 * 1024,
+      nonce: "ticket-large-nonce",
+    };
+    const largeTicket: CapabilityTicketV2 = { ...largeUnsigned, signature: signPayload(largeUnsigned, signerPrivate) };
+    const largeRequest = createEncryptedNodeRequest({
+      nodeTransportPublicKey: identity.x25519PublicKey,
+      requestId: "request-rpc-large",
+      ticketId: largeTicket.ticketId,
+      issuedAt: now,
+      expiresAt: now + 10_000,
+      plaintext: JSON.stringify({ method: "provider.search", params: { query: "large" } }),
+      acceptEncoding: "gzip",
+    });
+    const episodes = Array.from({ length: 350 }, (_, index) => ({
+      id: `episode-${index}-${"x".repeat(128)}`,
+      players: Array.from({ length: 8 }, (_unused, playerIndex) => ({
+        embedUrl: `https://storage-${playerIndex}.example/e/${index}/${"token".repeat(12)}`,
+      })),
+    }));
+    const largeResponse = await runtime.handleEncryptedRemoteRequest({
+      ticket: largeTicket,
+      envelope: largeRequest.envelope,
+      controlPlanePublicKey: signerPublic,
+      execute: async () => ({ show: { title: "Large", episodes } }),
+    });
+    expect(largeResponse.contentEncoding).toBe("gzip");
+    expect(Buffer.byteLength(JSON.stringify(largeResponse))).toBeLessThan(900 * 1024);
+    const compressedPayload = decryptNodeResponse({
+      response: largeResponse,
+      request: largeRequest.envelope,
+      clientEphemeralPrivateKey: largeRequest.clientEphemeralPrivateKey,
+      nodeTransportPublicKey: identity.x25519PublicKey,
+    });
+    expect(JSON.parse(gunzipSync(compressedPayload).toString("utf8")).result.show.episodes).toHaveLength(350);
+
     await expect(runtime.handleEncryptedRemoteRequest({
       ticket,
       envelope: request.envelope,

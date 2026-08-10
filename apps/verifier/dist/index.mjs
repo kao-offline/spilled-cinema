@@ -58,7 +58,15 @@ function decryptChaCha20Poly1305(key, nonce, aad, ciphertext, authenticationTag)
   ])));
 }
 function transportAad(envelope) {
-  return Buffer.from(stableStringify(envelope), "utf8");
+  return Buffer.from(stableStringify({
+    version: envelope.version,
+    requestId: envelope.requestId,
+    ticketId: envelope.ticketId,
+    issuedAt: envelope.issuedAt,
+    expiresAt: envelope.expiresAt,
+    nonce: envelope.nonce,
+    clientEphemeralKey: envelope.clientEphemeralKey
+  }), "utf8");
 }
 function createEncryptedNodeRequest(input) {
   const ephemeral = generateKeyPairSync("x25519");
@@ -71,7 +79,8 @@ function createEncryptedNodeRequest(input) {
     issuedAt: input.issuedAt,
     expiresAt: input.expiresAt,
     nonce: base64UrlEncode(nonce),
-    clientEphemeralKey: ephemeralPublicKey
+    clientEphemeralKey: ephemeralPublicKey,
+    ...input.acceptEncoding ? { acceptEncoding: input.acceptEncoding } : {}
   };
   const sharedSecret = diffieHellman({
     privateKey: ephemeral.privateKey,
@@ -114,7 +123,8 @@ function decryptNodeResponse(input) {
     requestId: input.response.requestId,
     ticketId: input.response.ticketId,
     issuedAt: input.response.issuedAt,
-    nonce: input.response.nonce
+    nonce: input.response.nonce,
+    ...input.response.contentEncoding ? { contentEncoding: input.response.contentEncoding } : {}
   }), ciphertext, base64UrlDecode(input.response.authenticationTag));
 }
 function verifyPayload(payload, signature, publicKeyPem) {

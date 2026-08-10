@@ -88,6 +88,7 @@ export type EncryptedRequestEnvelopeV2 = {
   expiresAt: number;
   nonce: string;
   clientEphemeralKey: string;
+  acceptEncoding?: "gzip";
   ciphertext: string;
   authenticationTag: string;
 };
@@ -98,6 +99,7 @@ export type EncryptedResponseEnvelopeV2 = {
   ticketId: string;
   issuedAt: number;
   nonce: string;
+  contentEncoding?: "gzip";
   ciphertext: string;
   authenticationTag: string;
 };

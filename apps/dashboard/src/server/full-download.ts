@@ -3342,7 +3342,34 @@ function orderPlaybackPlayers(input: PlaybackResolveInput) {
   return [active, ...withDirect, ...sameLanguage, ...subtitleFallbacks, ...remainingPreferred, ...crossLanguageFallbacks].filter(Boolean) as typeof remotePlayers;
 }
 
-export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
+const playbackResolutionInflight = new Map<string, Promise<PlaybackResolveResult>>();
+const PLAYBACK_PREFERRED_BUDGET_MS = Math.max(
+  250,
+  Number.parseInt(process.env.SPILLED_PLAYBACK_PREFERRED_BUDGET_MS ?? "2500", 10) || 2500,
+);
+const PLAYBACK_DEADLINE_MS = Math.max(
+  1_000,
+  Number.parseInt(process.env.SPILLED_PLAYBACK_DEADLINE_MS ?? "9500", 10) || 9500,
+);
+
+function playbackInflightKey(input: PlaybackResolveInput) {
+  return JSON.stringify([
+    input.episodeId,
+    input.activePlayerAlias,
+    input.players.map((player) => [
+      player.alias,
+      player.provider,
+      player.language,
+      player.sourcePageUrl,
+      player.embedUrl,
+      player.streamUrl,
+      player.resolvedUrl,
+      player.resolvedAt,
+    ]),
+  ]);
+}
+
+async function resolvePlaybackStreamUncoalesced(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
   const orderedPlayers = orderPlaybackPlayers(input);
   const failures: PlaybackResolveFailure[] = [];
   const activePlayer = orderedPlayers.find((player) => player.alias === input.activePlayerAlias);
@@ -3444,6 +3471,9 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
   };
 
   const resolveAll = async (): Promise<PlaybackResolveResult> => {
+    if (orderedPlayers.length === 0) {
+      throw new Error("No remote player is available for playback resolution.");
+    }
     if (orderedPlayers.length <= 1) {
       return attemptPlayer(orderedPlayers[0]);
     }
@@ -3452,22 +3482,68 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
     const restPlayers = orderedPlayers.slice(1);
 
     const activeAttempt = attemptPlayer(activePlayerFirst).catch(() => null);
-
     const restAttempts = restPlayers.map((p) => attemptPlayer(p).catch(() => null));
-
-    const activeResult = await activeAttempt;
-    if (activeResult) return activeResult;
-
-    const firstFallback = await Promise.any(restAttempts.map((p) => p.then((result) => {
+    const firstFallback = Promise.any(restAttempts.map((p) => p.then((result) => {
       if (result) return result;
       throw new Error("fallback failed");
     })));
-    if (firstFallback) return firstFallback;
+
+    let preferredTimer: ReturnType<typeof setTimeout> | undefined;
+    const preferredWindow = await Promise.race([
+      activeAttempt.then((result) => ({ settled: true as const, result })),
+      new Promise<{ settled: false; result: null }>((resolvePromise) => {
+        preferredTimer = setTimeout(
+          () => resolvePromise({ settled: false, result: null }),
+          PLAYBACK_PREFERRED_BUDGET_MS,
+        );
+        preferredTimer.unref?.();
+      }),
+    ]).finally(() => {
+      if (preferredTimer) clearTimeout(preferredTimer);
+    });
+    if (preferredWindow.settled && preferredWindow.result) return preferredWindow.result;
+    if (preferredWindow.settled) return firstFallback;
+
+    // The preferred provider still gets an exclusive window. Once it exceeds
+    // that budget, accept the first already-valid result instead of waiting on
+    // a slow tail while completed fallback work sits idle.
+    const firstAvailable = await Promise.any([
+      activeAttempt.then((result) => {
+        if (result) return result;
+        throw new Error("preferred player failed");
+      }),
+      firstFallback,
+    ]);
+    if (firstAvailable) return firstAvailable;
 
     throw new Error("All player resolution attempts failed.");
   };
 
-  return resolveAll();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolveAll(),
+      new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error(`Playback resolution exceeded ${PLAYBACK_DEADLINE_MS}ms.`)),
+          PLAYBACK_DEADLINE_MS,
+        );
+        deadline.unref?.();
+      }),
+    ]);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+  }
+}
+
+export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
+  const key = playbackInflightKey(input);
+  const pending = playbackResolutionInflight.get(key);
+  if (pending) return pending;
+  const resolution = resolvePlaybackStreamUncoalesced(input)
+    .finally(() => playbackResolutionInflight.delete(key));
+  playbackResolutionInflight.set(key, resolution);
+  return resolution;
 }
 
 export async function createFullDownloadJob(input: CreateDownloadInput): Promise<FullDownloadJob> {

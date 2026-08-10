@@ -38,6 +38,7 @@ type EncryptedRequestEnvelopeV2 = {
   expiresAt: number;
   nonce: string;
   clientEphemeralKey: string;
+  acceptEncoding?: "gzip";
   ciphertext: string;
   authenticationTag: string;
 };
@@ -48,6 +49,7 @@ type EncryptedResponseEnvelopeV2 = {
   ticketId: string;
   issuedAt: number;
   nonce: string;
+  contentEncoding?: "gzip";
   ciphertext: string;
   authenticationTag: string;
 };
@@ -155,6 +157,7 @@ export function createBrowserEncryptedNodeRequest(input: {
   issuedAt: number;
   expiresAt: number;
   plaintext: string;
+  acceptEncoding?: "gzip";
 }): BrowserEncryptedRequest {
   const privateKey = x25519.utils.randomPrivateKey();
   const publicKey = x25519.getPublicKey(privateKey);
@@ -167,6 +170,7 @@ export function createBrowserEncryptedNodeRequest(input: {
     expiresAt: input.expiresAt,
     nonce: bytesToBase64Url(nonce),
     clientEphemeralKey: rawX25519ToPem(publicKey),
+    ...(input.acceptEncoding ? { acceptEncoding: input.acceptEncoding } : {}),
   };
   const sharedSecret = x25519.getSharedSecret(privateKey, pemToRawX25519(input.nodeTransportPublicKey));
   const key = deriveKey(sharedSecret, input.requestId, input.ticketId);
@@ -174,7 +178,15 @@ export function createBrowserEncryptedNodeRequest(input: {
   const encrypted = chacha20poly1305(
     key,
     cipherNonce,
-    textEncoder.encode(stableStringify(header)),
+    textEncoder.encode(stableStringify({
+      version: header.version,
+      requestId: header.requestId,
+      ticketId: header.ticketId,
+      issuedAt: header.issuedAt,
+      expiresAt: header.expiresAt,
+      nonce: header.nonce,
+      clientEphemeralKey: header.clientEphemeralKey,
+    })),
   ).encrypt(textEncoder.encode(input.plaintext));
   return {
     privateKey,
@@ -186,7 +198,7 @@ export function createBrowserEncryptedNodeRequest(input: {
   };
 }
 
-export function decryptBrowserNodeResponse(input: {
+function decryptBrowserNodeResponseBytes(input: {
   response: EncryptedResponseEnvelopeV2;
   request: EncryptedRequestEnvelopeV2;
   privateKey: Uint8Array;
@@ -212,6 +224,7 @@ export function decryptBrowserNodeResponse(input: {
     ticketId: input.response.ticketId,
     issuedAt: input.response.issuedAt,
     nonce: input.response.nonce,
+    ...(input.response.contentEncoding ? { contentEncoding: input.response.contentEncoding } : {}),
   };
   const plaintext = chacha20poly1305(
     key,
@@ -221,7 +234,35 @@ export function decryptBrowserNodeResponse(input: {
     base64UrlToBytes(input.response.ciphertext),
     base64UrlToBytes(input.response.authenticationTag),
   ));
-  return textDecoder.decode(plaintext);
+  return plaintext;
+}
+
+export function decryptBrowserNodeResponse(input: {
+  response: EncryptedResponseEnvelopeV2;
+  request: EncryptedRequestEnvelopeV2;
+  privateKey: Uint8Array;
+  nodeTransportPublicKey: string;
+}) {
+  if (input.response.contentEncoding) {
+    throw new Error("Compressed node responses require asynchronous decoding.");
+  }
+  return textDecoder.decode(decryptBrowserNodeResponseBytes(input));
+}
+
+export async function decodeBrowserNodeResponse(input: {
+  response: EncryptedResponseEnvelopeV2;
+  request: EncryptedRequestEnvelopeV2;
+  privateKey: Uint8Array;
+  nodeTransportPublicKey: string;
+}) {
+  const plaintext = decryptBrowserNodeResponseBytes(input);
+  if (input.response.contentEncoding !== "gzip") return textDecoder.decode(plaintext);
+  const compressed = new Uint8Array(plaintext.byteLength);
+  compressed.set(plaintext);
+  const decompressed = new Response(
+    new Blob([compressed.buffer]).stream().pipeThrough(new DecompressionStream("gzip")),
+  );
+  return await decompressed.text();
 }
 
 function gatewayWebSocketUrl(nodeId: string) {
@@ -270,6 +311,7 @@ async function sendGatewayRpc(
     issuedAt: Date.now(),
     expiresAt: ticket.expiresAt,
     plaintext: JSON.stringify({ method, params }),
+    acceptEncoding: "gzip",
   });
   const ticketProtocol = `ticket.${bytesToBase64Url(textEncoder.encode(JSON.stringify(ticket)))}`;
   const socket = new WebSocket(gatewayWebSocketUrl(candidate.nodeId), ["spilled-v2", ticketProtocol]);
@@ -310,7 +352,7 @@ async function sendGatewayRpc(
       }
     }, { once: true });
   });
-  const payload = JSON.parse(decryptBrowserNodeResponse({
+  const payload = JSON.parse(await decodeBrowserNodeResponse({
     response,
     request: encrypted.envelope,
     privateKey: encrypted.privateKey,
