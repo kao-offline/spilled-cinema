@@ -1,6 +1,9 @@
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
-import { randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
+import { open, stat } from "node:fs/promises";
+import { gzip as gzipCallback } from "node:zlib";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -9,20 +12,95 @@ import {
 } from "@simplewebauthn/server";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import { MemoryDiscoveryRegistry, MdnsService, verifyNodeRecord } from "../../../packages/discovery/src";
-import { NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, type AnonymousSessionGrant, type CapabilityPolicy, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
-import { approvePairing, base64UrlDecode, base64UrlEncode, createPairingRequest, createPasskeyAuthenticationChallenge, createPasskeyRegistrationChallenge, createSignedToken, generateNodeIdentity, hashPassword, issueAnonymousSession, issuePrivateSession, randomId, signPayload, verifyPassword, verifySignedToken, type NodeIdentity } from "../../../packages/security/src";
-import { JsonNodeStorage, type AdminAccountRuntimeState, type NodeStateFile, type PrivateDownloadRecord, type PrivatePasskeyCredential, type PrivateProfileState, type StoredImportedShow, type WatcherAccountRuntimeState, type WatcherProfileRuntimeState } from "../../../packages/storage/src";
+import { NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, V2_CAPABILITIES, type AnonymousSessionGrant, type Capability, type CapabilityTicketV2, type CapabilityPolicy, type EncryptedRequestEnvelopeV2, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
+import { approvePairing, base64UrlDecode, base64UrlEncode, createPairingRequest, createPasskeyAuthenticationChallenge, createPasskeyRegistrationChallenge, createSignedToken, decryptNodeRequest, encryptNodeResponse, generateNodeIdentity, generateNodeTransportIdentity, hashPassword, issueAnonymousSession, issuePrivateSession, randomId, sha256, signPayload, TicketReplayWindow, verifyCapabilityTicket, verifyPassword, verifySignedToken, type NodeIdentity } from "../../../packages/security/src";
+import { DpapiSecretStore, JsonNodeStorage, MasterKeyFileSecretStore, SqliteNodeStorage, type AdminAccountRuntimeState, type NodeStateFile, type NodeStorage, type PrivateDownloadRecord, type PrivatePasskeyCredential, type PrivateProfileState, type RefreshSessionRecord, type StoredImportedShow, type WatcherAccountRuntimeState, type WatcherProfileRuntimeState } from "../../../packages/storage/src";
 import type { LoadedPrivateNodeConfig, PrivateNodeAccountConfig, PrivateNodeConfig, SpilledNodeMode } from "./private-config";
 import { getPrivateNodeConfigPathFromEnv, hashSetupSecret, verifySetupSecret, writePrivateNodeConfig } from "./private-config";
+import { decideCapability } from "./capability-policy";
 
 const DEFAULT_CAPABILITIES: NodeCapabilityMap = {
-  fetch: { visibility: "public", requiresSession: true },
-  relay: { visibility: "public", requiresSession: true },
+  fetch: { visibility: "private", requiresSession: true },
+  relay: { visibility: "private", requiresSession: true },
   library: { visibility: "private", requiresSession: true },
-  spillshare: { visibility: "public", requiresSession: true },
-  stream: { visibility: "public", requiresSession: true },
-  download: { visibility: "public", requiresSession: true },
+  spillshare: { visibility: "private", requiresSession: true },
+  stream: { visibility: "private", requiresSession: true },
+  download: { visibility: "private", requiresSession: true },
 };
+
+const REMOTE_METHOD_CAPABILITIES: Record<string, Capability> = {
+  "provider.search": "provider.search",
+  "provider.feed": "provider.feed",
+  "provider.import": "provider.import",
+  "player.embed.resolve": "player.resolve",
+  "player.clean.resolve": "player.resolve",
+  "player.playback.resolve": "player.resolve",
+  "player.resolve": "player.resolve",
+  "download.transient.create": "download.transient",
+  "download.transient.status": "download.transient",
+  "download.transient.cancel": "download.transient",
+  "download.transient.prepare": "download.transient",
+  "spillshare.manifest": "spillshare.read",
+  "spillshare.transfer.prepare": "spillshare.read",
+  "relay.stream": "relay.stream",
+  "auth.refresh": "library.read",
+  "auth.logout": "library.read",
+  "auth.passkey.options": "library.read",
+  "auth.passkey.verify": "library.write",
+  "auth.password.disable": "node.admin",
+  "invite.inspect": "library.read",
+  "invite.accept": "library.write",
+  "recovery.export": "node.admin",
+  "recovery.restore": "node.admin",
+};
+
+function gzipFast(input: Buffer) {
+  return new Promise<Buffer>((resolvePromise, rejectPromise) => {
+    gzipCallback(input, { level: 1 }, (error, output) => {
+      if (error) rejectPromise(error);
+      else resolvePromise(output);
+    });
+  });
+}
+
+const ACCESS_SESSION_TTL_MS = 15 * 60 * 1000;
+const REFRESH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function createRefreshTokenRecord(input: {
+  accessSessionId: string;
+  principalKind: "admin" | "watcher";
+  principalId: string;
+  profileId?: string;
+  chainId?: string;
+}) {
+  const token = base64UrlEncode(randomBytes(32));
+  const now = Date.now();
+  const record: RefreshSessionRecord = {
+    refreshSessionId: randomId("refresh"),
+    chainId: input.chainId ?? randomId("chain"),
+    accessSessionId: input.accessSessionId,
+    principalKind: input.principalKind,
+    principalId: input.principalId,
+    profileId: input.profileId,
+    tokenHash: sha256(token),
+    rotatedTokenHashes: [],
+    createdAt: now,
+    expiresAt: now + REFRESH_SESSION_TTL_MS,
+  };
+  return { token, record };
+}
+
+function recoveryWords(secret: Buffer) {
+  return [...secret].map((byte) => `s${byte.toString(16).padStart(2, "0")}`).join(" ");
+}
+
+function recoverySecretFromWords(words: string) {
+  const parts = words.trim().toLowerCase().split(/\s+/);
+  if (parts.length !== 32 || parts.some((part) => !/^s[0-9a-f]{2}$/.test(part))) {
+    throw new Error("Recovery secret must contain all 32 Spilled recovery words.");
+  }
+  return Buffer.from(parts.map((part) => Number.parseInt(part.slice(1), 16)));
+}
 
 function getDefaultNodeStatePath() {
   const explicitPath = process.env.SPILLEDCINEMA_NODE_STATE_FILE?.trim();
@@ -49,6 +127,29 @@ function getDefaultNodeStatePath() {
   return resolve(homedir(), ".local", "state", "spilledcinema", "node", "state.json");
 }
 
+function createConfiguredStorage(storageFile?: string): NodeStorage {
+  const databasePath = process.env.SPILLED_NODE_DATABASE?.trim();
+  if (!databasePath) {
+    return new JsonNodeStorage(storageFile ?? getDefaultNodeStatePath());
+  }
+  const masterKeyFile = process.env.SPILLED_MASTER_KEY_FILE?.trim();
+  if (!masterKeyFile && process.platform !== "win32") {
+    throw new Error("SPILLED_MASTER_KEY_FILE is required when SPILLED_NODE_DATABASE is configured.");
+  }
+  const resolvedDatabase = resolve(databasePath);
+  const secretRecords = resolve(process.env.SPILLED_SECRET_RECORDS_FILE?.trim() || `${resolvedDatabase}.secrets`);
+  const secrets = process.platform === "win32" && !masterKeyFile
+    ? new DpapiSecretStore(
+        resolve(process.env.SPILLED_DPAPI_KEY_FILE?.trim() || `${resolvedDatabase}.master.dpapi`),
+        secretRecords,
+      )
+    : new MasterKeyFileSecretStore(resolve(masterKeyFile!), secretRecords);
+  return new SqliteNodeStorage(
+    resolvedDatabase,
+    secrets,
+  );
+}
+
 export type NodeRuntimeOptions = {
   storageFile?: string;
   regionHint?: string;
@@ -58,6 +159,9 @@ export type NodeRuntimeOptions = {
   privateConfig?: LoadedPrivateNodeConfig | null;
   privateSetupEnabled?: boolean;
   privateConfigPath?: string;
+  storage?: NodeStorage;
+  v2PublicCapabilities?: ReadonlySet<Capability>;
+  passkeyOrigin?: string;
 };
 
 export type PrivateNodeSessionScopeCapability = "library" | "download" | "spillshare" | "settings";
@@ -96,18 +200,17 @@ function isWatcherSessionCapability(value: string): value is "library" | "downlo
 }
 
 export class SpilledCinemaNodeRuntime {
-  readonly storage: JsonNodeStorage;
+  readonly storage: NodeStorage;
   readonly discovery = new MemoryDiscoveryRegistry();
   readonly mdns = new MdnsService();
   private statePromise: Promise<NodeStateFile> | null = null;
   private readonly options: NodeRuntimeOptions;
   private bootstrapSetupCode: string | null = null;
+  private readonly remoteReplayWindow = new TicketReplayWindow();
 
   constructor(options: NodeRuntimeOptions = {}) {
     this.options = options;
-    this.storage = new JsonNodeStorage(
-      options.storageFile ?? getDefaultNodeStatePath(),
-    );
+    this.storage = options.storage ?? createConfiguredStorage(options.storageFile);
   }
 
   configure(options: Partial<NodeRuntimeOptions>) {
@@ -167,7 +270,7 @@ export class SpilledCinemaNodeRuntime {
 
   private getCapabilities(): NodeCapabilityMap {
     const merged = { ...DEFAULT_CAPABILITIES };
-    const mode = this.options.mode ?? "public-fetch";
+    const mode = this.options.mode ?? "local";
     if (mode === "public-fetch") {
       merged.library = { visibility: "private", requiresSession: true };
       merged.spillshare = { visibility: "public", requiresSession: true };
@@ -182,13 +285,13 @@ export class SpilledCinemaNodeRuntime {
     }
     if (mode === "full") {
       merged.library = { visibility: "private", requiresSession: true };
-      merged.spillshare = { visibility: "public", requiresSession: true };
+      merged.spillshare = { visibility: "private", requiresSession: true };
     }
     const publicCapabilities = this.options.privateConfig?.publicCapabilities;
     if (publicCapabilities) {
-      merged.fetch = { visibility: publicCapabilities.fetch === false ? "private" : "public", requiresSession: true };
-      merged.stream = { visibility: publicCapabilities.stream === false ? "private" : "public", requiresSession: true };
-      merged.download = { visibility: publicCapabilities.download === false ? "private" : "public", requiresSession: true };
+      merged.fetch = { visibility: publicCapabilities.fetch === true ? "public" : "private", requiresSession: true };
+      merged.stream = { visibility: publicCapabilities.stream === true ? "public" : "private", requiresSession: true };
+      merged.download = { visibility: publicCapabilities.download === true ? "public" : "private", requiresSession: true };
       merged.spillshare = { visibility: publicCapabilities.spillshare ? "public" : "private", requiresSession: true };
       merged.relay = { visibility: publicCapabilities.relay ? "public" : "private", requiresSession: true };
     }
@@ -306,6 +409,36 @@ export class SpilledCinemaNodeRuntime {
     };
   }
 
+  private async getPasskeyWatcherAccount(accountId: string): Promise<PrivateNodeAccountConfig> {
+    const state = await this.loadState();
+    const admin = state.adminAccounts.find((entry) => entry.adminId === accountId && !entry.disabledAt);
+    if (admin) {
+      return {
+        accountId: admin.adminId,
+        displayName: admin.displayName,
+        role: "admin",
+        profiles: [{ profileId: "admin", displayName: admin.displayName, avatar: "default" }],
+      };
+    }
+    const watcher = state.watcherAccounts.find((entry) => entry.watcherId === accountId && !entry.disabledAt);
+    if (watcher) {
+      return {
+        accountId: watcher.watcherId,
+        displayName: watcher.displayName,
+        role: "user",
+        quotaBytes: watcher.quotaBytes,
+        profiles: state.watcherProfiles
+          .filter((profile) => profile.watcherId === watcher.watcherId)
+          .map((profile) => ({
+            profileId: profile.profileId,
+            displayName: profile.displayName,
+            avatar: profile.avatar,
+          })),
+      };
+    }
+    return this.getAccount(accountId);
+  }
+
   private getAccountQuotaBytes(account: PrivateNodeAccountConfig) {
     return account.quotaBytes ?? this.requirePrivateConfig().storage?.defaultAccountQuotaBytes ?? 0;
   }
@@ -339,8 +472,22 @@ export class SpilledCinemaNodeRuntime {
     };
   }
 
-  private getRpId(origin: string) {
-    return new URL(origin).hostname;
+  private async getPasskeyContext(origin: string) {
+    const parsed = new URL(origin);
+    const identity = await this.ensureIdentity();
+    const expectedRemoteOrigin = this.options.passkeyOrigin?.replace(/\/$/, "")
+      ?? `https://${identity.nodeId}.nodes.spilled.overload.studio`;
+    const localSetupAllowed =
+      this.options.privateSetupEnabled === true &&
+      parsed.protocol === "http:" &&
+      ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
+    if (!localSetupAllowed && parsed.origin !== expectedRemoteOrigin) {
+      throw new Error("Passkey origin does not match this node's stable origin.");
+    }
+    return {
+      expectedOrigin: localSetupAllowed ? parsed.origin : expectedRemoteOrigin,
+      rpID: localSetupAllowed ? parsed.hostname : "nodes.spilled.overload.studio",
+    };
   }
 
   private async createPrivateSession(input: {
@@ -369,10 +516,16 @@ export class SpilledCinemaNodeRuntime {
         capabilities: input.capabilities ?? ["library", "download", "spillshare"],
       },
       issuedAt,
-      expiresAt: issuedAt + (input.ttlMs ?? 24 * 60 * 60 * 1000),
+      expiresAt: issuedAt + (input.ttlMs ?? ACCESS_SESSION_TTL_MS),
     };
     const token = createSignedToken(payload, identity.privateKey);
     const state = await this.loadState();
+    const refresh = createRefreshTokenRecord({
+      accessSessionId: payload.sessionId,
+      principalKind: "watcher",
+      principalId: watcher.watcherId,
+      profileId: payload.profileId,
+    });
     const next = {
       ...state,
       sessions: state.sessions
@@ -387,10 +540,15 @@ export class SpilledCinemaNodeRuntime {
           },
           pairedDeviceId: watcher.watcherId,
         }),
+      refreshSessions: state.refreshSessions
+        .filter((entry) => !entry.revokedAt && entry.expiresAt > Date.now())
+        .concat(refresh.record),
     };
     await this.saveState(next);
     return {
       token,
+      accessToken: token,
+      refreshToken: refresh.token,
       session: payload,
       account: this.toPublicWatcherAccount(watcher, profiles),
       profiles: this.toPublicWatcherAccount(watcher, profiles).profiles,
@@ -445,22 +603,71 @@ export class SpilledCinemaNodeRuntime {
     };
   }
 
-  private async ensureIdentity(): Promise<NodeIdentity & { regionHint?: string }> {
+  private async ensureIdentity(): Promise<NodeIdentity & {
+    transportPublicKey: string;
+    transportPrivateKey: string;
+    transportKeyVersion: number;
+    transportKeySignature: string;
+    installId: string;
+    regionHint?: string;
+  }> {
     const state = await this.loadState();
-    if (state.node?.nodeId && state.node.publicKey && state.node.privateKey) {
-      return state.node as NodeIdentity & { regionHint?: string };
+    if (
+      state.node?.nodeId &&
+      state.node.publicKey &&
+      state.node.privateKey &&
+      state.node.transportPublicKey &&
+      state.node.transportPrivateKey &&
+      state.node.transportKeyVersion &&
+      state.node.transportKeySignature &&
+      state.node.installId
+    ) {
+      return {
+        nodeId: state.node.nodeId,
+        publicKey: state.node.publicKey,
+        privateKey: state.node.privateKey,
+        algorithm: "ed25519",
+        transportPublicKey: state.node.transportPublicKey,
+        transportPrivateKey: state.node.transportPrivateKey,
+        transportKeyVersion: state.node.transportKeyVersion,
+        transportKeySignature: state.node.transportKeySignature,
+        installId: state.node.installId,
+        regionHint: state.node.regionHint,
+      };
     }
 
-    const identity = generateNodeIdentity();
+    const identity = state.node?.nodeId && state.node.publicKey && state.node.privateKey
+      ? {
+          nodeId: state.node.nodeId,
+          publicKey: state.node.publicKey,
+          privateKey: state.node.privateKey,
+          algorithm: "ed25519" as const,
+        }
+      : generateNodeIdentity();
+    const transport = generateNodeTransportIdentity(identity);
+    const installId = state.node?.installId ?? base64UrlEncode(randomBytes(16));
     const next = {
       ...state,
       node: {
         ...identity,
+        transportPublicKey: transport.publicKey,
+        transportPrivateKey: transport.privateKey,
+        transportKeyVersion: transport.keyVersion,
+        transportKeySignature: transport.identitySignature,
+        installId,
         regionHint: this.options.regionHint,
       },
     };
     await this.saveState(next);
-    return next.node!;
+    return {
+      ...identity,
+      transportPublicKey: transport.publicKey,
+      transportPrivateKey: transport.privateKey,
+      transportKeyVersion: transport.keyVersion,
+      transportKeySignature: transport.identitySignature,
+      installId,
+      regionHint: next.node.regionHint,
+    };
   }
 
   async getNodeRecord(): Promise<NodeRecord> {
@@ -471,12 +678,12 @@ export class SpilledCinemaNodeRuntime {
       nodeId: identity.nodeId,
       publicKey: identity.publicKey,
       protocolVersion: NODE_PROTOCOL_VERSION,
-      endpoints: [
-        {
-          protocol: (this.options.endpointUrl?.startsWith("https") ? "https" : "http") as "https" | "http",
-          url: this.options.endpointUrl ?? "http://127.0.0.1:5173",
-        },
-      ],
+      endpoints: this.options.endpointUrl
+        ? [{
+            protocol: (this.options.endpointUrl.startsWith("https") ? "https" : "http") as "https" | "http",
+            url: this.options.endpointUrl,
+          }]
+        : [{ protocol: "local" as const, url: "native-ipc" }],
       capabilities: this.getCapabilities(),
       ...(regionHint ? { regionHint } : {}),
       load: {
@@ -486,13 +693,191 @@ export class SpilledCinemaNodeRuntime {
         relayPercent: 0,
       },
       publishedAt: Date.now(),
-      ttlMs: 60_000,
+      ttlMs: 300_000,
     };
 
     return {
       ...unsigned,
       signature: signPayload(unsigned, identity.privateKey),
     };
+  }
+
+  async getTransportIdentityRecord() {
+    const identity = await this.ensureIdentity();
+    return {
+      nodeId: identity.nodeId,
+      ed25519PublicKey: identity.publicKey,
+      x25519PublicKey: identity.transportPublicKey,
+      transportKeySignature: identity.transportKeySignature,
+      installIdHash: sha256(identity.installId),
+      protocolVersion: NODE_PROTOCOL_VERSION,
+      keyVersion: identity.transportKeyVersion,
+    };
+  }
+
+  async createGatewayEnrollmentApplication(input: {
+    enrollmentCredential?: string;
+    advertisedCapabilities?: Capability[];
+    issuedAt?: number;
+  } = {}) {
+    const identity = await this.ensureIdentity();
+    const storedCredential = await this.storage.getProtectedSecret?.("gateway.enrollmentCredential");
+    const enrollmentCredential = input.enrollmentCredential ?? storedCredential ?? base64UrlEncode(randomBytes(32));
+    if (!storedCredential && this.storage.setProtectedSecret) {
+      await this.storage.setProtectedSecret("gateway.enrollmentCredential", enrollmentCredential);
+    }
+    const advertisedCapabilities = [...new Set(
+      input.advertisedCapabilities ?? [...this.getEnabledV2Capabilities()],
+    )].sort();
+    const application = {
+      ...(await this.getTransportIdentityRecord()),
+      enrollmentCredential,
+      advertisedCapabilities,
+      endpointUrl: this.options.endpointUrl ?? null,
+      issuedAt: input.issuedAt ?? Date.now(),
+    };
+    return {
+      ...application,
+      applicationSignature: signPayload(application, identity.privateKey),
+    };
+  }
+
+  async handleEncryptedRemoteRequest(input: {
+    ticket: CapabilityTicketV2;
+    envelope: EncryptedRequestEnvelopeV2;
+    controlPlanePublicKey: string;
+    execute: (request: {
+      method: string;
+      params: unknown;
+      capability: Capability;
+      ticketId: string;
+      limits: { maxResponseBytes: number; maxDurationMs: number };
+    }) => Promise<unknown>;
+  }) {
+    const identity = await this.ensureIdentity();
+    if (input.envelope.ticketId !== input.ticket.ticketId) {
+      throw new Error("Encrypted request and capability ticket do not match.");
+    }
+    if (!verifyCapabilityTicket({
+      ticket: input.ticket,
+      controlPlanePublicKey: input.controlPlanePublicKey,
+      expectedNodeId: identity.nodeId,
+      expectedCapability: input.ticket.capability,
+    })) {
+      throw new Error("Capability ticket is invalid.");
+    }
+    if (!this.remoteReplayWindow.accept(input.ticket.ticketId, input.envelope.nonce, input.ticket.expiresAt)) {
+      throw new Error("Encrypted request replay was rejected.");
+    }
+    const requestBytes = base64UrlDecode(input.envelope.ciphertext).length;
+    if (requestBytes > input.ticket.maxRequestBytes) {
+      throw new Error("Encrypted request exceeds its ticket quota.");
+    }
+    const decoded = JSON.parse(
+      decryptNodeRequest(input.envelope, identity.transportPrivateKey).toString("utf8"),
+    ) as { method?: unknown; params?: unknown };
+    if (typeof decoded.method !== "string") {
+      throw new Error("Remote RPC method is missing.");
+    }
+    if (REMOTE_METHOD_CAPABILITIES[decoded.method] !== input.ticket.capability) {
+      throw new Error("Remote RPC method does not match its capability ticket.");
+    }
+    if (input.ticket.capability === "spillshare.read" && !input.ticket.contentId) {
+      throw new Error("SpillShare tickets must be content-specific.");
+    }
+    if (input.ticket.contentId) {
+      const params = decoded.params && typeof decoded.params === "object"
+        ? decoded.params as Record<string, unknown>
+        : {};
+      if (params.contentId !== input.ticket.contentId) {
+        throw new Error("Remote RPC content does not match its capability ticket.");
+      }
+    }
+    const enabled = input.ticket.principalKind === "private"
+      ? new Set(V2_CAPABILITIES)
+      : this.getEnabledV2Capabilities();
+    const policy = decideCapability({
+      principal: input.ticket.principalKind === "verifier"
+        ? { kind: "gateway-verifier", attestationId: input.ticket.ticketId }
+        : input.ticket.principalKind === "private"
+          ? { kind: "owner", accountId: "ticket-bound", sessionId: input.ticket.ticketId }
+          : { kind: "public", ticketId: input.ticket.ticketId, ephemeralKey: input.envelope.clientEphemeralKey },
+      capability: input.ticket.capability,
+      ticketCapability: input.ticket.capability,
+      enabledCapabilities: enabled,
+    });
+    if (!policy.allow) {
+      throw new Error(`Capability denied: ${"reason" in policy ? policy.reason : "policy-denied"}.`);
+    }
+    const startedAt = Date.now();
+    let responsePayload: { ok: true; result: unknown } | { ok: false; error: string };
+    try {
+      const payload = await input.execute({
+        method: decoded.method,
+        params: decoded.params ?? {},
+        capability: input.ticket.capability,
+        ticketId: input.ticket.ticketId,
+        limits: {
+          maxResponseBytes: input.ticket.maxResponseBytes,
+          maxDurationMs: input.ticket.maxDurationMs,
+        },
+      });
+      responsePayload = { ok: true, result: payload };
+    } catch (error) {
+      responsePayload = {
+        ok: false,
+        error: error instanceof Error ? error.message : "Remote operation failed.",
+      };
+    }
+    if (Date.now() - startedAt > Math.min(input.ticket.maxDurationMs, policy.limits.maxDurationMs)) {
+      responsePayload = { ok: false, error: "Remote RPC exceeded its ticket duration." };
+    }
+    let responseBytes = Buffer.from(JSON.stringify(responsePayload), "utf8");
+    if (responseBytes.length > input.ticket.maxResponseBytes) {
+      responsePayload = { ok: false, error: "Remote RPC response exceeds its ticket quota." };
+      responseBytes = Buffer.from(JSON.stringify(responsePayload), "utf8");
+    }
+    let encodedResponseBytes = responseBytes;
+    let contentEncoding: "gzip" | undefined;
+    if (input.envelope.acceptEncoding === "gzip" && responseBytes.length >= 64 * 1024) {
+      const compressed = await gzipFast(responseBytes);
+      if (compressed.length <= responseBytes.length * 0.9) {
+        encodedResponseBytes = Buffer.from(compressed);
+        contentEncoding = "gzip";
+      }
+    }
+    return encryptNodeResponse({
+      request: input.envelope,
+      nodeTransportPrivateKey: identity.transportPrivateKey,
+      plaintext: encodedResponseBytes,
+      contentEncoding,
+    });
+  }
+
+  private getEnabledV2Capabilities() {
+    if (this.options.v2PublicCapabilities) {
+      return new Set(this.options.v2PublicCapabilities);
+    }
+    const legacy = this.getCapabilities();
+    const enabled = new Set<Capability>();
+    if (legacy.fetch.visibility === "public") {
+      enabled.add("provider.search");
+      enabled.add("provider.feed");
+      enabled.add("provider.import");
+    }
+    if (legacy.stream.visibility === "public") {
+      enabled.add("player.resolve");
+    }
+    if (legacy.download.visibility === "public") {
+      enabled.add("download.transient");
+    }
+    if (legacy.spillshare.visibility === "public") {
+      enabled.add("spillshare.read");
+    }
+    if (legacy.relay.visibility === "public") {
+      enabled.add("relay.stream");
+    }
+    return enabled;
   }
 
   async announce() {
@@ -526,7 +911,7 @@ export class SpilledCinemaNodeRuntime {
       status: "ok",
       node: {
         nodeId: record.nodeId,
-        mode: this.options.mode ?? "public-fetch",
+        mode: this.options.mode ?? "local",
         protocolVersion: record.protocolVersion,
         regionHint: record.regionHint ?? null,
         endpointUrl: this.options.endpointUrl ?? null,
@@ -650,6 +1035,79 @@ export class SpilledCinemaNodeRuntime {
   async listPublishedSpillshareSources() {
     const state = await this.loadState();
     return state.spillshareSources;
+  }
+
+  async createSpillshareManifest(contentId: string) {
+    if (this.getCapabilities().spillshare.visibility !== "public") {
+      throw new Error("SpillShare is disabled.");
+    }
+    const state = await this.loadState();
+    const download = state.privateDownloads.find(
+      (entry) => entry.contentId === contentId && entry.spillshareEnabled,
+    );
+    if (!download) {
+      throw new Error("Content is not eligible for SpillShare.");
+    }
+    const metadata = await stat(download.filePath);
+    if (!metadata.isFile()) {
+      throw new Error("SpillShare source is not a regular file.");
+    }
+    const chunkSize = 4 * 1024 * 1024;
+    const chunks: Array<{ index: number; offset: number; size: number; sha256: string }> = [];
+    const whole = createHash("sha256");
+    const file = await open(download.filePath, "r");
+    try {
+      let offset = 0;
+      let index = 0;
+      while (offset < metadata.size) {
+        const size = Math.min(chunkSize, metadata.size - offset);
+        const buffer = Buffer.allocUnsafe(size);
+        const { bytesRead } = await file.read(buffer, 0, size, offset);
+        if (bytesRead !== size) throw new Error("SpillShare source changed while creating its manifest.");
+        const bytes = buffer.subarray(0, bytesRead);
+        whole.update(bytes);
+        chunks.push({
+          index,
+          offset,
+          size: bytesRead,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        });
+        offset += bytesRead;
+        index += 1;
+      }
+    } finally {
+      await file.close();
+    }
+    const identity = await this.ensureIdentity();
+    const unsigned = {
+      version: 2 as const,
+      manifestId: randomId("manifest"),
+      contentId,
+      sourceNodeId: identity.nodeId,
+      mimeType: download.mimeType,
+      size: metadata.size,
+      sha256: whole.digest("hex"),
+      chunks,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 5 * 60_000,
+    };
+    return { ...unsigned, signature: signPayload(unsigned, identity.privateKey) };
+  }
+
+  async getSpillshareTransferSource(contentId: string) {
+    const manifest = await this.createSpillshareManifest(contentId);
+    const state = await this.loadState();
+    const download = state.privateDownloads.find(
+      (entry) => entry.contentId === contentId && entry.spillshareEnabled,
+    );
+    if (!download) throw new Error("SpillShare source is unavailable.");
+    return {
+      path: download.filePath,
+      contentId,
+      manifestId: manifest.manifestId,
+      chunks: manifest.chunks,
+      manifest,
+    };
   }
 
   async createAnonymousGrant(scope: SessionScope): Promise<AnonymousSessionGrant> {
@@ -938,10 +1396,15 @@ export class SpilledCinemaNodeRuntime {
         capabilities: ["settings", "accounts", "storage", "sessions"],
       },
       issuedAt,
-      expiresAt: issuedAt + 8 * 60 * 60 * 1000,
+      expiresAt: issuedAt + ACCESS_SESSION_TTL_MS,
     };
     const token = createSignedToken(payload, identity.privateKey);
     const state = await this.loadState();
+    const refresh = createRefreshTokenRecord({
+      accessSessionId: payload.sessionId,
+      principalKind: "admin",
+      principalId: admin.adminId,
+    });
     await this.saveState({
       ...state,
       sessions: state.sessions.filter((entry) => entry.expiresAt > Date.now()).concat({
@@ -952,9 +1415,14 @@ export class SpilledCinemaNodeRuntime {
         scope: { capability: "library" },
         pairedDeviceId: admin.adminId,
       }),
+      refreshSessions: state.refreshSessions
+        .filter((entry) => !entry.revokedAt && entry.expiresAt > Date.now())
+        .concat(refresh.record),
     });
     return {
       token,
+      accessToken: token,
+      refreshToken: refresh.token,
       session: payload,
       admin: this.toPublicAdminAccount(admin),
     };
@@ -967,6 +1435,29 @@ export class SpilledCinemaNodeRuntime {
       throw new Error("Invalid username or password.");
     }
     return this.createAdminSession(admin);
+  }
+
+  async disableAdminPassword(adminToken: string | undefined) {
+    const session = await this.validateAdminSession(adminToken);
+    if (session.admin.passkeys.length === 0) {
+      throw new Error("Enroll an owner passkey before disabling password fallback.");
+    }
+    const state = await this.loadState();
+    await this.saveState({
+      ...state,
+      adminAccounts: state.adminAccounts.map((entry) =>
+        entry.adminId === session.adminId
+          ? { ...entry, passwordHash: undefined, updatedAt: Date.now() }
+          : entry
+      ),
+      securityEvents: state.securityEvents.concat({
+        eventId: randomId("security"),
+        eventType: "admin-password-disabled",
+        principalId: session.adminId,
+        createdAt: Date.now(),
+      }),
+    });
+    return { ok: true };
   }
 
   async loginWatcherPassword(input: { watcherId: string; password: string; profileId?: string }) {
@@ -1021,6 +1512,9 @@ export class SpilledCinemaNodeRuntime {
     await this.saveState({
       ...state,
       sessions: state.sessions.filter((entry) => entry.sessionId !== payload.sessionId),
+      refreshSessions: state.refreshSessions.map((entry) =>
+        entry.accessSessionId === payload.sessionId ? { ...entry, revokedAt: Date.now() } : entry
+      ),
     });
     return { ok: true };
   }
@@ -1102,6 +1596,171 @@ export class SpilledCinemaNodeRuntime {
     return this.toPublicWatcherAccount(watcher, profiles);
   }
 
+  async createWatcherInvitation(token: string | undefined, input: {
+    watcherId: string;
+    displayName: string;
+    quotaBytes: number;
+    profiles?: Array<{ profileId: string; displayName: string; avatar?: string }>;
+  }) {
+    await this.validateAdminSession(token);
+    const state = await this.loadState();
+    const watcherId = input.watcherId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+    if (!watcherId || state.watcherAccounts.some((entry) => entry.watcherId === watcherId)) {
+      throw new Error("A unique watcher id is required.");
+    }
+    const secret = base64UrlEncode(randomBytes(16));
+    const confirmationCode = String(randomBytes(3).readUIntBE(0, 3) % 1_000_000).padStart(6, "0");
+    const now = Date.now();
+    const invitation = {
+      invitationId: randomId("invite"),
+      secretHash: sha256(secret),
+      confirmationCode,
+      watcherId,
+      displayName: input.displayName.trim() || watcherId,
+      quotaBytes: Math.max(1, Math.round(input.quotaBytes)),
+      profiles: (input.profiles?.length ? input.profiles : [{
+        profileId: "prof_main",
+        displayName: input.displayName.trim() || watcherId,
+        avatar: "default",
+      }]).map((profile, index) => ({
+        profileId: profile.profileId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || `prof_${index + 1}`,
+        displayName: profile.displayName.trim() || `Profile ${index + 1}`,
+        avatar: profile.avatar || "default",
+      })),
+      createdAt: now,
+      expiresAt: now + 10 * 60 * 1000,
+    };
+    await this.saveState({
+      ...state,
+      watcherInvitations: state.watcherInvitations
+        .filter((entry) => entry.expiresAt > now && !entry.consumedAt)
+        .concat(invitation),
+    });
+    const identity = await this.ensureIdentity();
+    return {
+      invitationId: invitation.invitationId,
+      invitationSecret: secret,
+      confirmationCode,
+      nodeId: identity.nodeId,
+      expiresAt: invitation.expiresAt,
+      url: `https://${identity.nodeId}.nodes.spilled.overload.studio/invite?secret=${encodeURIComponent(secret)}`,
+    };
+  }
+
+  async inspectWatcherInvitation(input: { invitationSecret: string; confirmationCode: string }) {
+    const state = await this.loadState();
+    const invitation = state.watcherInvitations.find((entry) =>
+      entry.secretHash === sha256(input.invitationSecret) &&
+      entry.confirmationCode === input.confirmationCode &&
+      !entry.consumedAt &&
+      entry.expiresAt > Date.now()
+    );
+    if (!invitation) throw new Error("Invitation is invalid, expired, or already used.");
+    return {
+      invitationId: invitation.invitationId,
+      watcherId: invitation.watcherId,
+      displayName: invitation.displayName,
+      profiles: invitation.profiles,
+      expiresAt: invitation.expiresAt,
+    };
+  }
+
+  async exportRecoveryKit(adminToken: string | undefined) {
+    await this.validateAdminSession(adminToken);
+    const state = await this.loadState();
+    if (!state.node) throw new Error("Node identity is unavailable.");
+    const secret = randomBytes(32);
+    const words = recoveryWords(secret);
+    const recoveryId = randomId("recovery");
+    const key = createHash("sha256").update(secret).digest();
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, nonce);
+    cipher.setAAD(Buffer.from(recoveryId));
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify(state.node), "utf8"),
+      cipher.final(),
+    ]);
+    const encryptedIdentityBackup = [
+      nonce.toString("base64"),
+      cipher.getAuthTag().toString("base64"),
+      ciphertext.toString("base64"),
+    ].join(".");
+    const verifier = await hashArgon2(base64UrlEncode(secret), {
+      algorithm: 2,
+      memoryCost: 65536,
+      timeCost: 3,
+      parallelism: 1,
+    });
+    await this.saveState({
+      ...state,
+      recoveryStates: [{
+        recoveryId,
+        verifier,
+        encryptedIdentityBackup,
+        createdAt: Date.now(),
+      }],
+    });
+    return {
+      recoveryId,
+      words,
+      qrPayload: base64UrlEncode(Buffer.from(JSON.stringify({
+        version: 2,
+        nodeId: state.node.nodeId,
+        recoveryId,
+        words,
+      }))),
+      nodeId: state.node.nodeId,
+    };
+  }
+
+  async restoreRecoveryKit(input: { recoveryId: string; words: string }) {
+    const secret = recoverySecretFromWords(input.words);
+    const state = await this.loadState();
+    const recovery = state.recoveryStates.find((entry) => entry.recoveryId === input.recoveryId && !entry.usedAt);
+    if (!recovery || !(await verifyArgon2(recovery.verifier, base64UrlEncode(secret)))) {
+      throw new Error("Recovery kit is invalid or already used.");
+    }
+    const [nonceText, tagText, ciphertextText] = recovery.encryptedIdentityBackup.split(".");
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      createHash("sha256").update(secret).digest(),
+      Buffer.from(nonceText, "base64"),
+    );
+    decipher.setAAD(Buffer.from(recovery.recoveryId));
+    decipher.setAuthTag(Buffer.from(tagText, "base64"));
+    const restoredNode = JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(ciphertextText, "base64")),
+      decipher.final(),
+    ]).toString("utf8")) as NonNullable<NodeStateFile["node"]>;
+    const now = Date.now();
+    await this.saveState({
+      ...state,
+      node: restoredNode,
+      sessions: [],
+      refreshSessions: state.refreshSessions.map((entry) => ({ ...entry, revokedAt: now })),
+      watcherInvitations: state.watcherInvitations.map((entry) => ({ ...entry, consumedAt: now })),
+      adminAccounts: state.adminAccounts.map((entry) => ({ ...entry, passkeys: [], updatedAt: now })),
+      watcherAccounts: state.watcherAccounts.map((entry) => ({ ...entry, passkeys: [], updatedAt: now })),
+      privateAccounts: state.privateAccounts.map((entry) => ({ ...entry, passkeys: [] })),
+      recoveryStates: state.recoveryStates.map((entry) =>
+        entry.recoveryId === recovery.recoveryId ? { ...entry, usedAt: now } : entry
+      ),
+      securityEvents: state.securityEvents.concat({
+        eventId: randomId("security"),
+        eventType: "owner-recovery",
+        createdAt: now,
+      }),
+    });
+    this.bootstrapSetupCode = randomBytes(3).toString("hex").toUpperCase();
+    return {
+      ok: true,
+      nodeId: restoredNode.nodeId,
+      requiresNewOwnerPasskey: true,
+      requiresGatewayReenrollment: true,
+      ownerEnrollmentCode: this.bootstrapSetupCode,
+    };
+  }
+
   async getPrivateMe(token: string | undefined) {
     const session = await this.validatePrivateSession(token, "library");
     return {
@@ -1128,27 +1787,131 @@ export class SpilledCinemaNodeRuntime {
     await this.saveState({
       ...state,
       sessions: state.sessions.filter((entry) => entry.sessionId !== payload.sessionId),
+      refreshSessions: state.refreshSessions.map((entry) =>
+        entry.accessSessionId === payload.sessionId ? { ...entry, revokedAt: Date.now() } : entry
+      ),
     });
     return { ok: true };
   }
 
+  async rotateRefreshSession(refreshToken: string) {
+    const tokenHash = sha256(refreshToken);
+    let state = await this.loadState();
+    const replayed = state.refreshSessions.find((entry) => entry.rotatedTokenHashes.includes(tokenHash));
+    if (replayed) {
+      const now = Date.now();
+      await this.saveState({
+        ...state,
+        sessions: state.sessions.filter((session) =>
+          !state.refreshSessions.some((entry) => entry.chainId === replayed.chainId && entry.accessSessionId === session.sessionId)
+        ),
+        refreshSessions: state.refreshSessions.map((entry) =>
+          entry.chainId === replayed.chainId ? { ...entry, revokedAt: now } : entry
+        ),
+        securityEvents: state.securityEvents.concat({
+          eventId: randomId("security"),
+          eventType: "refresh-token-reuse",
+          principalId: replayed.principalId,
+          createdAt: now,
+        }),
+      });
+      throw new Error("Refresh token reuse detected; the device session was revoked.");
+    }
+    const current = state.refreshSessions.find((entry) =>
+      entry.tokenHash === tokenHash && !entry.revokedAt && entry.expiresAt > Date.now()
+    );
+    if (!current) {
+      throw new Error("Refresh session is invalid or expired.");
+    }
+    const now = Date.now();
+    await this.saveState({
+      ...state,
+      sessions: state.sessions.filter((entry) => entry.sessionId !== current.accessSessionId),
+      refreshSessions: state.refreshSessions.map((entry) =>
+        entry.refreshSessionId === current.refreshSessionId
+          ? {
+              ...entry,
+              rotatedAt: now,
+              revokedAt: now,
+              rotatedTokenHashes: entry.rotatedTokenHashes.concat(entry.tokenHash),
+            }
+          : entry
+      ),
+    });
+    const issued = current.principalKind === "admin"
+      ? await this.createAdminSession((await this.loadState()).adminAccounts.find((entry) =>
+          entry.adminId === current.principalId && !entry.disabledAt
+        ) ?? (() => { throw new Error("Refresh-session administrator no longer exists."); })())
+      : await this.createPrivateSession({
+          accountId: current.principalId,
+          profileId: current.profileId,
+        });
+    state = await this.loadState();
+    const newest = [...state.refreshSessions]
+      .reverse()
+      .find((entry) => entry.accessSessionId === issued.session.sessionId);
+    if (newest) {
+      await this.saveState({
+        ...state,
+        refreshSessions: state.refreshSessions.map((entry) =>
+          entry.refreshSessionId === newest.refreshSessionId
+            ? { ...entry, chainId: current.chainId, rotatedTokenHashes: current.rotatedTokenHashes.concat(current.tokenHash) }
+            : entry
+        ),
+      });
+    }
+    return issued;
+  }
+
   async createPasskeyRegistrationOptions(input: { accountId: string; setupSecret: string; origin: string }) {
     const config = this.requirePrivateConfig();
-    const state = await this.loadState();
+    let state = await this.loadState();
     const setupSecret = input.setupSecret.trim();
     const acceptsPrintedCode = this.bootstrapSetupCode && setupSecret.toUpperCase() === this.bootstrapSetupCode;
-    if (!acceptsPrintedCode && !verifySetupSecret(setupSecret, config.privateNode.setupSecretHash)) {
+    const invitation = state.watcherInvitations.find((entry) =>
+      entry.watcherId === input.accountId &&
+      entry.secretHash === sha256(setupSecret) &&
+      !entry.consumedAt &&
+      entry.expiresAt > Date.now()
+    );
+    if (!acceptsPrintedCode && !invitation && !verifySetupSecret(setupSecret, config.privateNode.setupSecretHash)) {
       throw new Error("Invalid setup secret.");
     }
-    const account = this.getAccount(input.accountId);
-    const runtimeAccount = state.privateAccounts.find((entry) => entry.accountId === account.accountId);
-    const rpID = this.getRpId(input.origin);
+    if (invitation && !state.watcherAccounts.some((entry) => entry.watcherId === invitation.watcherId)) {
+      const now = Date.now();
+      state = {
+        ...state,
+        watcherAccounts: state.watcherAccounts.concat({
+          watcherId: invitation.watcherId,
+          displayName: invitation.displayName,
+          passkeys: [],
+          quotaBytes: invitation.quotaBytes,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        watcherProfiles: state.watcherProfiles.concat(invitation.profiles.map((profile) => ({
+          watcherId: invitation.watcherId,
+          ...profile,
+          createdAt: now,
+          updatedAt: now,
+        }))),
+        watcherInvitations: state.watcherInvitations.map((entry) =>
+          entry.invitationId === invitation.invitationId ? { ...entry, acceptedAt: now } : entry
+        ),
+      };
+      await this.saveState(state);
+    }
+    const account = await this.getPasskeyWatcherAccount(input.accountId);
+    const runtimePasskeys = account.role === "admin"
+      ? state.adminAccounts.find((entry) => entry.adminId === account.accountId)?.passkeys ?? []
+      : state.privateAccounts.find((entry) => entry.accountId === account.accountId)?.passkeys ?? [];
+    const { rpID } = await this.getPasskeyContext(input.origin);
     const options = await generateRegistrationOptions({
       rpName: config.privateNode.nodeName ?? "Spilled Private Node",
       rpID,
       userName: account.accountId,
       userDisplayName: account.displayName,
-      excludeCredentials: (runtimeAccount?.passkeys ?? []).map((credential) => ({
+      excludeCredentials: runtimePasskeys.map((credential) => ({
         id: credential.credentialId,
         transports: credential.transports as never,
       })),
@@ -1174,7 +1937,7 @@ export class SpilledCinemaNodeRuntime {
   }
 
   async verifyPasskeyRegistration(input: { accountId: string; origin: string; response: RegistrationResponseJSON }) {
-    const account = this.getAccount(input.accountId);
+    const account = await this.getPasskeyWatcherAccount(input.accountId);
     const state = await this.loadState();
     const challenge = [...state.privateAuthChallenges]
       .reverse()
@@ -1182,12 +1945,13 @@ export class SpilledCinemaNodeRuntime {
     if (!challenge) {
       throw new Error("Passkey registration challenge expired.");
     }
+    const passkeyContext = await this.getPasskeyContext(input.origin);
     const verification = await verifyRegistrationResponse({
       response: input.response,
       expectedChallenge: challenge.challenge,
-      expectedOrigin: input.origin,
-      expectedRPID: this.getRpId(input.origin),
-      requireUserVerification: false,
+      expectedOrigin: passkeyContext.expectedOrigin,
+      expectedRPID: passkeyContext.rpID,
+      requireUserVerification: true,
     });
     if (!verification.verified) {
       throw new Error("Passkey registration was not verified.");
@@ -1200,6 +1964,20 @@ export class SpilledCinemaNodeRuntime {
       transports: input.response.response.transports,
       createdAt: Date.now(),
     };
+    if (account.role === "admin") {
+      const admin = state.adminAccounts.find((entry) => entry.adminId === account.accountId && !entry.disabledAt);
+      if (!admin) throw new Error("Administrator no longer exists.");
+      await this.saveState({
+        ...state,
+        adminAccounts: state.adminAccounts.map((entry) =>
+          entry.adminId === admin.adminId
+            ? { ...entry, passkeys: entry.passkeys.filter((item) => item.credentialId !== passkey.credentialId).concat(passkey), updatedAt: Date.now() }
+            : entry
+        ),
+        privateAuthChallenges: state.privateAuthChallenges.filter((entry) => entry.challenge !== challenge.challenge),
+      });
+      return await this.createAdminSession({ ...admin, passkeys: admin.passkeys.concat(passkey) });
+    }
     const existingAccount = state.privateAccounts.find((entry) => entry.accountId === account.accountId);
     const privateAccounts = existingAccount
       ? state.privateAccounts.map((entry) =>
@@ -1219,24 +1997,31 @@ export class SpilledCinemaNodeRuntime {
       ...state,
       privateAccounts,
       privateAuthChallenges: state.privateAuthChallenges.filter((entry) => entry.challenge !== challenge.challenge),
+      watcherInvitations: state.watcherInvitations.map((entry) =>
+        entry.watcherId === account.accountId && entry.acceptedAt && !entry.consumedAt
+          ? { ...entry, consumedAt: Date.now() }
+          : entry
+      ),
     });
     return await this.createPrivateSession({ accountId: account.accountId, profileId: account.profiles[0]?.profileId });
   }
 
   async createPasskeyLoginOptions(input: { accountId: string; origin: string }) {
-    const account = this.getAccount(input.accountId);
+    const account = await this.getPasskeyWatcherAccount(input.accountId);
     const state = await this.loadState();
-    const runtimeAccount = state.privateAccounts.find((entry) => entry.accountId === account.accountId);
-    if (!runtimeAccount || runtimeAccount.passkeys.length === 0) {
+    const runtimePasskeys = account.role === "admin"
+      ? state.adminAccounts.find((entry) => entry.adminId === account.accountId)?.passkeys ?? []
+      : state.privateAccounts.find((entry) => entry.accountId === account.accountId)?.passkeys ?? [];
+    if (runtimePasskeys.length === 0) {
       throw new Error("No passkeys are enrolled for this account.");
     }
     const options = await generateAuthenticationOptions({
-      rpID: this.getRpId(input.origin),
-      allowCredentials: runtimeAccount.passkeys.map((credential) => ({
+      rpID: (await this.getPasskeyContext(input.origin)).rpID,
+      allowCredentials: runtimePasskeys.map((credential) => ({
         id: credential.credentialId,
         transports: credential.transports as never,
       })),
-      userVerification: "preferred",
+      userVerification: "required",
     });
     await this.saveState({
       ...state,
@@ -1255,11 +2040,13 @@ export class SpilledCinemaNodeRuntime {
   }
 
   async verifyPasskeyLogin(input: { accountId: string; origin: string; response: AuthenticationResponseJSON; profileId?: string }) {
-    const account = this.getAccount(input.accountId);
+    const account = await this.getPasskeyWatcherAccount(input.accountId);
     const state = await this.loadState();
-    const runtimeAccount = state.privateAccounts.find((entry) => entry.accountId === account.accountId);
-    const passkey = runtimeAccount?.passkeys.find((entry) => entry.credentialId === input.response.id);
-    if (!runtimeAccount || !passkey) {
+    const runtimePasskeys = account.role === "admin"
+      ? state.adminAccounts.find((entry) => entry.adminId === account.accountId)?.passkeys ?? []
+      : state.privateAccounts.find((entry) => entry.accountId === account.accountId)?.passkeys ?? [];
+    const passkey = runtimePasskeys.find((entry) => entry.credentialId === input.response.id);
+    if (!passkey) {
       throw new Error("Unknown passkey.");
     }
     const challenge = [...state.privateAuthChallenges]
@@ -1268,30 +2055,37 @@ export class SpilledCinemaNodeRuntime {
     if (!challenge) {
       throw new Error("Passkey login challenge expired.");
     }
+    const passkeyContext = await this.getPasskeyContext(input.origin);
     const verification = await verifyAuthenticationResponse({
       response: input.response,
       expectedChallenge: challenge.challenge,
-      expectedOrigin: input.origin,
-      expectedRPID: this.getRpId(input.origin),
+      expectedOrigin: passkeyContext.expectedOrigin,
+      expectedRPID: passkeyContext.rpID,
       credential: {
         id: passkey.credentialId,
         publicKey: new Uint8Array(base64UrlDecode(passkey.publicKey)),
         counter: passkey.counter,
       },
-      requireUserVerification: false,
+      requireUserVerification: true,
     });
     if (!verification.verified) {
       throw new Error("Passkey login was not verified.");
     }
+    const updatedPasskey = { ...passkey, counter: verification.authenticationInfo.newCounter, lastUsedAt: Date.now() };
     await this.saveState({
       ...state,
+      adminAccounts: account.role === "admin"
+        ? state.adminAccounts.map((entry) => entry.adminId === account.accountId
+            ? { ...entry, passkeys: entry.passkeys.map((item) => item.credentialId === passkey.credentialId ? updatedPasskey : item), updatedAt: Date.now() }
+            : entry)
+        : state.adminAccounts,
       privateAccounts: state.privateAccounts.map((entry) =>
         entry.accountId === account.accountId
           ? {
               ...entry,
               passkeys: entry.passkeys.map((item) =>
                 item.credentialId === passkey.credentialId
-                  ? { ...item, counter: verification.authenticationInfo.newCounter, lastUsedAt: Date.now() }
+                  ? updatedPasskey
                   : item,
               ),
             }
@@ -1299,6 +2093,11 @@ export class SpilledCinemaNodeRuntime {
       ),
       privateAuthChallenges: state.privateAuthChallenges.filter((entry) => entry.challenge !== challenge.challenge),
     });
+    if (account.role === "admin") {
+      const admin = (await this.loadState()).adminAccounts.find((entry) => entry.adminId === account.accountId);
+      if (!admin) throw new Error("Administrator no longer exists.");
+      return await this.createAdminSession(admin);
+    }
     return await this.createPrivateSession({ accountId: account.accountId, profileId: input.profileId ?? account.profiles[0]?.profileId });
   }
 

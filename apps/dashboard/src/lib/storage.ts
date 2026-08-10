@@ -5,10 +5,12 @@ import type {
   ImportedShow,
   LibrarySettings,
   OfflineEpisodeDownload,
+  CastMember,
 } from "./types";
 import { archiveImportedShow } from "./import-archive";
 import { HOMEPAGE_ARTWORK_VERSION } from "./import-client";
 import { getIntegrationById, type IntegrationId } from "./integrations";
+import { balanceImageResolution } from "./image-resolution";
 
 const STORAGE_KEY = "spilled-library.state.v1";
 const DOWNLOADED_LANGUAGE_KEY = "spilled-library.downloaded-languages.v1";
@@ -66,6 +68,34 @@ function uniqueStrings(values: Array<string | null | undefined>) {
   return result;
 }
 
+function mergeCastMembers(existing: CastMember[] = [], incoming: CastMember[] = []) {
+  const merged: CastMember[] = [];
+  const indexes = new Map<string, number>();
+
+  for (const member of [...existing, ...incoming]) {
+    const name = member.name?.trim();
+    if (!name) continue;
+    const key = normalizeLooseText(name);
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, merged.length);
+      merged.push({ ...member, name });
+      continue;
+    }
+
+    const current = merged[existingIndex];
+    merged[existingIndex] = {
+      ...current,
+      ...member,
+      name: current.name || name,
+      role: member.role?.trim() || current.role || null,
+      profileUrl: member.profileUrl?.trim() || current.profileUrl || null,
+    };
+  }
+
+  return merged;
+}
+
 function parseYearNumber(value: string | number | null | undefined) {
   const match = String(value ?? "").match(/\b(19|20)\d{2}\b/);
   return match ? Number.parseInt(match[0], 10) : null;
@@ -119,11 +149,11 @@ function inferRuntimeMinutes(show: ImportedShow) {
 
 function hydrateShowArtwork(show: ImportedShow): NonNullable<ImportedShow["artwork"]> {
   return {
-    posterUrl: show.artwork?.posterUrl ?? show.posterUrl ?? null,
-    backdropUrl: show.artwork?.backdropUrl ?? show.backdropUrl ?? null,
-    bannerUrl: show.artwork?.bannerUrl ?? show.bannerUrl ?? null,
-    clearLogoUrl: show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null,
-    bannerWithLogoUrl: show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
+    posterUrl: balanceImageResolution(show.artwork?.posterUrl ?? show.posterUrl ?? null, "poster-detail"),
+    backdropUrl: balanceImageResolution(show.artwork?.backdropUrl ?? show.backdropUrl ?? null, "backdrop-hero"),
+    bannerUrl: balanceImageResolution(show.artwork?.bannerUrl ?? show.bannerUrl ?? null, "backdrop-hero"),
+    clearLogoUrl: balanceImageResolution(show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null, "logo"),
+    bannerWithLogoUrl: balanceImageResolution(show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null, "backdrop-hero"),
   };
 }
 
@@ -142,8 +172,8 @@ function hydrateShowMetadata(show: ImportedShow): NonNullable<ImportedShow["meta
     ...(show.metadata?.genres ?? []),
     ...(Array.isArray(extendedShow.genres) ? extendedShow.genres : []),
   ]);
-  const actors = show.metadata?.actors?.length ? show.metadata.actors : show.actors ?? [];
-  const directors = show.metadata?.directors?.length ? show.metadata.directors : show.directors ?? [];
+  const actors = mergeCastMembers(show.actors ?? [], show.metadata?.actors ?? []);
+  const directors = mergeCastMembers(show.directors ?? [], show.metadata?.directors ?? []);
 
   return {
     title: show.metadata?.title ?? show.title,
@@ -181,7 +211,7 @@ function sanitizeImportedShow(show: ImportedShow): ImportedShow {
     metadata,
     actors: metadata.actors,
     directors: metadata.directors,
-    homepagePosterUrl: homepageArtworkIsCurrent ? show.homepagePosterUrl ?? null : null,
+    homepagePosterUrl: homepageArtworkIsCurrent ? balanceImageResolution(show.homepagePosterUrl ?? null, "poster-card") : null,
     homepageBannerUrl: homepageArtworkIsCurrent ? artwork.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null : null,
     homepageArtworkVersion: homepageArtworkIsCurrent ? show.homepageArtworkVersion ?? null : null,
   };
@@ -413,6 +443,24 @@ function uniquePlayerAlias(player: LibraryEpisode["players"][number], players: L
   return candidate;
 }
 
+function normalizeEpisodePlayerAliases(episode: LibraryEpisode): LibraryEpisode {
+  const normalizedPlayers: LibraryEpisode["players"] = [];
+  for (const player of episode.players ?? []) {
+    normalizedPlayers.push({
+      ...player,
+      alias: uniquePlayerAlias(player, normalizedPlayers) as PlayerAlias,
+    });
+  }
+
+  return {
+    ...episode,
+    players: normalizedPlayers,
+    selectedPlayerAlias: normalizedPlayers.some((player) => player.alias === episode.selectedPlayerAlias)
+      ? episode.selectedPlayerAlias
+      : normalizedPlayers[0]?.alias ?? episode.selectedPlayerAlias,
+  };
+}
+
 function mergeEpisodePlayers(existingPlayers: LibraryEpisode["players"], nextPlayers: LibraryEpisode["players"]) {
   const players = [...existingPlayers];
   const refreshedBombujAliases = new Set<string>();
@@ -494,11 +542,11 @@ function mergeProviderMatches(existingShow: ImportedShow, nextShow: ImportedShow
 
 function mergeShowArtwork(existingShow: ImportedShow, nextShow: ImportedShow): NonNullable<ImportedShow["artwork"]> {
   return {
-    posterUrl: nextShow.artwork?.posterUrl ?? nextShow.posterUrl ?? existingShow.artwork?.posterUrl ?? existingShow.posterUrl ?? null,
-    backdropUrl: nextShow.artwork?.backdropUrl ?? nextShow.backdropUrl ?? existingShow.artwork?.backdropUrl ?? existingShow.backdropUrl ?? null,
-    bannerUrl: nextShow.artwork?.bannerUrl ?? nextShow.bannerUrl ?? existingShow.artwork?.bannerUrl ?? existingShow.bannerUrl ?? null,
-    clearLogoUrl: nextShow.artwork?.clearLogoUrl ?? nextShow.clearLogoUrl ?? existingShow.artwork?.clearLogoUrl ?? existingShow.clearLogoUrl ?? null,
-    bannerWithLogoUrl: nextShow.artwork?.bannerWithLogoUrl ?? nextShow.homepageBannerUrl ?? existingShow.artwork?.bannerWithLogoUrl ?? existingShow.homepageBannerUrl ?? null,
+    posterUrl: existingShow.artwork?.posterUrl ?? existingShow.posterUrl ?? nextShow.artwork?.posterUrl ?? nextShow.posterUrl ?? null,
+    backdropUrl: existingShow.artwork?.backdropUrl ?? existingShow.backdropUrl ?? nextShow.artwork?.backdropUrl ?? nextShow.backdropUrl ?? null,
+    bannerUrl: existingShow.artwork?.bannerUrl ?? existingShow.bannerUrl ?? nextShow.artwork?.bannerUrl ?? nextShow.bannerUrl ?? null,
+    clearLogoUrl: existingShow.artwork?.clearLogoUrl ?? existingShow.clearLogoUrl ?? nextShow.artwork?.clearLogoUrl ?? nextShow.clearLogoUrl ?? null,
+    bannerWithLogoUrl: existingShow.artwork?.bannerWithLogoUrl ?? existingShow.homepageBannerUrl ?? nextShow.artwork?.bannerWithLogoUrl ?? nextShow.homepageBannerUrl ?? null,
   };
 }
 
@@ -525,9 +573,10 @@ function mergeShowMetadata(existingShow: ImportedShow, nextShow: ImportedShow, e
     episodeCount: episodes.length,
     genres: uniqueStrings([...(existing.genres ?? []), ...(next.genres ?? [])]),
     ratings: mergeRatings(existing, next),
-    actors: next.actors.length ? next.actors : existing.actors,
-    directors: next.directors.length ? next.directors : existing.directors,
-    updatedAt: Date.now(),
+    actors: mergeCastMembers(existing.actors, next.actors),
+    directors: mergeCastMembers(existing.directors, next.directors),
+    updatedAt: Math.max(existing.updatedAt ?? 0, next.updatedAt ?? 0) || Date.now(),
+    enrichmentVersion: Math.max(existing.enrichmentVersion ?? 0, next.enrichmentVersion ?? 0) || undefined,
   };
 }
 
@@ -563,6 +612,7 @@ function mergeImportedEpisode(existingEpisode: LibraryEpisode, nextEpisode: Libr
     playbackPositionSeconds: existingEpisode.playbackPositionSeconds,
     playbackDurationSeconds: existingEpisode.playbackDurationSeconds,
     playbackUpdatedAt: existingEpisode.playbackUpdatedAt,
+    watched: existingEpisode.watched ?? nextEpisode.watched,
     players,
     selectedPlayerAlias,
   };
@@ -573,9 +623,9 @@ function mergeDuplicateEpisodes(episodes: LibraryEpisode[]) {
   for (const episode of episodes) {
     const key = episodeMergeKey(episode);
     const existingEpisode = mergedEpisodes.get(key);
-    mergedEpisodes.set(key, existingEpisode ? mergeImportedEpisode(existingEpisode, episode) : episode);
+    mergedEpisodes.set(key, existingEpisode ? mergeImportedEpisode(existingEpisode, episode) : normalizeEpisodePlayerAliases(episode));
   }
-  return Array.from(mergedEpisodes.values()).sort((left, right) =>
+  return Array.from(mergedEpisodes.values()).map(normalizeEpisodePlayerAliases).sort((left, right) =>
     left.seasonNumber - right.seasonNumber ||
     (left.episodeNumber ?? 0) - (right.episodeNumber ?? 0) ||
     left.importedAt - right.importedAt
@@ -632,8 +682,72 @@ function mergeImportedShow(existingShow: ImportedShow, nextShow: ImportedShow): 
     metadata,
     actors: metadata.actors,
     directors: metadata.directors,
+    availableSeasons: Array.from(new Set([
+      ...existingShow.availableSeasons,
+      ...nextShow.availableSeasons,
+      ...episodes.map((episode) => episode.seasonNumber),
+    ])).filter((season) => Number.isFinite(season)).sort((left, right) => left - right),
     episodes,
   };
+}
+
+export function mergeLibraryStates(primaryState: LibraryState, secondaryState: LibraryState): LibraryState {
+  const primary = normalizeLibraryStateCandidate(primaryState);
+  const secondary = normalizeLibraryStateCandidate(secondaryState);
+  const shows = [...primary.shows];
+
+  for (const incomingShow of secondary.shows) {
+    const existingIndex = shows.findIndex((show) => showsReferToSameTitle(show, incomingShow));
+    if (existingIndex >= 0) {
+      shows[existingIndex] = mergeImportedShow(shows[existingIndex], incomingShow);
+    } else {
+      shows.push(incomingShow);
+    }
+  }
+
+  return normalizeLibraryStateCandidate({
+    ...secondary,
+    ...primary,
+    shows: shows.sort((left, right) => right.importedAt - left.importedAt),
+    settings: {
+      ...secondary.settings,
+      ...primary.settings,
+      artworkSources: {
+        ...secondary.settings.artworkSources,
+        ...primary.settings.artworkSources,
+      },
+    },
+    offlineDownloads: {
+      ...secondary.offlineDownloads,
+      ...primary.offlineDownloads,
+    },
+  });
+}
+
+export function updateShowCast(slug: string, actors: CastMember[], directors: CastMember[] = []) {
+  const state = readLibraryState();
+  const nextState = {
+    ...state,
+    shows: state.shows.map((show) => {
+      if (show.slug !== slug) return show;
+      const metadata = hydrateShowMetadata(show);
+      const mergedActors = mergeCastMembers(metadata.actors, actors);
+      const mergedDirectors = mergeCastMembers(metadata.directors, directors);
+      return {
+        ...show,
+        actors: mergedActors,
+        directors: mergedDirectors,
+        metadata: {
+          ...metadata,
+          actors: mergedActors,
+          directors: mergedDirectors,
+          updatedAt: Date.now(),
+        },
+      };
+    }),
+  };
+  writeLibraryState(nextState);
+  return nextState;
 }
 
 export function setDownloadedLanguage(episodeId: string, language: string) {
@@ -652,11 +766,28 @@ export function removeDownloadedLanguage(episodeId: string) {
 
 export function upsertImportedShow(show: ImportedShow) {
   const state = readLibraryState();
-  const shows = [...state.shows];
   const sanitizedShow = sanitizeImportedShow(show);
-  const existingIndex = shows.findIndex((entry) => showsReferToSameTitle(entry, sanitizedShow));
-
   archiveImportedShow(sanitizedShow);
+  const nextState = mergeImportedShowIntoState(state, sanitizedShow);
+
+  writeLibraryState(nextState);
+  return nextState;
+}
+
+export function mergeImportedShowIntoState(
+  state: LibraryState,
+  show: ImportedShow,
+  targetShowSlug?: string,
+) {
+  const normalizedState = normalizeLibraryStateCandidate(state);
+  const shows = [...normalizedState.shows];
+  const sanitizedShow = sanitizeImportedShow(show);
+  const targetIndex = targetShowSlug
+    ? shows.findIndex((entry) => entry.slug === targetShowSlug)
+    : -1;
+  const existingIndex = targetIndex >= 0
+    ? targetIndex
+    : shows.findIndex((entry) => showsReferToSameTitle(entry, sanitizedShow));
 
   if (existingIndex >= 0) {
     shows[existingIndex] = mergeImportedShow(shows[existingIndex], sanitizedShow);
@@ -664,13 +795,10 @@ export function upsertImportedShow(show: ImportedShow) {
     shows.unshift(sanitizedShow);
   }
 
-  const nextState = {
-    ...state,
+  return normalizeLibraryStateCandidate({
+    ...normalizedState,
     shows: shows.sort((left, right) => right.importedAt - left.importedAt),
-  };
-
-  writeLibraryState(nextState);
-  return nextState;
+  });
 }
 
 export function removeShow(slug: string) {
@@ -872,9 +1000,27 @@ export function updateEpisodePlaybackProgress(
               playbackPositionSeconds: currentTime,
               playbackDurationSeconds: duration && duration > 0 ? duration : episode.playbackDurationSeconds,
               playbackUpdatedAt: Date.now(),
+              watched: episode.watched || Boolean(duration && duration > 0 && currentTime >= Math.max(30, duration * 0.9)),
             }
           : episode,
       ),
+    })),
+  };
+  writeLibraryState(nextState);
+  return nextState;
+}
+
+export function markEpisodeWatched(episodeId: string) {
+  return setEpisodeWatched(episodeId, true);
+}
+
+export function setEpisodeWatched(episodeId: string, watched: boolean) {
+  const state = readLibraryState();
+  const nextState = {
+    ...state,
+    shows: state.shows.map((show) => ({
+      ...show,
+      episodes: show.episodes.map((episode) => episode.id === episodeId ? { ...episode, watched, playbackUpdatedAt: Date.now() } : episode),
     })),
   };
   writeLibraryState(nextState);

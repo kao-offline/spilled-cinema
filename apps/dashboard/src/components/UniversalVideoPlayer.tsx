@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
+import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
 import { balanceImageResolution } from "../lib/image-resolution";
+import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
+import type { SkipSegment } from "../lib/intro-skip";
+import { findActiveSkipSegment, prewarmSkipTarget } from "../lib/intro-skip";
 
 type SubtitleTrack = {
   src: string;
@@ -22,6 +25,86 @@ type QualityLevel = {
   label: string;
 };
 
+type WebKitFullscreenVideo = HTMLVideoElement & {
+  webkitDisplayingFullscreen?: boolean;
+  webkitEnterFullscreen?: () => void;
+  webkitExitFullscreen?: () => void;
+};
+
+function setIOSInlinePlayback(video: HTMLVideoElement, inline: boolean) {
+  video.playsInline = inline;
+  if (inline) {
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+  } else {
+    video.removeAttribute("playsinline");
+    video.removeAttribute("webkit-playsinline");
+  }
+}
+
+type LockableScreenOrientation = ScreenOrientation & {
+  lock?: (orientation: "landscape") => Promise<void>;
+  unlock?: () => void;
+};
+
+type SubtitleEdge = "none" | "shadow" | "outline";
+
+type SubtitleAppearance = {
+  size: number;
+  textColor: string;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  edge: SubtitleEdge;
+  position: number;
+};
+
+const SUBTITLE_APPEARANCE_KEY = "spilled.player.subtitle-appearance.v1";
+const DEFAULT_SUBTITLE_APPEARANCE: SubtitleAppearance = {
+  size: 100,
+  textColor: "#ffffff",
+  backgroundColor: "#000000",
+  backgroundOpacity: 65,
+  edge: "outline",
+  position: 88,
+};
+
+function readSubtitleAppearance() {
+  if (typeof window === "undefined") return DEFAULT_SUBTITLE_APPEARANCE;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SUBTITLE_APPEARANCE_KEY) ?? "null") as Partial<SubtitleAppearance> | null;
+    if (!saved) return DEFAULT_SUBTITLE_APPEARANCE;
+    return {
+      size: clamp(Number(saved.size) || 100, 60, 200),
+      textColor: /^#[0-9a-f]{6}$/i.test(saved.textColor ?? "") ? saved.textColor! : DEFAULT_SUBTITLE_APPEARANCE.textColor,
+      backgroundColor: /^#[0-9a-f]{6}$/i.test(saved.backgroundColor ?? "") ? saved.backgroundColor! : DEFAULT_SUBTITLE_APPEARANCE.backgroundColor,
+      backgroundOpacity: clamp(Number(saved.backgroundOpacity) || 0, 0, 100),
+      edge: ["none", "shadow", "outline"].includes(saved.edge ?? "") ? saved.edge as SubtitleEdge : DEFAULT_SUBTITLE_APPEARANCE.edge,
+      position: clamp(Number(saved.position) || 88, 65, 94),
+    };
+  } catch {
+    return DEFAULT_SUBTITLE_APPEARANCE;
+  }
+}
+
+function hexToRgba(hex: string, opacity: number) {
+  const value = hex.replace("#", "");
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${clamp(opacity, 0, 100) / 100})`;
+}
+
+function getHlsBufferProfile() {
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  return selectHlsBufferProfile({
+    saveData: connection?.saveData,
+    effectiveType: connection?.effectiveType,
+    compactViewport: window.matchMedia("(max-width: 768px)").matches,
+  });
+}
+
 type UniversalVideoPlayerProps = {
   src: string;
   poster?: string | null;
@@ -36,7 +119,10 @@ type UniversalVideoPlayerProps = {
   subtitleTracks?: SubtitleTrack[];
   autoPlayToken?: number | null;
   initialTime?: number | null;
+  skipSegments?: SkipSegment[];
+  onSkipIntro?: (segment: SkipSegment) => void;
   onProgress?: (progress: { currentTime: number; duration: number }) => void;
+  onEnded?: () => void;
   onError?: (message: string) => void;
 };
 
@@ -94,12 +180,6 @@ function getBufferedRanges(video: HTMLVideoElement, duration: number): BufferedR
   return ranges;
 }
 
-function hlsLevelLabel(level: { height?: number; bitrate?: number }, index: number) {
-  if (level.height) return `${level.height}p`;
-  if (level.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
-  return `Level ${index + 1}`;
-}
-
 export function UniversalVideoPlayer({
   src,
   poster,
@@ -113,7 +193,10 @@ export function UniversalVideoPlayer({
   subtitleTracks = [],
   autoPlayToken = null,
   initialTime = null,
+  skipSegments = [],
+  onSkipIntro,
   onProgress,
+  onEnded,
   onError,
 }: UniversalVideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -123,6 +206,7 @@ export function UniversalVideoPlayer({
   const initialTimeRef = useRef(initialTime);
   const onErrorRef = useRef(onError);
   const onProgressRef = useRef(onProgress);
+  const onEndedRef = useRef(onEnded);
   const hlsRef = useRef<Hls | null>(null);
   const dashRef = useRef<MediaPlayerClass | null>(null);
   const lastAutoPlayTokenRef = useRef<number | null>(null);
@@ -137,12 +221,24 @@ export function UniversalVideoPlayer({
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [cssFullscreen, setCssFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
   const [qualityLevel, setQualityLevel] = useState(-1);
   const [captionsEnabled, setCaptionsEnabled] = useState(subtitleTracks.some((track) => track.default));
+  const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState(() => Math.max(0, subtitleTracks.findIndex((track) => track.default)));
+  const [subtitleAppearance, setSubtitleAppearance] = useState<SubtitleAppearance>(readSubtitleAppearance);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const [autoplay, setAutoplay] = useState(true);
+  const [loop, setLoop] = useState(false);
+  const [brightness, setBrightness] = useState(100);
+  const [mirrored, setMirrored] = useState(false);
+  const [sleepTimer, setSleepTimer] = useState<number | null>(null);
+  const [settingsSection, setSettingsSection] = useState<"main" | "subtitles">("main");
+  const activeSkipSegment = useMemo(() => findActiveSkipSegment(skipSegments, currentTime), [skipSegments, currentTime]);
+  const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceType = useMemo(() => getSourceType(src), [src]);
   const subtitleTrackSignature = useMemo(
     () => subtitleTracks
@@ -175,16 +271,54 @@ export function UniversalVideoPlayer({
   }, [onProgress]);
 
   useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SUBTITLE_APPEARANCE_KEY, JSON.stringify(subtitleAppearance));
+    } catch {
+      // Player preferences are optional when storage is unavailable.
+    }
+  }, [subtitleAppearance]);
+
+  useEffect(() => {
+    if (sleepTimerRef.current) {
+      clearTimeout(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+    if (sleepTimer && sleepTimer > 0) {
+      sleepTimerRef.current = setTimeout(() => {
+        const video = videoRef.current;
+        if (video) video.pause();
+        setSleepTimer(null);
+      }, sleepTimer * 60 * 1000);
+    }
+    return () => {
+      if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
+    };
+  }, [sleepTimer]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.loop = loop;
+  }, [loop]);
+
+  useEffect(() => {
     const host = videoHostRef.current;
     if (!host) return undefined;
 
     host.replaceChildren();
     playbackErrorSentRef.current = false;
     playbackStartedRef.current = false;
+    setAutoplayBlocked(false);
+    setWaiting(true);
     const videoElement = document.createElement("video");
     videoElement.className = "h-full w-full object-contain";
     videoElement.playsInline = true;
-    videoElement.preload = "metadata";
+    videoElement.setAttribute("playsinline", "");
+    videoElement.setAttribute("webkit-playsinline", "");
+    videoElement.preload = "auto";
     videoElement.playbackRate = playbackRate;
     if (poster) videoElement.poster = poster;
 
@@ -206,21 +340,48 @@ export function UniversalVideoPlayer({
     setQualityLevel(-1);
     setSettingsOpen(false);
     let disposed = false;
+    let fatalNetworkRecoveries = 0;
+    let fatalMediaRecoveries = 0;
+    const compactViewport = window.matchMedia("(max-width: 768px)").matches;
+    let adaptiveQualityUnlocked = !compactViewport;
+    let adaptiveUnlockAheadSeconds = 15;
+    const nativeHlsSupported = Boolean(
+      videoElement.canPlayType("application/vnd.apple.mpegurl")
+      || videoElement.canPlayType("application/x-mpegURL"),
+    );
+    const useNativeHls = sourceType === "application/x-mpegURL" && shouldPreferNativeHls({
+      canPlayNativeHls: nativeHlsSupported,
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
+    });
 
-    if (sourceType === "application/x-mpegURL" && Hls.isSupported()) {
+    if (sourceType === "application/x-mpegURL" && Hls.isSupported() && !useNativeHls) {
+      const bufferProfile = getHlsBufferProfile();
+      adaptiveUnlockAheadSeconds = Math.min(30, Math.max(12, Math.round(bufferProfile.aheadSeconds / 3)));
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        startLevel: 0,
-        startFragPrefetch: false,
-        testBandwidth: false,
-        abrEwmaDefaultEstimate: 1_500_000,
-        maxStarvationDelay: 2,
-        maxLoadingDelay: 2,
-        capLevelToPlayerSize: true,
-        maxBufferLength: 20,
-        maxMaxBufferLength: 45,
-        backBufferLength: 20,
+        startLevel: compactViewport ? 0 : -1,
+        startFragPrefetch: true,
+        testBandwidth: true,
+        abrEwmaDefaultEstimate: compactViewport
+          ? bufferProfile.bandwidthEstimate
+          : Math.max(bufferProfile.bandwidthEstimate, 6_000_000),
+        abrBandWidthFactor: compactViewport ? 0.72 : 0.9,
+        abrBandWidthUpFactor: compactViewport ? 0.55 : 0.75,
+        abrMaxWithRealBitrate: true,
+        maxStarvationDelay: 4,
+        maxLoadingDelay: 4,
+        capLevelToPlayerSize: compactViewport,
+        maxBufferLength: bufferProfile.aheadSeconds,
+        maxMaxBufferLength: bufferProfile.maximumAheadSeconds,
+        maxBufferSize: bufferProfile.maximumBytes,
+        backBufferLength: 30,
+        maxBufferHole: 0.8,
+        highBufferWatchdogPeriod: 2,
+        nudgeOffset: 0.1,
+        nudgeMaxRetry: 5,
       });
       hlsRef.current = hls;
       hls.loadSource(src);
@@ -228,13 +389,18 @@ export function UniversalVideoPlayer({
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setQualityLevels(hls.levels.map((level, index) => ({
           index,
-          label: hlsLevelLabel(level, index),
+          label: formatHlsQualityLabel(level, index),
         })));
-        hls.nextAutoLevel = 0;
-        setQualityLevel(hls.currentLevel);
+        if (compactViewport) {
+          hls.currentLevel = 0;
+          setQualityLevel(0);
+        } else {
+          hls.currentLevel = -1;
+          setQualityLevel(-1);
+        }
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
-        setQualityLevel(data.level);
+        setQualityLevel(hls.autoLevelEnabled ? -1 : data.level);
       });
       hls.on(Hls.Events.ERROR, (_event, data) => {
         const responseCode = typeof data.response?.code === "number" ? data.response.code : 0;
@@ -242,7 +408,18 @@ export function UniversalVideoPlayer({
         const details = String(data.details ?? "");
         const startupLoadFailed = /manifest|level/i.test(details) && data.type === Hls.ErrorTypes.NETWORK_ERROR;
         const beforePlayback = !playbackStartedRef.current && (videoElement.currentTime || 0) < 3;
+        if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && fatalNetworkRecoveries < 2) {
+          fatalNetworkRecoveries += 1;
+          hls.startLoad(videoElement.currentTime || -1);
+          return;
+        }
+        if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR && fatalMediaRecoveries < 2) {
+          fatalMediaRecoveries += 1;
+          hls.recoverMediaError();
+          return;
+        }
         if (beforePlayback && (data.fatal || networkBlocked || startupLoadFailed) && !playbackErrorSentRef.current) {
+          setWaiting(false);
           playbackErrorSentRef.current = true;
           onErrorRef.current?.(`HLS playback failed${responseCode ? ` (${responseCode})` : ""}: ${data.details || data.type}`);
         }
@@ -257,6 +434,15 @@ export function UniversalVideoPlayer({
             abr: { autoSwitchBitrate: { audio: true, video: true } },
             buffer: { bufferTimeDefault: 20, bufferTimeAtTopQuality: 30 },
           },
+        });
+        dash.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+          if (disposed) return;
+          const representations = dash.getRepresentationsByType("video");
+          setQualityLevels(representations.map((representation, index) => ({
+            index,
+            label: formatHlsQualityLabel(representation, index),
+          })));
+          setQualityLevel(-1);
         });
         dash.initialize(videoElement, src, false);
       }).catch(() => {
@@ -278,7 +464,14 @@ export function UniversalVideoPlayer({
       setPaused(videoElement.paused);
       setCurrentTime(videoElement.currentTime || 0);
       setDuration(videoElement.duration || 0);
-      setBufferedRanges(getBufferedRanges(videoElement, videoElement.duration || 0));
+      const nextBufferedRanges = getBufferedRanges(videoElement, videoElement.duration || 0);
+      setBufferedRanges(nextBufferedRanges);
+      const hls = hlsRef.current;
+      if (!adaptiveQualityUnlocked && hls && getBufferedAheadSeconds(videoElement.currentTime || 0, nextBufferedRanges) >= adaptiveUnlockAheadSeconds) {
+        adaptiveQualityUnlocked = true;
+        hls.currentLevel = -1;
+        setQualityLevel(-1);
+      }
       setVolume(videoElement.volume || 1);
       setMuted(videoElement.muted);
       setPlaybackRate(videoElement.playbackRate || 1);
@@ -287,20 +480,34 @@ export function UniversalVideoPlayer({
         duration: videoElement.duration || 0,
       });
     };
-    const markWaiting = () => setWaiting(true);
+    const skipSmallBufferGap = () => {
+      const position = videoElement.currentTime || 0;
+      const ranges: BufferedRange[] = [];
+      for (let index = 0; index < videoElement.buffered.length; index += 1) {
+        ranges.push({ start: videoElement.buffered.start(index), end: videoElement.buffered.end(index) });
+      }
+      const target = findSmallBufferGapTarget(position, ranges);
+      if (target == null) return false;
+      videoElement.currentTime = target;
+      return true;
+    };
+    const markWaiting = () => {
+      if (!skipSmallBufferGap()) setWaiting(true);
+    };
+    const prioritizeSeekTarget = () => {
+      setWaiting(true);
+      hlsRef.current?.startLoad(videoElement.currentTime || 0);
+    };
     const markReady = () => {
       setWaiting(false);
-      const hls = hlsRef.current;
-      if (hls && hls.autoLevelEnabled) {
-        hls.currentLevel = -1;
-        setQualityLevel(-1);
-      }
     };
     const markPlaying = () => {
       playbackStartedRef.current = true;
+      setAutoplayBlocked(false);
       markReady();
     };
     const markError = () => {
+      setWaiting(false);
       if (playbackStartedRef.current || (videoElement.currentTime || 0) >= 3) return;
       if (playbackErrorSentRef.current) return;
       playbackErrorSentRef.current = true;
@@ -315,16 +522,26 @@ export function UniversalVideoPlayer({
 
     const syncNow = () => sync(true);
     const syncThrottled = () => sync(false);
+    const markEnded = () => {
+      sync(true);
+      onEndedRef.current?.();
+    };
+    const syncProgress = () => {
+      skipSmallBufferGap();
+      sync(false);
+    };
     videoElement.addEventListener("play", syncNow);
     videoElement.addEventListener("pause", syncNow);
     videoElement.addEventListener("timeupdate", syncThrottled);
     videoElement.addEventListener("durationchange", syncNow);
-    videoElement.addEventListener("progress", syncThrottled);
+    videoElement.addEventListener("progress", syncProgress);
     videoElement.addEventListener("loadedmetadata", syncNow);
     videoElement.addEventListener("loadedmetadata", restoreInitialTime, { once: true });
     videoElement.addEventListener("volumechange", syncNow);
     videoElement.addEventListener("ratechange", syncNow);
+    videoElement.addEventListener("ended", markEnded);
     videoElement.addEventListener("waiting", markWaiting);
+    videoElement.addEventListener("seeking", prioritizeSeekTarget);
     videoElement.addEventListener("playing", markPlaying);
     videoElement.addEventListener("canplay", markReady);
     videoElement.addEventListener("error", markError);
@@ -346,18 +563,70 @@ export function UniversalVideoPlayer({
 
   useEffect(() => {
     const video = videoRef.current;
+    if (!video) return undefined;
+    const createdUrls: string[] = [];
+    let canceled = false;
+    const trackElements = Array.from(video.querySelectorAll("track"));
+    trackElements.forEach((trackElement, index) => {
+      const definition = subtitleTracks[index];
+      if (!definition || definition.src.startsWith("blob:")) return;
+      void fetch(definition.src, { credentials: "omit" })
+        .then((response) => {
+          if (!response.ok) throw new Error(`Subtitle track failed (${response.status}).`);
+          return response.text();
+        })
+        .then((text) => {
+          if (canceled || !trackElement.isConnected) return;
+          const url = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
+          createdUrls.push(url);
+          trackElement.src = url;
+        })
+        .catch(() => {
+          // Keep the original URL; the browser may still attempt to load it.
+        });
+    });
+    return () => {
+      canceled = true;
+      for (const url of createdUrls) URL.revokeObjectURL(url);
+    };
+  }, [subtitleTrackSignature, src]);
+
+  useEffect(() => {
+    const video = videoRef.current;
     if (!video) return;
-    for (const track of Array.from(video.textTracks)) {
-      track.mode = captionsEnabled ? "showing" : "disabled";
+    for (const [index, track] of Array.from(video.textTracks).entries()) {
+      track.mode = captionsEnabled && index === selectedSubtitleTrack ? "showing" : "disabled";
     }
-  }, [captionsEnabled, subtitleTrackSignature]);
+  }, [captionsEnabled, selectedSubtitleTrack, subtitleTrackSignature]);
 
   useEffect(() => {
     if (subtitleTracks.length === 0) return;
-    if (subtitleTracks.some((track) => track.default)) {
+    const defaultIndex = subtitleTracks.findIndex((track) => track.default);
+    setSelectedSubtitleTrack(Math.max(0, defaultIndex));
+    if (defaultIndex >= 0) {
       setCaptionsEnabled(true);
     }
   }, [subtitleTrackSignature, subtitleTracks]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return undefined;
+    const cleanups: Array<() => void> = [];
+    for (const track of Array.from(video.textTracks)) {
+      const applyPosition = () => {
+        for (const cue of Array.from(track.cues ?? [])) {
+          if (!("snapToLines" in cue) || !("line" in cue)) continue;
+          const vttCue = cue as VTTCue;
+          vttCue.snapToLines = false;
+          vttCue.line = subtitleAppearance.position;
+        }
+      };
+      applyPosition();
+      track.addEventListener("cuechange", applyPosition);
+      cleanups.push(() => track.removeEventListener("cuechange", applyPosition));
+    }
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [subtitleAppearance.position, subtitleTrackSignature]);
 
   useEffect(() => {
     if (!autoPlayToken || autoPlayToken === lastAutoPlayTokenRef.current) return undefined;
@@ -368,7 +637,15 @@ export function UniversalVideoPlayer({
     lastAutoPlayTokenRef.current = autoPlayToken;
     const play = () => {
       if (canceled) return;
-      void video.play().catch(() => undefined);
+      void video.play()
+        .then(() => setAutoplayBlocked(false))
+        .catch((error: unknown) => {
+          if (canceled) return;
+          if (isAutoplayPolicyError(error)) {
+            setWaiting(false);
+            setAutoplayBlocked(true);
+          }
+        });
     };
 
     play();
@@ -380,15 +657,63 @@ export function UniversalVideoPlayer({
   }, [autoPlayToken, src]);
 
   useEffect(() => {
-    const handleFullscreenChange = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    const video = videoRef.current as WebKitFullscreenVideo | null;
+    const handleFullscreenChange = () => {
+      const active = document.fullscreenElement === containerRef.current;
+      setFullscreen(active);
+      if (!active) {
+        setCssFullscreen(false);
+        (screen.orientation as LockableScreenOrientation | undefined)?.unlock?.();
+      }
+    };
+    const handleWebKitBeginFullscreen = () => {
+      setFullscreen(true);
+      setSettingsOpen(false);
+    };
+    const handleWebKitEndFullscreen = () => {
+      setFullscreen(false);
+      setCssFullscreen(false);
+      if (video) setIOSInlinePlayback(video, true);
+    };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
+    video?.addEventListener("webkitbeginfullscreen", handleWebKitBeginFullscreen);
+    video?.addEventListener("webkitendfullscreen", handleWebKitEndFullscreen);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      video?.removeEventListener("webkitbeginfullscreen", handleWebKitBeginFullscreen);
+      video?.removeEventListener("webkitendfullscreen", handleWebKitEndFullscreen);
+    };
+  }, [poster, sourceType, src, subtitleTrackSignature]);
+
+  useEffect(() => {
+    if (!cssFullscreen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [cssFullscreen]);
 
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) void video.play();
+    if (video.paused) {
+      hlsRef.current?.startLoad(video.currentTime || -1);
+      void video.play()
+        .then(() => setAutoplayBlocked(false))
+        .catch((error: unknown) => {
+          setWaiting(false);
+          if (isAutoplayPolicyError(error)) {
+            setAutoplayBlocked(true);
+            return;
+          }
+          setAutoplayBlocked(false);
+          if (!playbackErrorSentRef.current) {
+            playbackErrorSentRef.current = true;
+            onErrorRef.current?.("The resolved stream could not be started.");
+          }
+        });
+    }
     else video.pause();
   }
 
@@ -455,24 +780,103 @@ export function UniversalVideoPlayer({
     setPlaybackRate(value);
   }
 
-  function setHlsQuality(value: number) {
+  function setPlayerQuality(value: number) {
     const hls = hlsRef.current;
-    if (!hls) return;
-    hls.currentLevel = value;
+    if (hls) {
+      hls.currentLevel = value;
+      setQualityLevel(value);
+      return;
+    }
+    const dash = dashRef.current;
+    if (!dash) return;
+    dash.updateSettings({
+      streaming: {
+        abr: { autoSwitchBitrate: { audio: true, video: value < 0 } },
+      },
+    });
+    if (value >= 0) dash.setRepresentationForTypeByIndex("video", value, true);
     setQualityLevel(value);
   }
 
   async function toggleFullscreen() {
     const element = containerRef.current;
-    if (!element) return;
-    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
-    else await element.requestFullscreen().catch(() => undefined);
+    const video = videoRef.current as WebKitFullscreenVideo | null;
+    if (!element || !video) return;
+
+    if (video.webkitDisplayingFullscreen) {
+      video.webkitExitFullscreen?.();
+      return;
+    }
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    if (cssFullscreen) {
+      setCssFullscreen(false);
+      setFullscreen(false);
+      return;
+    }
+
+    setSettingsOpen(false);
+    const appleTouchDevice = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (appleTouchDevice && typeof video.webkitEnterFullscreen === "function") {
+      try {
+        // This must happen synchronously inside the tap handler on iOS.
+        // Installed iOS PWAs can expose the WebKit method while refusing it
+        // when the dynamically-created video is still forced to play inline.
+        setIOSInlinePlayback(video, false);
+        video.webkitEnterFullscreen();
+        setFullscreen(true);
+        return;
+      } catch {
+        setIOSInlinePlayback(video, true);
+        // Continue to the standard API or app-level fallback.
+      }
+    }
+
+    if (document.fullscreenEnabled && typeof element.requestFullscreen === "function") {
+      const entered = await element.requestFullscreen({ navigationUI: "hide" })
+        .then(() => true)
+        .catch(() => false);
+      if (entered) {
+        setFullscreen(true);
+        const orientation = screen.orientation as LockableScreenOrientation | undefined;
+        void orientation?.lock?.("landscape").catch(() => undefined);
+        return;
+      }
+    }
+
+    // iPhone Safari exposes fullscreen on the video element rather than arbitrary containers.
+    if (typeof video.webkitEnterFullscreen === "function") {
+      try {
+        setIOSInlinePlayback(video, false);
+        video.webkitEnterFullscreen();
+        setFullscreen(true);
+        return;
+      } catch {
+        setIOSInlinePlayback(video, true);
+        // Fall through to an app-level fullscreen surface on older embedded browsers.
+      }
+    }
+
+    setCssFullscreen(true);
+    setFullscreen(true);
   }
 
   function handleSurfaceClick(event: MouseEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement | null;
     if (target?.closest("button,input,select,textarea,a,[data-player-control]")) return;
     togglePlay();
+  }
+
+  function handleSkipIntro() {
+    const segment = activeSkipSegment;
+    if (!segment) return;
+    const target = segment.end ?? (videoRef.current?.duration || duration);
+    seekTo(target);
+    onSkipIntro?.(segment);
+    prewarmSkipTarget(src, target);
   }
 
   useEffect(() => {
@@ -503,18 +907,29 @@ export function UniversalVideoPlayer({
   const playableDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
   const watchedPercent = playableDuration > 0 ? clamp((currentTime / playableDuration) * 100, 0, 100) : 0;
   const speedOptions = [0.75, 1, 1.25, 1.5, 2];
+  const subtitlePlayerStyle = {
+    "--subtitle-size": `${subtitleAppearance.size}%`,
+    "--subtitle-color": subtitleAppearance.textColor,
+    "--subtitle-bg": hexToRgba(subtitleAppearance.backgroundColor, subtitleAppearance.backgroundOpacity),
+  } as CSSProperties;
 
   return (
     <div
       ref={containerRef}
-      className={clsx("group relative h-full w-full overflow-hidden bg-black text-white", className)}
+      className={clsx(
+        "spilled-universal-player group relative h-full w-full overflow-hidden bg-black text-white",
+        cssFullscreen && "fixed inset-0 z-[250] h-[100dvh] min-h-[100dvh] w-screen",
+        className,
+      )}
+      data-subtitle-edge={subtitleAppearance.edge}
+      style={subtitlePlayerStyle}
       onClick={handleSurfaceClick}
       onMouseMove={() => setControlsVisible(true)}
       onMouseLeave={() => {
         if (!paused) setControlsVisible(false);
       }}
     >
-      <div ref={videoHostRef} className="absolute inset-0" />
+      <div ref={videoHostRef} className="absolute inset-0" style={{ filter: `brightness(${brightness / 100})`, transform: mirrored ? "scaleX(-1)" : undefined }} />
 
       <div className={clsx(
         "pointer-events-none absolute inset-0 z-10 flex items-end justify-start bg-[linear-gradient(90deg,rgba(0,0,0,0.58),rgba(0,0,0,0.10)_42%,rgba(0,0,0,0.18)),linear-gradient(0deg,rgba(0,0,0,0.66),rgba(0,0,0,0.10)_44%,rgba(0,0,0,0.05))] px-5 pb-36 pt-24 text-left transition-[opacity,transform,filter] duration-300 ease-out sm:px-9 sm:pb-40 lg:px-12",
@@ -558,18 +973,50 @@ export function UniversalVideoPlayer({
         </div>
       ) : null}
 
+      {paused && !waiting ? (
+        <button
+          type="button"
+          data-player-control
+          onClick={(event) => {
+            event.stopPropagation();
+            togglePlay();
+          }}
+          className="absolute left-1/2 top-1/2 z-20 flex h-16 w-16 touch-manipulation -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/54 text-white shadow-[0_18px_50px_rgba(0,0,0,.48)] backdrop-blur-md transition active:scale-95 lg:hidden"
+          aria-label={autoplayBlocked ? "Tap to start playback" : "Play"}
+        >
+          <Play className="ml-1 h-7 w-7 fill-white" strokeWidth={0} />
+        </button>
+      ) : null}
+
       <div
         data-player-control
         className={clsx(
-          "absolute inset-x-0 bottom-0 z-30 px-4 pb-4 pt-8 transition-opacity duration-200 sm:px-7",
+          "absolute inset-x-0 bottom-0 z-30 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8 transition-opacity duration-200 sm:px-7",
           "bg-[linear-gradient(0deg,rgba(0,0,0,0.34),rgba(0,0,0,0.16)_56%,rgba(0,0,0,0))]",
           controlsVisible || paused ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
-        <div className="mb-3 flex items-center gap-3 text-xs font-semibold text-white/70">
-          <span>{sourceLabel}</span>
+        <div className="mb-2 flex min-w-0 items-center gap-3 text-[11px] font-semibold text-white/70 sm:mb-3 sm:text-xs">
+          <span className="truncate">{autoplayBlocked ? "Tap play to start" : sourceLabel}</span>
           <span className="ml-auto tabular-nums text-white/78">{formatClock(currentTime)} / {formatClock(duration)}</span>
         </div>
+
+        {activeSkipSegment && (
+          <div className="absolute bottom-full right-0 mb-2 sm:mb-4">
+            <button
+              type="button"
+              data-player-control
+              onClick={(event) => {
+                event.stopPropagation();
+                handleSkipIntro();
+              }}
+              className="flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 active:scale-95"
+            >
+              <SkipForward className="h-4 w-4 fill-white" strokeWidth={0} />
+              Skip {activeSkipSegment.type === "intro" ? "Intro" : activeSkipSegment.type === "outro" ? "Outro" : activeSkipSegment.type}
+            </button>
+          </div>
+        )}
 
         <div
           ref={seekBarRef}
@@ -588,6 +1035,20 @@ export function UniversalVideoPlayer({
           className="group/seek relative h-5 cursor-pointer touch-none"
         >
           <div className="absolute left-0 right-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-white/28" />
+          {playableDuration > 0 ? skipSegments.map((segment, index) => (
+            <div
+              key={`skip-${segment.type}-${index}`}
+              className={clsx(
+                "skip-segment-marker absolute top-1/2 h-[5px] -translate-y-1/2 rounded-full",
+                segment.type === "intro" ? "bg-orange-500/70" : segment.type === "outro" ? "bg-blue-500/70" : "bg-purple-500/70",
+              )}
+              style={{
+                left: `${(segment.start / playableDuration) * 100}%`,
+                width: `${Math.max(0.3, (((segment.end ?? playableDuration) - segment.start) / playableDuration) * 100)}%`,
+              }}
+              title={`${segment.type === "intro" ? "Intro" : segment.type === "outro" ? "Outro" : segment.type} ${formatClock(segment.start)} - ${formatClock(segment.end ?? playableDuration)}`}
+            />
+          )) : null}
           {playableDuration > 0 ? bufferedRanges.map((range, index) => (
             <div
               key={`${range.start}:${range.end}:${index}`}
@@ -602,7 +1063,7 @@ export function UniversalVideoPlayer({
           <div className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_16px_rgba(255,255,255,0.42)] transition-transform group-hover/seek:scale-110" style={{ left: `${watchedPercent}%` }} />
         </div>
 
-        <div className="relative mt-4 flex items-center gap-3">
+        <div className="relative mt-2 flex items-center gap-1 sm:mt-4 sm:gap-3">
           <button type="button" onClick={togglePlay} className="flex h-11 w-11 items-center justify-center rounded-full text-white transition hover:bg-white/10" aria-label={paused ? "Play" : "Pause"}>
             {paused ? <Play className="h-6 w-6 fill-white" strokeWidth={0} /> : <Pause className="h-6 w-6 fill-white" strokeWidth={0} />}
           </button>
@@ -612,11 +1073,11 @@ export function UniversalVideoPlayer({
           <button type="button" onClick={() => seekBy(10)} className="flex h-10 w-10 items-center justify-center rounded-full text-white/86 transition hover:bg-white/10 hover:text-white" aria-label="Forward 10 seconds">
             <RotateCw className="h-5 w-5" />
           </button>
-          <button type="button" onClick={toggleMute} className="flex h-10 w-10 items-center justify-center rounded-full text-white/86 transition hover:bg-white/10 hover:text-white" aria-label={muted ? "Unmute" : "Mute"}>
+          <button type="button" onClick={toggleMute} className="hidden h-10 w-10 items-center justify-center rounded-full text-white/86 transition hover:bg-white/10 hover:text-white sm:flex" aria-label={muted ? "Unmute" : "Mute"}>
             {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
           </button>
           <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(event) => setPlayerVolume(Number(event.target.value))} className="hidden h-1 w-24 accent-white sm:block" aria-label="Volume" />
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-0 sm:gap-2">
             <button type="button" onClick={() => setCaptionsEnabled((value) => !value)} disabled={subtitleTracks.length === 0} className={clsx("flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10", captionsEnabled ? "text-white" : "text-white/55", subtitleTracks.length === 0 && "cursor-not-allowed opacity-35")} aria-label="Captions">
               <Captions className="h-5 w-5" />
             </button>
@@ -629,77 +1090,186 @@ export function UniversalVideoPlayer({
           </div>
 
           {settingsOpen ? (
-            <div className="absolute bottom-12 right-0 w-[18rem] rounded-lg border border-white/12 bg-neutral-950/88 p-3 text-sm text-white shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur-xl">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-[0.18em] text-white/52">Playback</span>
-                <span className="text-xs font-semibold text-white/58">{formatClock(currentTime)}</span>
+            <div className="glass-panel custom-scrollbar absolute bottom-12 right-0 max-h-[min(72svh,40rem)] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl border border-white/12 p-4 text-sm text-white shadow-[0_24px_80px_rgba(0,0,0,0.68)]">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-sm font-bold text-white">Settings</span>
+                <button type="button" onClick={() => setSettingsOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/60 transition hover:bg-white/20">
+                  <Minimize className="h-3.5 w-3.5" />
+                </button>
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-white/58">Speed</div>
-                  <div className="grid grid-cols-5 gap-1">
-                    {speedOptions.map((speed) => (
-                      <button
-                        key={speed}
-                        type="button"
-                        onClick={() => setPlayerRate(speed)}
-                        className={clsx(
-                          "rounded-md px-2 py-1.5 text-xs font-bold transition",
-                          playbackRate === speed ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        )}
-                      >
-                        {speed === 1 ? "1x" : `${speed}x`}
-                      </button>
-                    ))}
+              {settingsSection === "main" ? (
+                <div className="space-y-1">
+                  <div className="glass-section-header">Sources</div>
+                  <div className="glass-settings-item" onClick={() => {}}>
+                    <div className="glass-settings-label">
+                      <Settings className="h-4 w-4 text-white/50" />
+                      <span>Quality</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{qualityLevel === -1 ? "Auto" : qualityLevels.find((l) => l.index === qualityLevel)?.label ?? "Auto"}</span>
+                    </div>
                   </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-white/58">Quality</div>
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setHlsQuality(-1)}
-                      disabled={!hlsRef.current}
-                      className={clsx(
-                        "rounded-md px-2 py-1.5 text-xs font-bold transition",
-                        qualityLevel === -1 ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        !hlsRef.current && "cursor-not-allowed opacity-40",
-                      )}
-                    >
+                  <div className="grid grid-cols-2 gap-1 px-3 py-2">
+                    <button type="button" onClick={() => setPlayerQuality(-1)} className={clsx("rounded-lg px-3 py-2 text-xs font-semibold transition", qualityLevel === -1 ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
                       Auto
                     </button>
-                    {qualityLevels.map((level) => (
-                      <button
-                        key={level.index}
-                        type="button"
-                        onClick={() => setHlsQuality(level.index)}
-                        className={clsx(
-                          "rounded-md px-2 py-1.5 text-xs font-bold transition",
-                          qualityLevel === level.index ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                        )}
-                      >
+                    {qualityLevels.slice(0, 4).map((level) => (
+                      <button key={level.index} type="button" onClick={() => setPlayerQuality(level.index)} className={clsx("rounded-lg px-3 py-2 text-xs font-semibold transition", qualityLevel === level.index ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
                         {level.label}
                       </button>
                     ))}
                   </div>
-                </div>
 
-                <button
-                  type="button"
-                  onClick={() => setCaptionsEnabled((value) => !value)}
-                  disabled={subtitleTracks.length === 0}
-                  className={clsx(
-                    "flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs font-bold transition",
-                    captionsEnabled ? "bg-white text-black" : "bg-white/8 text-white/72 hover:bg-white/14 hover:text-white",
-                    subtitleTracks.length === 0 && "cursor-not-allowed opacity-40",
-                  )}
-                >
-                  <span>Subtitles</span>
-                  <span>{subtitleTracks.length === 0 ? "Unavailable" : captionsEnabled ? "On" : "Off"}</span>
-                </button>
-              </div>
+                  <div className="glass-section-header mt-3">Video & Audio</div>
+                  <div className="glass-settings-item" onClick={() => setMirrored((v) => !v)}>
+                    <div className="glass-settings-label">
+                      <ArrowLeftRight className="h-4 w-4 text-white/50" />
+                      <span>Mirror</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{mirrored ? "On" : "Off"}</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item">
+                    <div className="glass-settings-label">
+                      <Sun className="h-4 w-4 text-white/50" />
+                      <span>Brightness</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input type="range" min={50} max={150} step={5} value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} className="h-1 w-20 accent-white" />
+                      <span className="text-xs text-white/50 w-8">{brightness}%</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item" onClick={() => { if (document.pictureInPictureEnabled) document.querySelector("video")?.requestPictureInPicture().catch(() => undefined); }}>
+                    <div className="glass-settings-label">
+                      <PictureInPicture className="h-4 w-4 text-white/50" />
+                      <span>Picture in Picture</span>
+                    </div>
+                  </div>
+
+                  <div className="glass-section-header mt-3">Playback</div>
+                  <div className="px-3 py-2">
+                    <div className="mb-2 text-xs text-white/50">Speed</div>
+                    <div className="grid grid-cols-5 gap-1">
+                      {speedOptions.map((speed) => (
+                        <button key={speed} type="button" onClick={() => setPlayerRate(speed)} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", playbackRate === speed ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                          {speed === 1 ? "1x" : `${speed}x`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="glass-settings-item" onClick={() => setAutoplay((v) => !v)}>
+                    <div className="glass-settings-label">
+                      <Play className="h-4 w-4 text-white/50" />
+                      <span>Autoplay</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{autoplay ? "On" : "Off"}</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item" onClick={() => setLoop((v) => !v)}>
+                    <div className="glass-settings-label">
+                      <Repeat className="h-4 w-4 text-white/50" />
+                      <span>Loop</span>
+                    </div>
+                    <div className="glass-settings-value">
+                      <span>{loop ? "On" : "Off"}</span>
+                    </div>
+                  </div>
+                  <div className="glass-settings-item">
+                    <div className="glass-settings-label">
+                      <Clock className="h-4 w-4 text-white/50" />
+                      <span>Sleep timer</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {[null, 15, 30, 45, 60].map((minutes) => (
+                        <button key={String(minutes)} type="button" onClick={() => setSleepTimer(minutes)} className={clsx("rounded px-2 py-1 text-[10px] font-semibold transition", sleepTimer === minutes ? "bg-white text-black" : "bg-white/10 text-white/60 hover:bg-white/15")}>
+                          {minutes === null ? "Off" : `${minutes}m`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button type="button" onClick={() => setSettingsSection("subtitles")} className="mt-3 flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition hover:bg-white/10">
+                    <div className="glass-settings-label">
+                      <Captions className="h-4 w-4 text-white/50" />
+                      <span>Subtitle settings</span>
+                    </div>
+                    <span className="text-xs text-white/40">{captionsEnabled ? "On" : "Off"}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <button type="button" onClick={() => setSettingsSection("main")} className="mb-3 flex items-center gap-2 text-xs text-white/50 hover:text-white">
+                    <span>←</span> Back
+                  </button>
+
+                  <div className="glass-section-header">Subtitles</div>
+                  <button type="button" onClick={() => setCaptionsEnabled((v) => !v)} disabled={subtitleTracks.length === 0} className={clsx("glass-settings-item w-full", captionsEnabled && "bg-white/15")}>
+                    <div className="glass-settings-label">
+                      <Captions className="h-4 w-4 text-white/50" />
+                      <span>Subtitles</span>
+                    </div>
+                    <span className="text-xs text-white/50">{subtitleTracks.length === 0 ? "Unavailable" : captionsEnabled ? "On" : "Off"}</span>
+                  </button>
+
+                  {subtitleTracks.length > 1 ? (
+                    <div className="px-3 py-2">
+                      <div className="mb-2 text-xs text-white/50">Track</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {subtitleTracks.map((track, index) => (
+                          <button key={`${track.src}:${index}`} type="button" onClick={() => { setSelectedSubtitleTrack(index); setCaptionsEnabled(true); }} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", captionsEnabled && selectedSubtitleTrack === index ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                            {track.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="px-3 py-2">
+                    <div className="mb-2 rounded-xl border border-white/10 bg-white/5 p-3 text-center">
+                      <span className="inline rounded px-1.5 py-0.5 font-bold leading-relaxed" style={{ color: subtitleAppearance.textColor, backgroundColor: hexToRgba(subtitleAppearance.backgroundColor, subtitleAppearance.backgroundOpacity), fontSize: `${Math.max(12, subtitleAppearance.size * 0.16)}px`, textShadow: subtitleAppearance.edge === "outline" ? "-1px -1px #000, 1px -1px #000, -1px 1px #000, 1px 1px #000" : subtitleAppearance.edge === "shadow" ? "0 3px 6px #000" : "none" }}>
+                        Subtitle preview
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-2">
+                    <div className="mb-2 flex items-center justify-between text-xs text-white/50">
+                      <span>Text size</span>
+                      <span>{subtitleAppearance.size}%</span>
+                    </div>
+                    <input type="range" min={60} max={200} step={10} value={subtitleAppearance.size} onChange={(e) => setSubtitleAppearance((v) => ({ ...v, size: Number(e.target.value) }))} className="h-1 w-full accent-white" />
+                  </div>
+
+                  <div className="px-3 py-2">
+                    <div className="mb-2 text-xs text-white/50">Text edge</div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(["none", "shadow", "outline"] as const).map((edge) => (
+                        <button key={edge} type="button" onClick={() => setSubtitleAppearance((v) => ({ ...v, edge }))} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold capitalize transition", subtitleAppearance.edge === edge ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                          {edge}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-2">
+                    <div className="mb-2 text-xs text-white/50">Position</div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[{ label: "High", value: 72 }, { label: "Middle", value: 82 }, { label: "Low", value: 90 }].map((pos) => (
+                        <button key={pos.value} type="button" onClick={() => setSubtitleAppearance((v) => ({ ...v, position: pos.value }))} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", subtitleAppearance.position === pos.value ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                          {pos.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button type="button" onClick={() => setSubtitleAppearance(DEFAULT_SUBTITLE_APPEARANCE)} className="mt-2 w-full rounded-xl bg-white/10 py-2 text-xs font-semibold text-white/60 transition hover:bg-white/15">
+                    Reset to default
+                  </button>
+                </div>
+              )}
             </div>
           ) : null}
         </div>

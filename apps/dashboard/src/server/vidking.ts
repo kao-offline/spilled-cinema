@@ -5,6 +5,7 @@ import {
   scoreSearchCandidate,
 } from "../lib/search-ranking";
 import { searchTmdbTitleCandidates } from "./external-title-search";
+import { enrichArtwork } from "./artwork";
 
 const BASE_URL = "https://www.vidking.net";
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
@@ -15,7 +16,7 @@ const VIDKING_AVAILABILITY_TIMEOUT_MS = 700;
 const VIDKING_AVAILABILITY_CACHE_MAX = 1000;
 
 type VidkingMediaType = "movie" | "tv";
-export type VidkingAvailability = "available" | "unavailable" | "unknown";
+export type VidkingAvailability = "available" | "unavailable" | "unknown" | "verifying";
 
 export type VidkingAvailabilityResult = {
   importSlug: string;
@@ -24,6 +25,7 @@ export type VidkingAvailabilityResult = {
   detailUrl: string;
   checkedAt: number;
   reason?: string | null;
+  verifying?: boolean;
 };
 
 type TmdbDetails = {
@@ -47,6 +49,11 @@ type TmdbDetails = {
       character?: string;
       profile_path?: string | null;
       order?: number;
+    }>;
+    crew?: Array<{
+      name?: string;
+      job?: string;
+      profile_path?: string | null;
     }>;
   };
   seasons?: Array<{
@@ -112,6 +119,17 @@ function tmdbCast(details: TmdbDetails): CastMember[] {
         .filter(([name]) => Boolean(name)),
     ).values(),
   ).slice(0, 12);
+}
+
+function tmdbDirectors(details: TmdbDetails): CastMember[] {
+  return (details.credits?.crew ?? [])
+    .filter((person) => person.job === "Director")
+    .map((person) => ({
+      name: person.name?.trim() ?? "",
+      role: "Director",
+      profileUrl: tmdbImage(person.profile_path, "w342"),
+    }))
+    .filter((d) => Boolean(d.name));
 }
 
 function parseYear(value: string | null | undefined) {
@@ -229,6 +247,15 @@ function classifyVidkingHtml(html: string) {
   if (/\b(?:not found|unavailable|no sources|removed|video not found|media unavailable)\b/.test(lower)) {
     return { availability: "unavailable" as const, reason: "VidKing reported no playable source." };
   }
+  if (
+    /\b(?:just a moment|checking your browser|verif(?:ying|ication|y)|security check|cf-chl-|__cf_chl|captcha|challenge|access denied|maintenance)\b/.test(lower)
+  ) {
+    return {
+      availability: "verifying" as const,
+      reason: "VidKing is running a verification check right now. Try again in a few minutes.",
+      verifying: true,
+    };
+  }
   if (/(?:iframe|video|player|embed|stream|hls|m3u8|__next|vidking)/i.test(html)) {
     return { availability: "available" as const, reason: null };
   }
@@ -252,7 +279,11 @@ function buildPlayer(input: {
   };
 }
 
-function createSearchItem(candidate: Awaited<ReturnType<typeof searchTmdbTitleCandidates>>[number], index: number): ExploreItem | null {
+export function createVidkingSearchItem(
+  candidate: Awaited<ReturnType<typeof searchTmdbTitleCandidates>>[number],
+  index: number,
+  query: string,
+): ExploreItem | null {
   const tmdbMatch = candidate.id.match(/^tmdb:(movie|tv):(\d+)$/i);
   if (!tmdbMatch) {
     return null;
@@ -289,7 +320,10 @@ function createSearchItem(candidate: Awaited<ReturnType<typeof searchTmdbTitleCa
     availableNow: true,
     availability: "checking",
     availabilityReason: "Checking VidKing availability.",
-    matchScore: Math.max(candidate.matchScore, scoreSearchCandidate(candidate.title, [candidate.title, candidate.year], index)),
+    // Preserve relevance to what the user typed. Scoring a candidate against
+    // its own title made every result look exact, so long unrelated titles
+    // containing a numeric query (notably the series "1899") outranked it.
+    matchScore: Math.max(candidate.matchScore, scoreSearchCandidate(query, [candidate.title, candidate.originalTitle, candidate.year], index)),
     searchSignals: {
       source: "tmdb",
       popularity: candidate.popularity ?? null,
@@ -347,6 +381,16 @@ export async function checkVidkingAvailability(input: {
       return result;
     }
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        const result = {
+          ...baseResult,
+          availability: "verifying" as const,
+          reason: "VidKing is running a verification check right now. Try again in a few minutes.",
+          verifying: true,
+        };
+        setAvailabilityCache(cacheKey, result);
+        return result;
+      }
       const result = { ...baseResult, availability: "unknown" as const, reason: `VidKing returned ${response.status}.` };
       setAvailabilityCache(cacheKey, result);
       return result;
@@ -397,7 +441,7 @@ export async function searchVidking(query: string) {
   const candidates = await searchTmdbTitleCandidates(query, 16);
   return keepHighConfidenceSearchResults(
     candidates
-      .map(createSearchItem)
+      .map((candidate, index) => createVidkingSearchItem(candidate, index, query))
       .filter((item): item is ExploreItem => item !== null)
       .sort(compareSearchScores),
   ).slice(0, 12);
@@ -448,7 +492,7 @@ async function buildTvEpisodes(input: {
         seasonNumber,
         episodeNumber,
         episodeCode,
-        episodeTitle: episode.name ? `${input.title} - ${episodeCode.toUpperCase()} - ${episode.name}` : `${input.title} - ${episodeCode.toUpperCase()}`,
+        episodeTitle: episode.name || null,
         episodeUrl: detailUrl,
         players: [player],
         selectedPlayerAlias: player.alias,
@@ -495,6 +539,15 @@ export async function fetchVidkingTitle(slug: string, mediaType?: "movie" | "ser
     throw new Error(`No VidKing episodes could be built for ${title}.`);
   }
 
+  const artwork = await enrichArtwork({
+    mediaType: isMovie ? "movie" : "tv",
+    title,
+    altTitle: details.original_title ?? details.original_name ?? null,
+    yearHint: parseYear(details.release_date ?? details.first_air_date) ?? undefined,
+    description: details.overview ?? null,
+    currentPosterUrl: tmdbImage(details.poster_path, "w342"),
+  });
+
   return {
     slug: showSlug,
     title,
@@ -506,10 +559,13 @@ export async function fetchVidkingTitle(slug: string, mediaType?: "movie" | "ser
       imdb: details.imdb_id ?? details.external_ids?.imdb_id ?? undefined,
       tmdb: parsed.tmdbId,
     },
-    posterUrl: tmdbImage(details.poster_path, "w342"),
-    backdropUrl: tmdbImage(details.backdrop_path, "w780"),
-    clearLogoUrl: null,
+    posterUrl: artwork.posterUrl ?? tmdbImage(details.poster_path, "w342"),
+    backdropUrl: artwork.backdropUrl ?? tmdbImage(details.backdrop_path, "w780"),
+    bannerUrl: artwork.bannerUrl ?? null,
+    bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? null,
+    clearLogoUrl: artwork.clearLogoUrl ?? null,
     actors: tmdbCast(details),
+    directors: tmdbDirectors(details),
     availableSeasons: [...new Set(episodes.map((episode) => episode.seasonNumber))].sort((a, b) => a - b),
     importedAt,
     episodes,

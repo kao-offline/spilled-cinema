@@ -25,6 +25,36 @@ type AlgoliaHit = {
   };
 };
 
+export type SvetSerialuIndexRecord = {
+  objectID: string;
+  slug: string;
+  title: string;
+  alt_title?: string | null;
+  year?: string | null;
+  year_start?: number | null;
+  year_end?: number | null;
+  description?: string | null;
+  poster_url?: string | null;
+  genres?: string[];
+  network?: string | null;
+  country?: string | null;
+  language?: string[];
+  status?: string | null;
+  imdb_id?: string | null;
+  imdb_rating?: number | null;
+  csfd_id?: string | null;
+  csfd_rating?: number | null;
+  runtime?: number | null;
+  episode_count?: number;
+  actor_count?: number;
+  season_count?: number;
+  actors?: Array<{ n?: string; r?: string | null; tmdb_id?: number | null }>;
+  crew?: Array<{ n?: string; j?: string; d?: string | null; tmdb_id?: number | null }>;
+  production_companies?: Array<{ n?: string; tmdb_id?: number | null }>;
+  episodes?: Array<{ c?: string; t?: string | null; s?: number }>;
+  episodes_text?: string | null;
+};
+
 const INDEX_NAME = "spilledcinema_shows";
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const CACHE_MAX = 200;
@@ -183,6 +213,32 @@ function writeCache(key: string, results: SvetSerialuSearchResult[]) {
 
 export function isSvetSerialuAlgoliaAvailable() {
   return Boolean(getAlgoliaClient());
+}
+
+export async function saveSvetSerialuRecords(records: SvetSerialuIndexRecord[]) {
+  const deduped = Array.from(
+    new Map(records.map((record) => [record.objectID, record])).values(),
+  );
+  if (deduped.length === 0) {
+    return true;
+  }
+
+  const algolia = getAlgoliaClient();
+  if (!algolia) {
+    return false;
+  }
+
+  try {
+    await algolia.saveObjects({ indexName: INDEX_NAME, objects: deduped });
+    return true;
+  } catch (error) {
+    if (!warnedUnavailable) {
+      console.warn("[svetserialu-algolia] failed to save records", error instanceof Error ? error.message : String(error));
+      warnedUnavailable = true;
+    }
+    client = null;
+    return false;
+  }
 }
 
 export async function searchSvetSerialuAlgolia(query: string, limit = 12): Promise<SvetSerialuSearchResult[]> {

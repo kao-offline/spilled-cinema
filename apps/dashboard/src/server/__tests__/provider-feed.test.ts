@@ -31,6 +31,7 @@ describe("provider feed adapters", () => {
       moduleId: "svetserialu",
       feedId: "new-episodes",
       limit: 10,
+      repositoryUrls: ["https://github.com/kao-offline/spilled-connectors"],
     });
 
     expect(feed.moduleId).toBe("svetserialu");

@@ -69,9 +69,11 @@ export function CommandMenu({
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex animate-command-backdrop items-start justify-center bg-black/58 px-3 pt-[16vh] backdrop-blur-md sm:px-6 md:pt-[18vh]" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[100] flex animate-command-backdrop items-start justify-center overflow-hidden bg-black/48 px-3 pt-[16vh] backdrop-blur-2xl sm:px-6 md:pt-[18vh]" onMouseDown={onClose}>
+      <div className="pointer-events-none absolute -left-20 top-8 h-72 w-72 rounded-full bg-orange-400/10 blur-3xl" />
+      <div className="pointer-events-none absolute right-0 top-1/4 h-96 w-96 rounded-full bg-cyan-300/8 blur-3xl" />
       <div
-        className="w-full max-w-[560px] animate-command-panel overflow-hidden rounded-[1.4rem] border border-white/10 bg-[#080a0f]/95 shadow-[0_30px_90px_rgba(0,0,0,0.72)] ring-1 ring-black/60"
+        className="relative w-full max-w-[560px] animate-command-panel overflow-hidden rounded-[1.4rem] border border-white/[0.11] bg-white/[0.055] shadow-[0_30px_90px_rgba(0,0,0,0.72)] ring-1 ring-black/40 backdrop-blur-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3">

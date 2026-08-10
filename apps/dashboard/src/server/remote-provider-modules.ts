@@ -20,6 +20,7 @@ import {
 } from "../lib/provider-repositories";
 import { hydrateProviderModuleRecord } from "../lib/provider-modules-shared";
 import type { ProviderModuleAdapter } from "./provider-modules";
+import { WasmConnectorSandbox, type WasmConnectorManifest } from "../../../node/src/wasm-connector";
 
 type RemoteProviderModule = {
   getFeed?: (input: {
@@ -87,8 +88,67 @@ type RemoteIntegrationModule = RemoteProviderModule & {
 };
 
 const remoteModuleCache = new Map<string, Promise<RemoteProviderModule>>();
+const wasmBytesCache = new Map<string, Promise<Buffer>>();
+const wasmSandbox = new WasmConnectorSandbox();
+
+function publisherKey(keyId: string) {
+  const keys = JSON.parse(process.env.SPILLED_PROVIDER_PUBLISHER_KEYS || "{}") as Record<string, string>;
+  const key = keys[keyId];
+  if (!key) throw new Error(`Pinned provider publisher key "${keyId}" is unavailable.`);
+  return key;
+}
+
+async function executeWasmIntegration(
+  integration: IntegrationManifestV2,
+  entryUrl: string,
+  operation: string,
+  payload: unknown,
+  validateOutput: (value: unknown) => boolean,
+) {
+  const runtime = integration.runtime;
+  if (
+    !runtime?.integrity?.startsWith("sha256-") ||
+    !runtime.publisherKeyId ||
+    !runtime.signature
+  ) {
+    throw new Error(`WASM integration "${integration.id}" is missing signed release metadata.`);
+  }
+  let pending = wasmBytesCache.get(entryUrl);
+  if (!pending) {
+    pending = fetch(entryUrl, { cache: "no-store", headers: { Accept: "application/wasm" } })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`WASM artifact failed (${response.status}).`);
+        return Buffer.from(await response.arrayBuffer());
+      });
+    wasmBytesCache.set(entryUrl, pending);
+  }
+  const manifest: WasmConnectorManifest = {
+    providerId: integration.id,
+    version: integration.version,
+    artifactSha256: runtime.integrity.slice("sha256-".length),
+    publisherKeyId: runtime.publisherKeyId,
+    allowedHosts: (integration.networkPermissions ?? []).map((value) => new URL(value).hostname.toLowerCase()),
+    allowedMethods: runtime.allowedMethods ?? ["GET"],
+    maxResponseBytes: runtime.maxResponseBytes ?? 4 * 1024 * 1024,
+    timeoutMs: runtime.timeoutMs ?? 20_000,
+    signature: runtime.signature,
+  };
+  return await wasmSandbox.execute({
+    bytes: await pending,
+    manifest,
+    publisherPublicKey: publisherKey(runtime.publisherKeyId),
+    operation,
+    payload,
+    validateOutput,
+  });
+}
 
 async function importRemoteConnector(entryUrl: string) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Remote executable provider connectors are disabled in production. Use a built-in signed connector bundle.",
+    );
+  }
   const cached = remoteModuleCache.get(entryUrl);
   if (cached) {
     return cached;
@@ -183,6 +243,27 @@ export async function getRemoteIntegrationAdapter(input: {
     }
 
     const entryUrl = resolveProviderRepositoryAssetUrl(repository.manifestUrl, integration.runtime.entry);
+    if (integration.runtime.format === "wasm" || /\.wasm(?:$|[?#])/i.test(entryUrl)) {
+      return {
+        manifest: integration,
+        api: {
+          apiVersion: 2,
+          search: integration.capabilities.includes("search")
+            ? async (value: unknown) => await executeWasmIntegration(integration, entryUrl, "search", value, Array.isArray) as ProviderCandidate[]
+            : undefined,
+          getFeed: integration.capabilities.includes("discovery")
+            ? async (value: unknown) => await executeWasmIntegration(integration, entryUrl, "getFeed", value, (output) => Boolean(output && typeof output === "object")) as ProviderFeedResponse
+            : undefined,
+          resolvePlayers: integration.capabilities.includes("players")
+            ? async (value: unknown) => await executeWasmIntegration(integration, entryUrl, "resolvePlayers", value, Array.isArray) as PlayerSource[]
+            : undefined,
+          importFallback: integration.capabilities.includes("import")
+            ? async (value: unknown) => await executeWasmIntegration(integration, entryUrl, "import", value, (output) => Boolean(output && typeof output === "object")) as ImportedShow
+            : undefined,
+        },
+        context: createRemoteIntegrationContext(integration),
+      };
+    }
     const remoteModule = await importRemoteConnector(entryUrl);
     const api = validateRemoteIntegration(integration, remoteModule);
     if (!api) {

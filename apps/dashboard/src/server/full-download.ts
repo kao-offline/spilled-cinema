@@ -4,12 +4,32 @@ import { mkdir, readdir, readFile, rename, stat, unlink, writeFile, rm } from "n
 import { basename, dirname, resolve, sep } from "node:path";
 import { execFile, type ChildProcess } from "node:child_process";
 import { request as httpsRequest } from "node:https";
+import { Worker } from "node:worker_threads";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "../../../server/src/player-resolver";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const PLAYBACK_FETCH_PROXY_TEMPLATE = process.env.PLAYBACK_FETCH_PROXY_TEMPLATE || process.env.IMPORT_FETCH_PROXY_TEMPLATE || "";
 const PUBLIC_DNS_CACHE = new Map<string, { addresses: string[]; expiresAt: number }>();
+
+const EMBED_URL_CACHE_TTL_MS = 60 * 60 * 1000;
+const embedUrlCache = new Map<string, { expiresAt: number; url: string }>();
+
+async function resolvePlayerEmbedUrlCached(input: { embedUrl: string; provider?: string }) {
+  const cacheKey = `${input.provider ?? ""}|${input.embedUrl}`;
+  const cached = embedUrlCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url;
+  }
+
+  const url = await resolvePlayerEmbedUrl(input);
+  embedUrlCache.set(cacheKey, { url, expiresAt: Date.now() + EMBED_URL_CACHE_TTL_MS });
+  if (embedUrlCache.size > 256) {
+    const oldestKey = embedUrlCache.keys().next().value as string | undefined;
+    if (oldestKey) embedUrlCache.delete(oldestKey);
+  }
+  return url;
+}
 
 export type FullDownloadState = "queued" | "resolving" | "downloading" | "completed" | "failed";
 
@@ -60,6 +80,7 @@ export type PlaybackResolveInput = {
   seasonNumber?: number;
   episodeNumber?: number | null;
   activePlayerAlias: string;
+  expectedDurationSeconds?: number;
   players: Array<{
     alias: string;
     provider: string;
@@ -89,7 +110,10 @@ export type PlaybackResolveResult = {
   refererUrl: string;
   streamType: "hls" | "mp4" | "dash" | "embed" | "unknown";
   subtitlesUrl?: string;
+  duration?: number;
 };
+
+type PlaybackStreamType = PlaybackResolveResult["streamType"];
 
 type ResolvedStreamTarget = {
   streamUrl: string;
@@ -98,7 +122,7 @@ type ResolvedStreamTarget = {
 
 type BrowserStreamCandidate = NonNullable<CreateDownloadInput["streamCandidates"]>[number];
 
-function inferStreamType(value: string): "hls" | "mp4" | "dash" | "embed" | "unknown" {
+function inferStreamType(value: string): PlaybackStreamType {
   if (/\/api\/download-full\/browser-file\?/i.test(value)) {
     try {
       const parsed = new URL(value, "http://localhost");
@@ -116,14 +140,21 @@ function inferStreamType(value: string): "hls" | "mp4" | "dash" | "embed" | "unk
   return "unknown";
 }
 
-function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId: string) {
-  const name = `${sanitizeFilename(episodeId || "playback")}.${inferStreamType(streamUrl) === "mp4" ? "mp4" : "m3u8"}`;
+function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId: string, streamType = inferStreamType(streamUrl)) {
+  const extension = streamType === "mp4" ? "mp4" : streamType === "dash" ? "mpd" : "m3u8";
+  const name = `${sanitizeFilename(episodeId || "playback")}.${extension}`;
   const params = new URLSearchParams({
     url: streamUrl,
     name,
     referer: refererUrl,
+    playback: "1",
   });
-  return `/api/download-full/browser-file?${params.toString()}`;
+  const relative = `/api/download-full/browser-file?${params.toString()}`;
+  const endpointUrl = process.env.SPILLED_NODE_ENDPOINT_URL;
+  if (endpointUrl && /^https?:\/\//i.test(endpointUrl)) {
+    return `${endpointUrl.replace(/\/$/, "")}${relative}`;
+  }
+  return relative;
 }
 
 function extractSubtitleUrlFromPlayerUrl(value: string | undefined) {
@@ -193,6 +224,10 @@ function buildFetchProxyUrl(targetUrl: string) {
   return `${template}${separator}url=${encodeURIComponent(targetUrl)}`;
 }
 
+function isMixdropHost(host: string) {
+  return /(^|\.)(?:mixdrop\.[a-z0-9.-]+|m+i+x+drop\.net)$/i.test(host);
+}
+
 function shouldUsePublicDnsForResolution(value: string) {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -210,7 +245,9 @@ function shouldUsePublicDnsForResolution(value: string) {
       host === "mixdrop.ps" ||
       host === "mixdrop.my" ||
       host === "miixdrop.net" ||
-      host.endsWith(".miixdrop.net")
+      host.endsWith(".miixdrop.net") ||
+      host === "miiiixdrop.net" ||
+      host.endsWith(".miiiixdrop.net")
     );
   } catch {
     return false;
@@ -373,20 +410,24 @@ async function fetchTextForResolution(url: string, refererUrl: string | undefine
     }
   }
 
-  const response = await fetch(url, {
-    headers: {
-      "user-agent": USER_AGENT,
-      accept,
-      referer: refererUrl ?? "https://www.bombuj.si/",
-    },
-    redirect: "follow",
-  }).catch(() => null);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept,
+        referer: refererUrl ?? "https://www.bombuj.si/",
+      },
+      redirect: "follow",
+    }).catch(() => null);
 
-  if (response?.ok) {
-    return {
-      text: await response.text(),
-      finalUrl: response.url || url,
-    };
+    if (response?.ok) {
+      return {
+        text: await response.text(),
+        finalUrl: response.url || url,
+      };
+    }
+  } catch {
+    // swallow
   }
 
   const proxyText = await readFetchProxyText(url, refererUrl);
@@ -397,30 +438,6 @@ function isHttpUrl(value: string) {
   try {
     const parsed = new URL(value);
     return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-async function canUseEmbedFallback(embedUrl: string, refererUrl?: string) {
-  if (!isHttpUrl(embedUrl) || /\.(?:m3u8|mp4|mpd)(?:$|[?#])/i.test(embedUrl)) {
-    return false;
-  }
-  try {
-    const response = await fetch(embedUrl, {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        "user-agent": USER_AGENT,
-        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        referer: refererUrl ?? embedUrl,
-      },
-    });
-    if (!response.ok) {
-      return false;
-    }
-    const contentType = response.headers.get("content-type") || "";
-    return !contentType || /text\/html|application\/xhtml\+xml/i.test(contentType);
   } catch {
     return false;
   }
@@ -462,7 +479,7 @@ function isVolatileProviderStream(player: PlaybackResolveInput["players"][number
     player.embedUrl,
     candidateEmbedUrl,
   ].filter(Boolean).join(" ").toLowerCase();
-  return /svetserialu|filemoon|vidmoly|streamtape|mixdrop|miixdrop|dood|voe|hqq|sb\d+/i.test(signature);
+  return /svetserialu|filemoon|vidmoly|streamtape|mixdrop|miixdrop|dood|voe|hqq|sb\d+|bombuj|2embed|xpass|multiembed|moviesclub|primewire|videasy|vidsrc/i.test(signature);
 }
 
 function canReuseDirectStreamUrl(player: PlaybackResolveInput["players"][number], candidateEmbedUrl: string, directUrl: string) {
@@ -493,12 +510,16 @@ async function resolveCandidateEmbedUrl(candidate: {
   }
 
   const sourcePageUrl = candidate.sourcePageUrl?.trim();
-  if (sourcePageUrl && /streamtape/i.test(candidate.provider ?? embedUrl)) {
+  if (
+    sourcePageUrl &&
+    isSvetSerialuUrl(sourcePageUrl) &&
+    /\/sources\//i.test(new URL(sourcePageUrl).pathname)
+  ) {
     try {
       const sourceResponse = await fetchTextForResolution(sourcePageUrl, sourcePageUrl, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
       if (sourceResponse) {
         const refreshedEmbedUrl = extractSvetSerialuEmbedUrl(sourceResponse.text, sourceResponse.finalUrl || sourcePageUrl);
-        if (refreshedEmbedUrl && /streamtape\./i.test(refreshedEmbedUrl)) {
+        if (refreshedEmbedUrl) {
           return refreshedEmbedUrl;
         }
       }
@@ -517,7 +538,7 @@ async function resolveCandidateEmbedUrl(candidate: {
   }
 
   try {
-    return await resolvePlayerEmbedUrl({
+    return await resolvePlayerEmbedUrlCached({
       embedUrl,
       provider: candidate.provider,
     });
@@ -594,6 +615,16 @@ async function getTwoEmbedFallbackUrlFromAggregator(provider: string | undefined
   return imdbIdFromTmdb ? `https://www.2embed.cc/embed/${imdbIdFromTmdb}` : null;
 }
 
+async function getTwoEmbedFallbackUrlFromVidking(embedUrl: string) {
+  const route = parseVidkingRoute(embedUrl);
+  if (!route || route.mediaType !== "movie") {
+    return null;
+  }
+
+  const metadata = await fetchVidkingMetadata(route).catch(() => null);
+  return metadata?.imdbId ? `https://www.2embed.cc/embed/${metadata.imdbId}` : null;
+}
+
 function toValidatedHttpUrl(value: string) {
   const parsed = new URL(value);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -609,6 +640,8 @@ const activeOutputPaths = new Map<string, { outputPath: string; temporaryOutputP
 const cancelRequestedJobs = new Set<string>();
 const seekableRepairLocks = new Map<string, Promise<string>>();
 const seekableRepairCache = new Map<string, string>();
+const VALIDATED_STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+const validatedStreamCache = new Map<string, { expiresAt: number; streamType: PlaybackStreamType }>();
 const DOWNLOAD_INDEX_FILE = "index.json";
 const SUBTITLE_INDEX_FILE = "subtitles.json";
 
@@ -906,8 +939,19 @@ function normalizeStreamtapeMediaUrl(value: string) {
   const trimmed = value.trim();
   if (!trimmed.includes("/get_video?")) return null;
 
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
-  if (trimmed.startsWith("//")) return `https:${trimmed}`;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("//")) {
+    try {
+      const parsed = new URL(trimmed.startsWith("//") ? `https:${trimmed}` : trimmed);
+      if (/(^|\.)streamtape\./i.test(parsed.hostname)) {
+        parsed.protocol = "https:";
+        parsed.hostname = "streamtape.com";
+        parsed.port = "";
+      }
+      return parsed.toString();
+    } catch {
+      return trimmed;
+    }
+  }
   if (trimmed.startsWith("/get_video?")) return `https://streamtape.com${trimmed}`;
   if (trimmed.startsWith("/")) return `https:/${trimmed}`;
   return `https://${trimmed}`;
@@ -1188,15 +1232,116 @@ async function resolvePreferredHlsVariant(streamUrl: string, refererUrl: string,
   }
 }
 
-async function validateResolvedStream(target: ResolvedStreamTarget): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    Number.parseInt(process.env.SPILLED_STREAM_VALIDATE_TIMEOUT_MS || "7000", 10),
-  );
+function streamTypeFromContentType(contentType: string): PlaybackStreamType {
+  if (/mpegurl|application\/vnd\.apple\.mpegurl|application\/x-mpegurl/i.test(contentType)) return "hls";
+  if (/dash\+xml/i.test(contentType)) return "dash";
+  if (/video\/mp4|application\/mp4/i.test(contentType)) return "mp4";
+  return "unknown";
+}
+
+function isClearlyNonMediaStreamUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:$|[?#])/i.test(parsed.pathname);
+  } catch {
+    return true;
+  }
+}
+
+type StreamValidationResult =
+  | { ok: true; streamType: PlaybackStreamType }
+  | { ok: false; reason: string };
+
+function firstHlsResourceUrl(playlist: string, playlistUrl: string) {
+  const resource = playlist
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#"));
+  if (!resource) return null;
+  try {
+    return new URL(resource, playlistUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+async function validateHlsResources(
+  response: Response,
+  target: ResolvedStreamTarget,
+  signal?: AbortSignal,
+): Promise<StreamValidationResult> {
+  let playlistResponse = response;
+  let playlistUrl = response.url || target.streamUrl;
+
+  for (let depth = 0; depth < 2; depth += 1) {
+    const playlist = await playlistResponse.text();
+    if (!/^\s*#EXTM3U/i.test(playlist)) {
+      return { ok: false, reason: `Resolved HLS URL on ${new URL(playlistUrl).hostname} did not return an HLS playlist.` };
+    }
+
+    const resourceUrl = firstHlsResourceUrl(playlist, playlistUrl);
+    if (!resourceUrl) return { ok: true, streamType: "hls" };
+    const resourceResponse = await fetch(resourceUrl, {
+      method: "GET",
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "*/*",
+        referer: target.refererUrl,
+      },
+      redirect: "follow",
+      ...(signal ? { signal } : {}),
+    });
+    const resourceHost = new URL(resourceUrl).hostname;
+    if (!resourceResponse.ok && resourceResponse.status !== 206) {
+      await resourceResponse.body?.cancel().catch(() => undefined);
+      return { ok: false, reason: `Resolved HLS media resource on ${resourceHost} returned HTTP ${resourceResponse.status}.` };
+    }
+
+    if (/#EXT-X-STREAM-INF/i.test(playlist)) {
+      playlistResponse = resourceResponse;
+      playlistUrl = resourceResponse.url || resourceUrl;
+      continue;
+    }
+
+    const contentType = resourceResponse.headers.get("content-type") ?? "";
+    await resourceResponse.body?.cancel().catch(() => undefined);
+    const xpassDisguisedSegment = /play\.xpass\.top/i.test(target.refererUrl)
+      && /\/page-\d+\.html(?:$|[?#])/i.test(resourceUrl);
+    if (/^(?:image|font)\//i.test(contentType) || (!xpassDisguisedSegment && /text\/html|application\/(?:xhtml\+xml|json)/i.test(contentType))) {
+      return { ok: false, reason: `Resolved HLS media resource on ${resourceHost} returned ${contentType || "non-media content"}.` };
+    }
+    return { ok: true, streamType: "hls" };
+  }
+
+  return { ok: true, streamType: "hls" };
+}
+
+async function validateResolvedStream(target: ResolvedStreamTarget, bypassCache = false): Promise<StreamValidationResult> {
+  const cacheKey = `${target.streamUrl}|${target.refererUrl}`;
+  if (!bypassCache) {
+    const cached = validatedStreamCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { ok: true, streamType: cached.streamType };
+    }
+  }
+
   const host = new URL(target.streamUrl).hostname;
 
+  const finish = (result: StreamValidationResult): StreamValidationResult => {
+    if (result.ok) {
+      validatedStreamCache.set(cacheKey, { expiresAt: Date.now() + VALIDATED_STREAM_CACHE_TTL_MS, streamType: result.streamType });
+      if (validatedStreamCache.size > 512) {
+        const oldestKey = validatedStreamCache.keys().next().value as string | undefined;
+        if (oldestKey) validatedStreamCache.delete(oldestKey);
+      }
+    }
+    return result;
+  };
+
   try {
+    if (isClearlyNonMediaStreamUrl(target.streamUrl)) {
+      return finish({ ok: false, reason: `Resolved URL on ${host} points to artwork instead of playable media.` });
+    }
     const streamType = inferStreamType(target.streamUrl);
     const response = await fetch(target.streamUrl, {
       method: "GET",
@@ -1204,25 +1349,33 @@ async function validateResolvedStream(target: ResolvedStreamTarget): Promise<{ o
         "user-agent": USER_AGENT,
         accept: streamType === "hls" ? "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*" : "*/*",
         referer: target.refererUrl,
-        ...(streamType === "mp4" ? { range: "bytes=0-1" } : {}),
+        ...(streamType === "mp4" || streamType === "unknown" ? { range: "bytes=0-4095" } : {}),
       },
       redirect: "follow",
-      signal: controller.signal,
     });
-    await response.body?.cancel().catch(() => undefined);
     if (response.ok || response.status === 206) {
-      return { ok: true };
+      const contentType = response.headers.get("content-type") ?? "";
+      if (/^(?:image|font)\//i.test(contentType) || /text\/html|application\/(?:xhtml\+xml|json)/i.test(contentType)) {
+        await response.body?.cancel().catch(() => undefined);
+        return finish({ ok: false, reason: `Resolved URL on ${host} returned ${contentType || "non-media content"} instead of playable media.` });
+      }
+      const detectedType = streamTypeFromContentType(contentType);
+      if (streamType === "hls" || detectedType === "hls") {
+        const validated = await validateHlsResources(response, target);
+        return finish(validated);
+      }
+      await response.body?.cancel().catch(() => undefined);
+      return finish({ ok: true, streamType: detectedType !== "unknown" ? detectedType : streamType });
     }
-    return { ok: false, reason: `Resolved stream host ${host} returned HTTP ${response.status}.` };
+    await response.body?.cancel().catch(() => undefined);
+    return finish({ ok: false, reason: `Resolved stream host ${host} returned HTTP ${response.status}.` });
   } catch (error) {
     const cause = error instanceof Error && "cause" in error ? error.cause : null;
     const code = cause && typeof cause === "object" && "code" in cause ? String(cause.code) : null;
-    return {
+    return finish({
       ok: false,
       reason: `Resolved stream host ${host} is not reachable by the playback proxy${code ? ` (${code})` : ""}.`,
-    };
-  } finally {
-    clearTimeout(timeout);
+    });
   }
 }
 
@@ -1350,7 +1503,10 @@ function extractXpassPlaylistUrls(text: string, baseUrl: string) {
       // Ignore malformed playlist URLs.
     }
   }
-  return Array.from(urls);
+  return Array.from(urls).sort((left, right) => {
+    const score = (value: string) => /\/vip\//i.test(value) ? 0 : /\/mdata\//i.test(value) ? 2 : 1;
+    return score(left) - score(right);
+  });
 }
 
 async function resolveXpassPlaylistStream(embedUrl: string, html: string, finalUrl: string): Promise<ResolvedStreamTarget | null> {
@@ -1372,7 +1528,9 @@ async function resolveXpassPlaylistStream(embedUrl: string, html: string, finalU
     const streamUrl = findMediaUrlInDecodedText(playlistText, playlistFinalUrl);
     if (streamUrl && !isKnownPlaceholderStream(streamUrl)) {
       return {
-        streamUrl: await resolvePreferredHlsVariant(streamUrl, finalUrl),
+        // Keep adaptive Xpass masters intact so phones can start at a lower
+        // rendition instead of being pinned to the largest video stream.
+        streamUrl,
         refererUrl: embedUrl,
       };
     }
@@ -1449,7 +1607,7 @@ function getAlternateProviderUrls(embedUrl: string) {
   try {
     const parsed = new URL(embedUrl);
     const host = parsed.hostname.toLowerCase();
-    if (/(^|\.)mixdrop\./i.test(host)) {
+    if (isMixdropHost(host)) {
       for (const domain of ["mixdrop.co", "mixdrop.to", "mixdrop.sx", "mixdrop.ps", "mixdrop.my"]) {
         if (host === domain) {
           continue;
@@ -1469,7 +1627,9 @@ function getAlternateProviderUrls(embedUrl: string) {
         urls.push(alternate.toString());
       }
     }
-    if (/(^|\.)f16px\.com$|(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$|(^|\.)filemoon\./i.test(host)) {
+    // f16px has its own authoritative video lookup. A missing f16 record should
+    // not be retried as an sb host (the vault already stores real sb mirrors).
+    if (/(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$|(^|\.)filemoon\./i.test(host)) {
       const alternate = new URL(embedUrl);
       alternate.hostname = "sb1254w9megshle.org";
       urls.push(alternate.toString());
@@ -1490,6 +1650,8 @@ const VIDKING_SOURCE_SERVERS = [
   "1movies/sources-with-title",
 ] as const;
 const VIDKING_PAYLOAD_MAGIC = new Uint8Array([109, 118, 109, 49]);
+const VIDKING_VERIFICATION_ERROR =
+  "VidKing is currently running a verification check. Try again in a few minutes.";
 const VIDKING_HASH_WORDS = [
   1116352408, 1899447441, 3049323471, 3921009573,
   961987163, 1508970993, 2453635748, 2870763221,
@@ -1510,6 +1672,7 @@ type VidkingMetadata = {
   name?: string;
   release_date?: string;
   first_air_date?: string;
+  imdb_id?: string | null;
   external_ids?: {
     imdb_id?: string | null;
   };
@@ -1525,6 +1688,12 @@ type VidkingSourcePayload = {
 const vidkingMetadataCache = new Map<string, { expiresAt: number; metadata: Awaited<ReturnType<typeof fetchVidkingMetadataUncached>> }>();
 const vidkingResolvedStreamCache = new Map<string, { expiresAt: number; target: ResolvedStreamTarget }>();
 const vidkingSeedCache = new Map<string, { expiresAt: number; seed: string }>();
+
+async function fetchVidking(url: string, init: RequestInit = {}) {
+  return fetch(url, {
+    ...init,
+  });
+}
 
 function isVidkingPlayer(provider: string | undefined, embedUrl: string) {
   const signature = `${provider ?? ""} ${embedUrl}`.toLowerCase();
@@ -1553,6 +1722,22 @@ function parseVidkingRoute(value: string): VidkingRoute | null {
       episodeId: mediaType === "tv" && /^\d+$/.test(parts[embedIndex + 4] ?? "") ? parts[embedIndex + 4] : "1",
       embedUrl: parsed.toString(),
     };
+  } catch {
+    return null;
+  }
+}
+
+export function buildVidkingEquivalentUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    let tmdbId = "";
+    if (/(^|\.)(?:vidlink\.pro|moviesapi\.club)$/.test(host)) {
+      tmdbId = parsed.pathname.match(/\/movie\/(\d+)/i)?.[1] ?? "";
+    } else if (/(^|\.)(?:primewire\.zip|primesrc\.me)$/.test(host)) {
+      tmdbId = parsed.searchParams.get("tmdb") ?? "";
+    }
+    return /^\d+$/.test(tmdbId) ? `https://www.vidking.net/embed/movie/${tmdbId}` : null;
   } catch {
     return null;
   }
@@ -1651,15 +1836,26 @@ async function fetchVidkingSeed(mediaId: string, forceRefresh = false) {
   const cached = vidkingSeedCache.get(mediaId);
   if (!forceRefresh && cached && cached.expiresAt - 5000 > Date.now()) return cached.seed;
 
-  const response = await fetch(`${VIDKING_SOURCE_BASE_URL}/seed?mediaId=${encodeURIComponent(mediaId)}`, {
-    headers: {
-      "user-agent": USER_AGENT,
-      accept: "application/json,*/*",
-      origin: "https://www.vidking.net",
-      referer: "https://www.vidking.net/",
-    },
-  });
-  if (!response.ok) throw new Error(`VidKing seed request failed: ${response.status}.`);
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    response = await fetchVidking(`${VIDKING_SOURCE_BASE_URL}/seed?mediaId=${encodeURIComponent(mediaId)}`, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "application/json,*/*",
+        origin: "https://www.vidking.net",
+        referer: "https://www.vidking.net/",
+      },
+    });
+    if (response.status !== 429 || attempt === 3) break;
+    const jitter = Number.parseInt(mediaId.slice(-3), 10) % 200 || 0;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 300 * (attempt + 1) + jitter));
+  }
+  if (!response?.ok) {
+    if (response && (response.status === 401 || response.status === 403)) {
+      throw new Error(VIDKING_VERIFICATION_ERROR);
+    }
+    throw new Error(`VidKing seed request failed: ${response?.status ?? "network"}.`);
+  }
   const payload = await response.json() as { seed?: unknown; ttlMs?: unknown };
   if (typeof payload.seed !== "string" || !payload.seed) throw new Error("VidKing seed response was invalid.");
   const ttlMs = typeof payload.ttlMs === "number" && Number.isFinite(payload.ttlMs) ? payload.ttlMs : 30_000;
@@ -1673,7 +1869,7 @@ function parseVidkingYear(value: string | undefined) {
 }
 
 async function fetchVidkingMetadataUncached(route: VidkingRoute) {
-  const response = await fetch(`${VIDKING_DB_BASE_URL}/${route.mediaType}/${route.tmdbId}?append_to_response=external_ids`, {
+  const response = await fetchVidking(`${VIDKING_DB_BASE_URL}/${route.mediaType}/${route.tmdbId}?append_to_response=external_ids`, {
     headers: {
       "user-agent": USER_AGENT,
       accept: "application/json,*/*",
@@ -1694,7 +1890,7 @@ async function fetchVidkingMetadataUncached(route: VidkingRoute) {
   return {
     title,
     year,
-    imdbId: metadata.external_ids?.imdb_id ?? "",
+    imdbId: metadata.external_ids?.imdb_id ?? metadata.imdb_id ?? "",
   };
 }
 
@@ -1719,7 +1915,7 @@ function qualityScore(value: string | number | undefined) {
   return numeric ? Number.parseInt(numeric, 10) : 0;
 }
 
-function selectVidkingSource(payload: VidkingSourcePayload) {
+function selectVidkingSources(payload: VidkingSourcePayload) {
   const candidates = (payload.sources ?? [])
     .map((source) => ({
       url: typeof source.url === "string" ? source.url.trim() : "",
@@ -1733,13 +1929,14 @@ function selectVidkingSource(payload: VidkingSourcePayload) {
     return (rightIsHls - leftIsHls) || (qualityScore(right.quality) - qualityScore(left.quality));
   });
 
-  return candidates[0]?.url ?? null;
+  return candidates.map((candidate) => candidate.url);
 }
 
 async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<ReturnType<typeof fetchVidkingMetadata>>) {
   const errors: string[] = [];
+  let sawVerification = false;
   for (const endpoint of VIDKING_SOURCE_SERVERS) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const seed = await fetchVidkingSeed(route.tmdbId, attempt > 0);
       const params = new URLSearchParams({
         title: metadata.title,
@@ -1753,7 +1950,7 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
         seed,
         _t: String(Date.now()),
       });
-      const response = await fetch(`${VIDKING_SOURCE_BASE_URL}/${endpoint}?${params.toString()}`, {
+      const response = await fetchVidking(`${VIDKING_SOURCE_BASE_URL}/${endpoint}?${params.toString()}`, {
         headers: {
           "user-agent": USER_AGENT,
           accept: "application/json,text/plain,*/*",
@@ -1770,7 +1967,18 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
 
       if (!response) break;
       if (response.status === 401 && attempt === 0) {
+        sawVerification = true;
         vidkingSeedCache.delete(route.tmdbId);
+        continue;
+      }
+      if (response.status === 403) {
+        sawVerification = true;
+        errors.push(`${endpoint}: 403 (verification)`);
+        break;
+      }
+      if (response.status === 429 && attempt < 2) {
+        const jitter = Number.parseInt(route.tmdbId.slice(-3), 10) % 400 || 0;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 600 * (attempt + 1) + jitter));
         continue;
       }
       if (!response.ok) {
@@ -1780,8 +1988,28 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
 
       try {
         const payload = decryptVidkingPayload(await response.text(), seed, Number.parseInt(route.tmdbId, 10));
-        if ((payload.sources?.length ?? 0) > 0) return payload;
-        errors.push(`${endpoint}: no playable sources`);
+        const sourceUrls = selectVidkingSources(payload);
+        if (sourceUrls.length === 0) {
+          errors.push(`${endpoint}: no playable sources`);
+          break;
+        }
+        const validations = await Promise.all(sourceUrls.map(async (streamUrl) => {
+          const target = { streamUrl, refererUrl: route.embedUrl };
+          const validation = await validateResolvedStream(target).catch((error): StreamValidationResult => ({
+            ok: false,
+            reason: error instanceof Error ? error.message : String(error),
+          }));
+          return { target, validation };
+        }));
+        const playable = validations.find((entry) => entry.validation.ok);
+        if (playable) {
+          return playable.target;
+        }
+        for (const entry of validations) {
+          if (!entry.validation.ok) {
+            errors.push(`${endpoint}: ${"reason" in entry.validation ? entry.validation.reason : "stream validation failed"}`);
+          }
+        }
       } catch (error) {
         errors.push(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1789,6 +2017,9 @@ async function fetchVidkingSources(route: VidkingRoute, metadata: Awaited<Return
     }
   }
 
+  if (sawVerification) {
+    throw new Error(`${VIDKING_VERIFICATION_ERROR} (${errors.join(" | ") || "source API returned 401/403"})`);
+  }
   throw new Error(errors.length ? `VidKing source API failed. ${errors.join(" | ")}` : "VidKing source API returned no sources.");
 }
 
@@ -1805,7 +2036,7 @@ async function resolveVidkingStream(provider: string | undefined, embedUrl: stri
   const cacheKey = `${route.mediaType}:${route.tmdbId}:${route.seasonId}:${route.episodeId}`;
   const cached = vidkingResolvedStreamCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    const validation = await validateResolvedStream(cached.target).catch((error): { ok: false; reason: string } => ({
+    const validation = await validateResolvedStream(cached.target, true).catch((error): StreamValidationResult => ({
       ok: false,
       reason: error instanceof Error ? error.message : String(error),
     }));
@@ -1816,15 +2047,7 @@ async function resolveVidkingStream(provider: string | undefined, embedUrl: stri
   }
 
   const metadata = await fetchVidkingMetadata(route);
-  const streamUrl = selectVidkingSource(await fetchVidkingSources(route, metadata));
-  if (!streamUrl) {
-    throw new Error("VidKing source payload did not contain a direct stream.");
-  }
-
-  const target = {
-    streamUrl,
-    refererUrl: route.embedUrl,
-  };
+  const target = await fetchVidkingSources(route, metadata);
   vidkingResolvedStreamCache.set(cacheKey, {
     expiresAt: Date.now() + 30 * 1000,
     target,
@@ -1941,11 +2164,12 @@ function extractSvetSerialuEmbedUrl(text: string, baseUrl: string) {
   return null;
 }
 
-function extractByseLikeVideoCode(embedUrl: string) {
+function extractByseLikeVideoCode(embedUrl: string, allowUnknownHost = false) {
   try {
     const parsed = new URL(embedUrl);
     const host = parsed.hostname.toLowerCase();
     if (
+      !allowUnknownHost &&
       !/(^|\.)f16px\.com$|(^|\.)bysekoze\.com$|(^|\.)rupertisdivingintoocean\.com$/i.test(host) &&
       !/^sb[a-z0-9]+\.org$/i.test(host)
     ) {
@@ -2192,23 +2416,75 @@ function countLeadingZeroBits(words: Uint32Array) {
   return count;
 }
 
-async function solveBysePow(nonce: string, difficulty: number, timeoutMs = 20_000) {
+function solveBysePowSync(nonce: string, difficulty: number) {
   if (difficulty <= 0) {
     return "0";
   }
   const prefix = `${nonce}:`;
-  const startedAt = Date.now();
   for (let solution = 0; ; solution += 1) {
     if (countLeadingZeroBits(bysePowHash(asciiBytes(`${prefix}${solution}`))) >= difficulty) {
       return String(solution);
     }
-    if (solution > 0 && solution % 1024 === 0) {
-      if (Date.now() - startedAt > timeoutMs) {
-        throw new Error("Byse proof-of-work challenge timed out.");
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
-    }
   }
+}
+
+function solveBysePow(nonce: string, difficulty: number, timeoutMs = 20_000) {
+  if (difficulty <= 0) {
+    return Promise.resolve("0");
+  }
+
+  const workerSource = `
+    const { parentPort, workerData } = require("node:worker_threads");
+    const BYSE_POW_BUFFER_SIZE = ${BYSE_POW_BUFFER_SIZE};
+    const BYSE_POW_BUFFER_MASK = ${BYSE_POW_BUFFER_MASK};
+    const BYSE_POW_MIX_ROUNDS = ${BYSE_POW_MIX_ROUNDS};
+    const BYSE_POW_PRIME_1 = ${BYSE_POW_PRIME_1};
+    const BYSE_POW_PRIME_2 = ${BYSE_POW_PRIME_2};
+    ${rotateLeft32.toString()}
+    ${multiply32.toString()}
+    ${byseQuarterRound.toString()}
+    ${asciiBytes.toString()}
+    ${bysePowHash.toString()}
+    ${countLeadingZeroBits.toString()}
+    ${solveBysePowSync.toString()}
+    parentPort.postMessage(solveBysePowSync(workerData.nonce, workerData.difficulty));
+  `;
+
+  return new Promise<string>((resolvePromise, rejectPromise) => {
+    const worker = new Worker(workerSource, {
+      eval: true,
+      workerData: { nonce, difficulty },
+    });
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      void worker.terminate();
+      callback();
+    };
+    const timeout = setTimeout(() => {
+      finish(() => rejectPromise(new Error("Byse proof-of-work challenge timed out.")));
+    }, timeoutMs);
+
+    worker.once("message", (solution: unknown) => {
+      finish(() => {
+        if (typeof solution === "string") {
+          resolvePromise(solution);
+        } else {
+          rejectPromise(new Error("Byse proof-of-work worker returned an invalid solution."));
+        }
+      });
+    });
+    worker.once("error", (error) => {
+      finish(() => rejectPromise(error));
+    });
+    worker.once("exit", (code) => {
+      if (code !== 0) {
+        finish(() => rejectPromise(new Error(`Byse proof-of-work worker exited with code ${code}.`)));
+      }
+    });
+  });
 }
 
 async function createByseCaptchaToken(parsed: ByseParsedEmbed, embedUrl: string, fingerprint: ByseFingerprint, requestReferer?: string) {
@@ -2246,8 +2522,12 @@ async function createByseCaptchaToken(parsed: ByseParsedEmbed, embedUrl: string,
   return verified.data.token;
 }
 
-async function resolveEncryptedPlaybackStream(embedUrl: string, refererUrl?: string): Promise<string | null> {
-  const parsed = extractByseLikeVideoCode(embedUrl);
+async function resolveEncryptedPlaybackStream(
+  embedUrl: string,
+  refererUrl?: string,
+  allowUnknownHost = false,
+): Promise<string | null> {
+  const parsed = extractByseLikeVideoCode(embedUrl, allowUnknownHost);
   if (!parsed) {
     return null;
   }
@@ -2637,7 +2917,12 @@ async function resolveStreamTarget(
   }
   visited.add(embedUrl);
 
-  const encryptedPlaybackStream = await resolveEncryptedPlaybackStream(embedUrl, refererUrl);
+  const encryptedPlaybackStream = await resolveEncryptedPlaybackStream(embedUrl, refererUrl).catch((error: unknown) => {
+    if (error instanceof Error && /download gate with reCAPTCHA/i.test(error.message)) {
+      throw error;
+    }
+    return null;
+  });
   if (encryptedPlaybackStream) {
     return { streamUrl: encryptedPlaybackStream, refererUrl: embedUrl };
   }
@@ -2666,7 +2951,32 @@ async function resolveStreamTarget(
     }
     const html = fetched.text;
     const finalUrl = fetched.finalUrl;
-    const mediaRefererUrl = refererUrl ?? finalUrl;
+    const mediaRefererUrl = finalUrl;
+
+    if (
+      /<title>\s*Byse Frontend\s*<\/title>/i.test(html) ||
+      /\/assets\/index-[^"'<>]+\.js/i.test(html) && /video-embed-mode/i.test(html)
+    ) {
+      const rotatingByseStream = await resolveEncryptedPlaybackStream(finalUrl, refererUrl, true).catch((error: unknown) => {
+        if (error instanceof Error && /download gate with reCAPTCHA/i.test(error.message)) {
+          throw error;
+        }
+        return null;
+      });
+      if (rotatingByseStream) {
+        return {
+          streamUrl: rotatingByseStream,
+          refererUrl: finalUrl,
+        };
+      }
+    }
+
+    if (/play\.xpass\.top/i.test(finalUrl)) {
+      const xpass = await resolveXpassPlaylistStream(finalUrl, html, finalUrl);
+      if (xpass) {
+        return xpass;
+      }
+    }
 
     const voeStream = extractVoeObfuscatedStream(html);
     if (voeStream && !isKnownPlaceholderStream(voeStream)) {
@@ -2702,7 +3012,7 @@ async function resolveStreamTarget(
     }
 
     const iframeUrl = extractIframeUrl(html, finalUrl);
-    if (iframeUrl && iframeUrl !== embedUrl) {
+    if (iframeUrl && iframeUrl !== embedUrl && !isSvetSerialuUrl(finalUrl)) {
       const nested = await resolveStreamTarget(iframeUrl, depth + 1, visited, finalUrl, preferHlsVariant);
       if (nested) {
         return nested;
@@ -2711,8 +3021,12 @@ async function resolveStreamTarget(
 
     if (isSvetSerialuUrl(finalUrl)) {
       const sourceUrls = finalUrl.includes("/sources/")
-        ? [finalUrl]
+        ? []
         : extractSvetSerialuSourceUrls(html, finalUrl);
+      const sourceCandidates: Array<{ embedUrl: string; refererUrl: string }> = [];
+      if (iframeUrl && iframeUrl !== embedUrl) {
+        sourceCandidates.push({ embedUrl: iframeUrl, refererUrl: finalUrl });
+      }
 
       for (const sourceUrl of sourceUrls) {
         if (visited.has(sourceUrl)) {
@@ -2729,10 +3043,25 @@ async function resolveStreamTarget(
         if (!sourceEmbedUrl || visited.has(sourceEmbedUrl)) {
           continue;
         }
+        sourceCandidates.push({
+          embedUrl: sourceEmbedUrl,
+          refererUrl: sourceResponse.finalUrl || sourceUrl,
+        });
+      }
 
-        const nested = await resolveStreamTarget(sourceEmbedUrl, depth + 1, visited, sourceResponse.finalUrl || sourceUrl, preferHlsVariant);
+      for (const sourceCandidate of sourceCandidates) {
+        const nested = await resolveStreamTarget(
+          sourceCandidate.embedUrl,
+          depth + 1,
+          visited,
+          sourceCandidate.refererUrl,
+          preferHlsVariant,
+        );
         if (nested) {
-          return nested;
+          const validation = await validateResolvedStream(nested);
+          if (validation.ok) {
+            return nested;
+          }
         }
       }
     }
@@ -2969,118 +3298,252 @@ function orderPlaybackPlayers(input: PlaybackResolveInput) {
   const active = remotePlayers.find((player) => player.alias === input.activePlayerAlias);
   const activeLanguage = active?.language;
   const activeIsSubtitleOnly = /titulky|subtitles|subbed/i.test(activeLanguage ?? "");
-  const fallbackPool = activeLanguage
+  const preferredLanguagePool = activeLanguage
     ? remotePlayers.filter((player) =>
         player.alias === active?.alias ||
         player.language === activeLanguage ||
         (activeIsSubtitleOnly && /english|en\b|dab\/tit/i.test(player.language ?? "")),
       )
     : remotePlayers;
-  const withDirect = fallbackPool.filter((player) => player.alias !== active?.alias && Boolean(player.streamUrl ?? player.resolvedUrl));
-  const sameLanguage = remotePlayers.filter((player) =>
+
+  const isNonSubtitle = (p: typeof remotePlayers[0]) => !/titulky|subtitles|subbed/i.test(p.language ?? "");
+  const hasSubtitles = (p: typeof remotePlayers[0]) => Boolean(p.subtitlesUrl);
+  const hasDirect = (p: typeof remotePlayers[0]) => Boolean(p.streamUrl ?? p.resolvedUrl);
+
+  const withDirect = preferredLanguagePool.filter((player) =>
+    player.alias !== active?.alias &&
+    hasDirect(player) &&
+    isNonSubtitle(player),
+  );
+  const sameLanguage = preferredLanguagePool.filter((player) =>
     player.alias !== active?.alias &&
     !withDirect.some((direct) => direct.alias === player.alias) &&
     activeLanguage &&
-    player.language === activeLanguage
+    player.language === activeLanguage &&
+    isNonSubtitle(player),
   );
-  const remaining = fallbackPool.filter((player) =>
+  const subtitleFallbacks = preferredLanguagePool.filter((player) =>
     player.alias !== active?.alias &&
     !withDirect.some((direct) => direct.alias === player.alias) &&
-    !sameLanguage.some((same) => same.alias === player.alias)
+    !sameLanguage.some((same) => same.alias === player.alias) &&
+    isNonSubtitle(player) &&
+    !hasSubtitles(player),
   );
-  return [active, ...withDirect, ...sameLanguage, ...remaining].filter(Boolean) as typeof remotePlayers;
+  const remainingPreferred = preferredLanguagePool.filter((player) =>
+    player.alias !== active?.alias &&
+    !withDirect.some((direct) => direct.alias === player.alias) &&
+    !sameLanguage.some((same) => same.alias === player.alias) &&
+    !subtitleFallbacks.some((sub) => sub.alias === player.alias)
+  );
+  const crossLanguageFallbacks = remotePlayers.filter((player) =>
+    player.alias !== active?.alias &&
+    !preferredLanguagePool.some((preferred) => preferred.alias === player.alias)
+  );
+  return [active, ...withDirect, ...sameLanguage, ...subtitleFallbacks, ...remainingPreferred, ...crossLanguageFallbacks].filter(Boolean) as typeof remotePlayers;
 }
 
-export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
+const playbackResolutionInflight = new Map<string, Promise<PlaybackResolveResult>>();
+const PLAYBACK_PREFERRED_BUDGET_MS = Math.max(
+  250,
+  Number.parseInt(process.env.SPILLED_PLAYBACK_PREFERRED_BUDGET_MS ?? "2500", 10) || 2500,
+);
+const PLAYBACK_DEADLINE_MS = Math.max(
+  1_000,
+  Number.parseInt(process.env.SPILLED_PLAYBACK_DEADLINE_MS ?? "9500", 10) || 9500,
+);
+
+function playbackInflightKey(input: PlaybackResolveInput) {
+  return JSON.stringify([
+    input.episodeId,
+    input.activePlayerAlias,
+    input.players.map((player) => [
+      player.alias,
+      player.provider,
+      player.language,
+      player.sourcePageUrl,
+      player.embedUrl,
+      player.streamUrl,
+      player.resolvedUrl,
+      player.resolvedAt,
+    ]),
+  ]);
+}
+
+async function resolvePlaybackStreamUncoalesced(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
   const orderedPlayers = orderPlaybackPlayers(input);
   const failures: PlaybackResolveFailure[] = [];
   const activePlayer = orderedPlayers.find((player) => player.alias === input.activePlayerAlias);
-  const activeSubtitleUrl = activePlayer ? await resolveSubtitleUrlFromPlayer(activePlayer) : undefined;
 
-  for (const player of orderedPlayers) {
-    try {
-      const candidateEmbedUrl = (await resolveCandidateEmbedUrl(player)) ?? player.embedUrl;
+  const subtitlePromise = activePlayer ? resolveSubtitleUrlFromPlayer(activePlayer) : Promise.resolve(undefined);
+
+  const fastStreamTypeOf = (url: string) => {
+    const t = inferStreamType(url);
+    return t === "hls" || t === "mp4" || t === "dash" ? t : null;
+  };
+
+  const directUrlResults = await Promise.allSettled(
+    orderedPlayers.map(async (player) => {
       const rawDirectUrl = getDirectStreamUrl({
         embedUrl: player.embedUrl,
         streamUrl: player.streamUrl,
         resolvedUrl: player.resolvedUrl,
       });
-      const directUrlIsFresh = rawDirectUrl && canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl);
-      const directUrl = directUrlIsFresh ? rawDirectUrl : null;
-      let resolved = directUrl
-        ? {
-            streamUrl: toValidatedHttpUrl(directUrl),
-            refererUrl: player.streamRefererUrl ?? player.sourcePageUrl ?? player.embedUrl,
-          }
-        : (await resolveVidkingStream(player.provider, candidateEmbedUrl)) ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+      if (!rawDirectUrl) return null;
+      const candidateEmbedUrl = player.embedUrl;
+      if (!canReuseDirectStreamUrl(player, candidateEmbedUrl, rawDirectUrl)) return null;
+      const streamType = fastStreamTypeOf(rawDirectUrl);
+      if (!streamType) return null;
+      return { player, rawDirectUrl, streamType };
+    }),
+  );
 
-      if (!resolved && !directUrl) {
-        for (const alternateEmbedUrl of getAlternateProviderUrls(candidateEmbedUrl)) {
-          resolved = await resolveStreamTarget(alternateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-          if (resolved) {
-            break;
-          }
-        }
+  const directHits = directUrlResults
+    .filter((r): r is PromiseFulfilledResult<{ player: PlaybackResolveInput["players"][number]; rawDirectUrl: string; streamType: "hls" | "mp4" | "dash" }> => r.status === "fulfilled" && r.value !== null)
+    .map((r) => r.value);
+
+  if (directHits.length > 0) {
+    const activeHit = directHits.find((hit) => hit.player.alias === input.activePlayerAlias) ?? directHits[0];
+    const refererUrl = activeHit.player.streamRefererUrl ?? activeHit.player.sourcePageUrl ?? activeHit.player.embedUrl;
+    const activeSubtitleUrl = await subtitlePromise;
+    return {
+      playerAlias: activeHit.player.alias,
+      playbackUrl: buildPlaybackProxyPath(toValidatedHttpUrl(activeHit.rawDirectUrl), refererUrl, input.episodeId, activeHit.streamType),
+      resolvedUrl: toValidatedHttpUrl(activeHit.rawDirectUrl),
+      refererUrl,
+      streamType: activeHit.streamType,
+      subtitlesUrl: activeHit.player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(activeHit.player.embedUrl) ?? activeSubtitleUrl,
+    };
+  }
+
+  const attemptPlayer = async (player: PlaybackResolveInput["players"][number]): Promise<PlaybackResolveResult> => {
+    const candidateEmbedUrl = (await resolveCandidateEmbedUrl(player)) ?? player.embedUrl;
+
+    const equivalentVidkingUrl = buildVidkingEquivalentUrl(candidateEmbedUrl);
+    const equivalentVidking = equivalentVidkingUrl
+      ? await resolveVidkingStream("vidking", equivalentVidkingUrl).catch(() => null)
+      : null;
+    let resolved = equivalentVidking
+      ?? (await resolveVidkingStream(player.provider, candidateEmbedUrl).catch(() => null))
+      ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+
+    if (!resolved && isVidkingPlayer(player.provider, candidateEmbedUrl)) {
+      const twoEmbedFallbackUrl = await getTwoEmbedFallbackUrlFromVidking(candidateEmbedUrl);
+      if (twoEmbedFallbackUrl) {
+        resolved = await resolveStreamTarget(twoEmbedFallbackUrl, 0, new Set<string>(), player.sourcePageUrl, false);
       }
+    }
 
-      if (!resolved) {
-        const reachableEmbed = await canUseEmbedFallback(candidateEmbedUrl, player.sourcePageUrl);
-        failures.push({
-          playerAlias: player.alias,
-          provider: player.provider,
-          reason: reachableEmbed
-            ? "Provider page is reachable but did not expose a direct MP4/HLS/DASH stream for the unified player."
-            : "No MP4/HLS/DASH source found after following wrappers.",
-        });
-        continue;
+    if (!resolved) {
+      for (const alternateEmbedUrl of getAlternateProviderUrls(candidateEmbedUrl)) {
+        resolved = await resolveStreamTarget(alternateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
+        if (resolved) break;
       }
+    }
 
-      const validation = await validateResolvedStream(resolved);
-      if (!validation.ok) {
-        if (directUrl) {
-          const refreshed = (await resolveVidkingStream(player.provider, candidateEmbedUrl)) ?? await resolveStreamTarget(candidateEmbedUrl, 0, new Set<string>(), player.sourcePageUrl, false);
-          if (refreshed) {
-            const refreshedValidation = await validateResolvedStream(refreshed);
-            if (refreshedValidation.ok) {
-              return {
-                playerAlias: player.alias,
-                playbackUrl: buildPlaybackProxyPath(refreshed.streamUrl, refreshed.refererUrl, input.episodeId),
-                resolvedUrl: refreshed.streamUrl,
-                refererUrl: refreshed.refererUrl,
-                streamType: player.streamType ?? inferStreamType(refreshed.streamUrl),
-                subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
-              };
-            }
-          }
-        }
-        failures.push({
-          playerAlias: player.alias,
-          provider: player.provider,
-          reason: validation.reason,
-        });
-        continue;
-      }
-
-      return {
-        playerAlias: player.alias,
-        playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId),
-        resolvedUrl: resolved.streamUrl,
-        refererUrl: resolved.refererUrl,
-        streamType: player.streamType ?? inferStreamType(resolved.streamUrl),
-        subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
-      };
-    } catch (error) {
+    if (!resolved) {
       failures.push({
         playerAlias: player.alias,
         provider: player.provider,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: "No validated MP4/HLS/DASH source found after following provider wrappers.",
       });
+      throw new Error("No validated MP4/HLS/DASH source found after following provider wrappers.");
     }
-  }
 
-  const summary = failures.map((failure) => `${failure.provider}: ${failure.reason}`).join(" | ");
-  const error = summary || "No remote player links are available for this episode.";
-  throw Object.assign(new Error(error), { failures });
+    const validation = await validateResolvedStream(resolved);
+    if (!validation.ok) {
+      failures.push({
+        playerAlias: player.alias,
+        provider: player.provider,
+        reason: "reason" in validation ? validation.reason : "Stream validation failed.",
+      });
+      throw new Error("reason" in validation ? validation.reason : "Stream validation failed.");
+    }
+
+    const activeSubtitleUrl = await subtitlePromise;
+    return {
+      playerAlias: player.alias,
+      playbackUrl: buildPlaybackProxyPath(resolved.streamUrl, resolved.refererUrl, input.episodeId, validation.streamType),
+      resolvedUrl: resolved.streamUrl,
+      refererUrl: resolved.refererUrl,
+      streamType: validation.streamType,
+      subtitlesUrl: player.subtitlesUrl ?? extractSubtitleUrlFromPlayerUrl(player.embedUrl) ?? activeSubtitleUrl,
+    };
+  };
+
+  const resolveAll = async (): Promise<PlaybackResolveResult> => {
+    if (orderedPlayers.length === 0) {
+      throw new Error("No remote player is available for playback resolution.");
+    }
+    if (orderedPlayers.length <= 1) {
+      return attemptPlayer(orderedPlayers[0]);
+    }
+
+    const activePlayerFirst = orderedPlayers[0];
+    const restPlayers = orderedPlayers.slice(1);
+
+    const activeAttempt = attemptPlayer(activePlayerFirst).catch(() => null);
+    const restAttempts = restPlayers.map((p) => attemptPlayer(p).catch(() => null));
+    const firstFallback = Promise.any(restAttempts.map((p) => p.then((result) => {
+      if (result) return result;
+      throw new Error("fallback failed");
+    })));
+
+    let preferredTimer: ReturnType<typeof setTimeout> | undefined;
+    const preferredWindow = await Promise.race([
+      activeAttempt.then((result) => ({ settled: true as const, result })),
+      new Promise<{ settled: false; result: null }>((resolvePromise) => {
+        preferredTimer = setTimeout(
+          () => resolvePromise({ settled: false, result: null }),
+          PLAYBACK_PREFERRED_BUDGET_MS,
+        );
+        preferredTimer.unref?.();
+      }),
+    ]).finally(() => {
+      if (preferredTimer) clearTimeout(preferredTimer);
+    });
+    if (preferredWindow.settled && preferredWindow.result) return preferredWindow.result;
+    if (preferredWindow.settled) return firstFallback;
+
+    // The preferred provider still gets an exclusive window. Once it exceeds
+    // that budget, accept the first already-valid result instead of waiting on
+    // a slow tail while completed fallback work sits idle.
+    const firstAvailable = await Promise.any([
+      activeAttempt.then((result) => {
+        if (result) return result;
+        throw new Error("preferred player failed");
+      }),
+      firstFallback,
+    ]);
+    if (firstAvailable) return firstAvailable;
+
+    throw new Error("All player resolution attempts failed.");
+  };
+
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolveAll(),
+      new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error(`Playback resolution exceeded ${PLAYBACK_DEADLINE_MS}ms.`)),
+          PLAYBACK_DEADLINE_MS,
+        );
+        deadline.unref?.();
+      }),
+    ]);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+  }
+}
+
+export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {
+  const key = playbackInflightKey(input);
+  const pending = playbackResolutionInflight.get(key);
+  if (pending) return pending;
+  const resolution = resolvePlaybackStreamUncoalesced(input)
+    .finally(() => playbackResolutionInflight.delete(key));
+  playbackResolutionInflight.set(key, resolution);
+  return resolution;
 }
 
 export async function createFullDownloadJob(input: CreateDownloadInput): Promise<FullDownloadJob> {

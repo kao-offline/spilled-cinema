@@ -1,4 +1,5 @@
-export const NODE_PROTOCOL_VERSION = 1 as const;
+export const LEGACY_NODE_PROTOCOL_VERSION = 1 as const;
+export const NODE_PROTOCOL_VERSION = 2 as const;
 
 export const NODE_CAPABILITIES = [
   "fetch",
@@ -10,11 +11,118 @@ export const NODE_CAPABILITIES = [
 ] as const;
 
 export const NODE_VISIBILITY = ["public", "paired", "private"] as const;
-export const NODE_MODES = ["public-fetch", "private", "full"] as const;
+export const NODE_MODES = ["local", "public-fetch", "private", "full"] as const;
 
 export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
 export type NodeVisibility = (typeof NODE_VISIBILITY)[number];
 export type NodeMode = (typeof NODE_MODES)[number];
+
+export const V2_CAPABILITIES = [
+  "provider.search",
+  "provider.feed",
+  "provider.import",
+  "player.resolve",
+  "download.transient",
+  "download.private",
+  "spillshare.read",
+  "spillshare.publish",
+  "relay.stream",
+  "library.read",
+  "library.write",
+  "node.admin",
+] as const;
+
+export type Capability = (typeof V2_CAPABILITIES)[number];
+
+export type Principal =
+  | { kind: "local-install"; installId: string }
+  | { kind: "owner"; accountId: string; sessionId: string }
+  | { kind: "watcher"; accountId: string; profileId: string; sessionId: string }
+  | { kind: "public"; ticketId: string; ephemeralKey: string }
+  | { kind: "gateway-verifier"; attestationId: string };
+
+export type ResourceLimits = {
+  maxRequestBytes: number;
+  maxResponseBytes: number;
+  maxDurationMs: number;
+  maxConcurrentJobs: number;
+  maxTemporaryBytes: number;
+};
+
+export type PolicyDenialReason =
+  | "authentication-required"
+  | "capability-disabled"
+  | "capability-mismatch"
+  | "principal-not-allowed"
+  | "resource-unavailable"
+  | "ticket-expired"
+  | "replay-detected";
+
+export type PolicyDecision =
+  | { allow: true; limits: ResourceLimits; auditClass: string }
+  | { allow: false; reason: PolicyDenialReason };
+
+export type CapabilityTicketV2 = {
+  version: 2;
+  ticketId: string;
+  nodeId: string;
+  principalKind: "public" | "private" | "verifier";
+  capability: Capability;
+  action: string;
+  contentId?: string;
+  maxRequestBytes: number;
+  maxResponseBytes: number;
+  maxDurationMs: number;
+  issuedAt: number;
+  expiresAt: number;
+  nonce: string;
+  keyId: string;
+  signature: string;
+};
+
+export type EncryptedRequestEnvelopeV2 = {
+  version: 2;
+  requestId: string;
+  ticketId: string;
+  issuedAt: number;
+  expiresAt: number;
+  nonce: string;
+  clientEphemeralKey: string;
+  acceptEncoding?: "gzip";
+  ciphertext: string;
+  authenticationTag: string;
+};
+
+export type EncryptedResponseEnvelopeV2 = {
+  version: 2;
+  requestId: string;
+  ticketId: string;
+  issuedAt: number;
+  nonce: string;
+  contentEncoding?: "gzip";
+  ciphertext: string;
+  authenticationTag: string;
+};
+
+export type NodeVerificationStatus =
+  | "pending"
+  | "verified"
+  | "degraded"
+  | "quarantined"
+  | "disabled"
+  | "legacy-unverified";
+
+export type PublicJobState =
+  | "queued"
+  | "resolving"
+  | "downloading"
+  | "ready"
+  | "streaming"
+  | "completed"
+  | "canceling"
+  | "canceled"
+  | "failed"
+  | "expired";
 
 export type CapabilityPolicy = {
   visibility: NodeVisibility;
@@ -106,6 +214,28 @@ export type ContentManifest = {
   sourceNodeId: string;
   createdAt: number;
   signature: string;
+};
+
+export type ContentManifestV2 = {
+  version: 2;
+  manifestId: string;
+  contentId: string;
+  sourceNodeId: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  chunks: ChunkDescriptor[];
+  createdAt: number;
+  expiresAt: number;
+  signature: string;
+};
+
+export type SpillShareAvailabilityV2 = {
+  contentId: string;
+  nodeId: string;
+  renditionClass: string;
+  verifiedAt: number;
+  expiresAt: number;
 };
 
 export type DiscoveryQuery = {

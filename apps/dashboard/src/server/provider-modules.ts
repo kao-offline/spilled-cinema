@@ -1,7 +1,7 @@
 import { cachedFetchText } from "./provider-discovery-shared";
 import { getBombujMovieSections, getBombujSeriesSections, hydrateBombujItem } from "./bombuj-discovery";
 import { fetchBombujMovie, searchBombuj } from "./bombuj";
-import { hydrateSvetItem, parseSvetEpisodeCards } from "./svetserialu-discovery";
+import { hydrateSvetItem, parseSvetEpisodeCards, parseSvetLatestShowsPage } from "./svetserialu-discovery";
 import {
   fetchSvetSerialuShow,
   fetchSvetSerialuText,
@@ -28,7 +28,7 @@ const PROVIDER_MODULES_PATH = "/server/provider-modules";
 export type ProviderModuleAdapter = {
   moduleId: string;
   providerId: IntegrationId;
-  getFeed?: (feedId: string, args: { cursor?: string | null; limit?: number; svetserialuCredentials?: SvetSerialuCredentials | null }) => Promise<ProviderFeedResponse>;
+  getFeed?: (feedId: string, args: { cursor?: string | null; limit?: number; fresh?: boolean; svetserialuCredentials?: SvetSerialuCredentials | null }) => Promise<ProviderFeedResponse>;
   search?: (query: string, args?: { svetserialuCredentials?: SvetSerialuCredentials | null }) => Promise<ExploreItem[]>;
   import?: (slug: string, mediaType?: "movie" | "serial", args?: { svetserialuCredentials?: SvetSerialuCredentials | null }) => Promise<unknown>;
   resolvePlayer?: (...args: unknown[]) => Promise<unknown>;
@@ -156,7 +156,7 @@ function parseProviderPageCursor(cursor: string | null | undefined) {
   return Number.isFinite(page) && page >= 0 ? page : 0;
 }
 
-async function loadSvetNewEpisodesFeed(cursor?: string | null, limit = 24, credentials?: SvetSerialuCredentials | null): Promise<ProviderFeedResponse> {
+async function loadSvetNewEpisodesFeed(cursor?: string | null, limit = 24, credentials?: SvetSerialuCredentials | null, fresh = false): Promise<ProviderFeedResponse> {
   const requestedLimit = Math.max(1, limit);
   const startPage = parseProviderPageCursor(cursor);
   const baseItems: ExploreItem[] = [];
@@ -172,6 +172,8 @@ async function loadSvetNewEpisodesFeed(cursor?: string | null, limit = 24, crede
       const result = await cachedFetchText(
         `${SVETSERIALU_BASE_URL}/?ajaxTVShows=true&page=${nextPage}`,
         4 * 60 * 1000,
+        undefined,
+        fresh,
       );
       html = result.html;
       pageStale = result.stale;
@@ -210,12 +212,39 @@ async function loadSvetNewEpisodesFeed(cursor?: string | null, limit = 24, crede
   };
 }
 
-async function loadBombujFeed(feedId: string, cursor?: string | null, limit = 24): Promise<ProviderFeedResponse> {
+async function loadSvetFeed(feedId: string, cursor?: string | null, limit = 24, credentials?: SvetSerialuCredentials | null, fresh = false) {
+  if (feedId === "new-episodes" || feedId === "subtitled-episodes") {
+    const response = await loadSvetNewEpisodesFeed(cursor, feedId === "subtitled-episodes" ? limit * 2 : limit, credentials, fresh);
+    return {
+      ...response,
+      feedId,
+      items: feedId === "subtitled-episodes"
+        ? response.items.filter((item) => item.audioBuckets.includes("subtitles")).slice(0, limit)
+        : response.items,
+    };
+  }
+
+  if (feedId !== "new-series") throw new Error(`Unsupported SvetSerialu feed "${feedId}".`);
+  const page = parseProviderPageCursor(cursor);
+  const url = `${SVETSERIALU_BASE_URL}/zoznam-serialov?posledne-pridane=true`;
+  const source = credentials
+    ? { html: await fetchSvetSerialuText(url, SVETSERIALU_BASE_URL, credentials), stale: false }
+    : await cachedFetchText(url, 4 * 60 * 1000, undefined, fresh);
+  const baseItems = parseSvetLatestShowsPage(source.html);
+  const start = page * limit;
+  const items = await mapWithConcurrency(baseItems.slice(start, start + limit), 4, (item) => hydrateFeedItem(item, credentials));
+  return {
+    generatedAt: Date.now(), stale: source.stale, moduleId: "svetserialu", feedId, items,
+    continueCursor: start + limit < baseItems.length ? String(page + 1) : null,
+  } satisfies ProviderFeedResponse;
+}
+
+async function loadBombujFeed(feedId: string, cursor?: string | null, limit = 24, fresh = false): Promise<ProviderFeedResponse> {
   const requestedLimit = Math.max(1, limit);
   const page = parseProviderPageCursor(cursor);
   const source = feedId === "latest-movies"
-    ? await getBombujMovieSections()
-    : await getBombujSeriesSections();
+    ? await getBombujMovieSections(fresh)
+    : await getBombujSeriesSections(fresh);
   const sectionKey = feedId === "latest-movies" ? "newest" : "novinky";
   const baseItems = source.items.filter((item) => item.sectionKeys.includes(sectionKey));
   const start = page * requestedLimit;
@@ -247,10 +276,7 @@ const providerAdapters: Record<string, ProviderModuleAdapter> = {
     moduleId: "svetserialu",
     providerId: "svetserialu",
     async getFeed(feedId, args) {
-      if (feedId !== "new-episodes") {
-        throw new Error(`Unsupported SvetSerialu feed "${feedId}".`);
-      }
-      return await loadSvetNewEpisodesFeed(args.cursor, args.limit ?? 24, args.svetserialuCredentials);
+      return await loadSvetFeed(feedId, args.cursor, args.limit ?? 24, args.svetserialuCredentials, args.fresh);
     },
     async search(query, args) {
       const results = await searchSvetSerialu(query, args?.svetserialuCredentials);
@@ -267,7 +293,7 @@ const providerAdapters: Record<string, ProviderModuleAdapter> = {
       if (feedId !== "latest-movies" && feedId !== "latest-series") {
         throw new Error(`Unsupported Bombuj feed "${feedId}".`);
       }
-      return await loadBombujFeed(feedId, args.cursor, args.limit ?? 24);
+      return await loadBombujFeed(feedId, args.cursor, args.limit ?? 24, args.fresh);
     },
     async search(query) {
       const results = await searchBombuj(query);

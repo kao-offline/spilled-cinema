@@ -1,5 +1,9 @@
 {
   "name": "@spilledcinema/security",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@noble/ciphers": "^1.3.0",
+    "@node-rs/argon2": "^2.0.2"
+  }
 }

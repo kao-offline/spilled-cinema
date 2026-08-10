@@ -11,6 +11,8 @@
 import type * as controlPlane from "../controlPlane.js";
 import type * as http from "../http.js";
 import type * as integrations from "../integrations.js";
+import type * as migrations from "../migrations.js";
+import type * as operators from "../operators.js";
 import type * as providerModules from "../providerModules.js";
 
 import type {
@@ -23,6 +25,8 @@ declare const fullApi: ApiFromModules<{
   controlPlane: typeof controlPlane;
   http: typeof http;
   integrations: typeof integrations;
+  migrations: typeof migrations;
+  operators: typeof operators;
   providerModules: typeof providerModules;
 }>;
 
@@ -52,4 +56,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  migrations: import("@convex-dev/migrations/_generated/component.js").ComponentApi<"migrations">;
+};

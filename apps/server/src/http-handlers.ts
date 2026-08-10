@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
@@ -39,7 +40,7 @@ import {
 import type { ImportedShow, ResolvedTitle } from "../../dashboard/src/lib/types";
 import type { SvetSerialuCredentials } from "../../dashboard/src/server/svetserialu";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "./player-resolver";
-import { composeHomepageBanner, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
+import { composeHomepageBanner, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbSeasonEpisodePreviews, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
 import { resolveArtworkApiKeys } from "../../dashboard/src/server/shared-artwork-api-keys";
 import {
   findEpisodeDownloadByFileNameFast,
@@ -172,6 +173,7 @@ type ArtworkBundle = {
   backdropUrl?: string | null;
   bannerUrl?: string | null;
   clearLogoUrl?: string | null;
+  bannerWithLogoUrl?: string | null;
 };
 
 function inferArtworkMediaType(show: ImportedShow): ArtworkMediaType {
@@ -194,6 +196,7 @@ function scoreArtworkBundle(artwork: ArtworkBundle, show: ImportedShow) {
   if (artwork.backdropUrl && artwork.backdropUrl !== show.backdropUrl) score += 1;
   if (artwork.bannerUrl && artwork.bannerUrl !== show.bannerUrl) score += 1;
   if (artwork.clearLogoUrl && artwork.clearLogoUrl !== show.clearLogoUrl) score += 1;
+  if (artwork.bannerWithLogoUrl && artwork.bannerWithLogoUrl !== (show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl)) score += 1;
   return score;
 }
 
@@ -234,6 +237,15 @@ async function refreshArtworkForImportedShow(input: {
     backdropUrl: artwork.backdropUrl ?? input.show.backdropUrl ?? null,
     bannerUrl: artwork.bannerUrl ?? input.show.bannerUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? input.show.clearLogoUrl ?? null,
+    homepageBannerUrl: artwork.bannerWithLogoUrl ?? input.show.homepageBannerUrl ?? null,
+    artwork: {
+      ...(input.show.artwork ?? {}),
+      posterUrl: artwork.posterUrl ?? input.show.artwork?.posterUrl ?? input.show.posterUrl ?? null,
+      backdropUrl: artwork.backdropUrl ?? input.show.artwork?.backdropUrl ?? input.show.backdropUrl ?? null,
+      bannerUrl: artwork.bannerUrl ?? input.show.artwork?.bannerUrl ?? input.show.bannerUrl ?? null,
+      clearLogoUrl: artwork.clearLogoUrl ?? input.show.artwork?.clearLogoUrl ?? input.show.clearLogoUrl ?? null,
+      bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? input.show.artwork?.bannerWithLogoUrl ?? input.show.homepageBannerUrl ?? null,
+    },
   };
 }
 
@@ -292,6 +304,10 @@ export function resolveDownloadByteRange(fileSize: number, rangeHeader: string |
     contentLength: end - start + 1,
     contentRange: `bytes ${start}-${end}/${fileSize}`,
   };
+}
+
+export function getUpstreamAcceptRanges(headers: Pick<Headers, "get">) {
+  return headers.get("accept-ranges");
 }
 
 function isBlockedIpAddress(address: string) {
@@ -367,7 +383,7 @@ function isCacheableHlsAsset(url: URL, contentType: string) {
     /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
 }
 
-function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string) {
+function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string, inlinePlayback = false) {
   const params = new URLSearchParams({
     url: streamUrl,
     name: fileName,
@@ -375,21 +391,24 @@ function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?
   if (referer) {
     params.set("referer", referer);
   }
+  if (inlinePlayback) {
+    params.set("playback", "1");
+  }
   return `/api/download-full/browser-file?${params.toString()}`;
 }
 
-function rewriteHlsTagUris(line: string, playlistUrl: URL, fileName: string, referer?: string) {
+function rewriteHlsTagUris(line: string, playlistUrl: URL, fileName: string, referer?: string, inlinePlayback = false) {
   return line.replace(/\bURI=(["'])([^"']+)\1/gi, (match, quote: string, rawUrl: string) => {
     try {
       const absolute = new URL(rawUrl, playlistUrl).toString();
-      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString())}${quote}`;
+      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback)}${quote}`;
     } catch {
       return match;
     }
   });
 }
 
-function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: string, referer?: string) {
+function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: string, referer?: string, inlinePlayback = false) {
   const output: string[] = [];
   const pendingSegmentTags: string[] = [];
   const preserveImageNamedSegments = Boolean(getBrowserFileOriginHeader(referer));
@@ -400,12 +419,12 @@ function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: st
       continue;
     }
     if (trimmed.startsWith("#EXTINF") || trimmed.startsWith("#EXT-X-BYTERANGE")) {
-      pendingSegmentTags.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer));
+      pendingSegmentTags.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback));
       continue;
     }
     if (trimmed.startsWith("#")) {
       output.push(...pendingSegmentTags.splice(0));
-      output.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer));
+      output.push(rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback));
       continue;
     }
 
@@ -418,7 +437,7 @@ function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: st
         continue;
       }
       output.push(...pendingSegmentTags.splice(0));
-      output.push(buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString()));
+      output.push(buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback));
     } catch {
       output.push(...pendingSegmentTags.splice(0));
       output.push(line);
@@ -554,6 +573,65 @@ export function createHttpHandlers() {
     sendJson(res, 200, await getNodeStatus());
   };
 
+  const tmdbToImdbHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    const incoming = new URL(req.url || "/api/tmdb-to-imdb", "http://127.0.0.1");
+    const tmdbId = incoming.searchParams.get("tmdbId");
+    if (!tmdbId) return sendJson(res, 400, { error: "Missing tmdbId parameter." });
+    const tmdbKey = process.env.TMDB_API_KEY || (await readLocalEnvValue("TMDB_API_KEY"));
+    if (!tmdbKey) return sendJson(res, 500, { error: "TMDB API key not configured." });
+    try {
+      const mediaType = incoming.searchParams.get("mediaType") || "tv";
+      const url = `https://api.themoviedb.org/3/${mediaType}/${encodeURIComponent(tmdbId)}?api_key=${tmdbKey}&append_to_response=external_ids`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return sendJson(res, 502, { error: "TMDB lookup failed." });
+      const data = await response.json() as { external_ids?: { imdb_id?: string } };
+      const imdbId = data?.external_ids?.imdb_id;
+      if (imdbId && /^tt\d{5,10}$/i.test(imdbId)) {
+        res.setHeader("Cache-Control", "s-maxage=604800, stale-while-revalidate=86400");
+        sendJson(res, 200, { imdbId });
+      } else {
+        sendJson(res, 200, { imdbId: null });
+      }
+    } catch {
+      sendJson(res, 502, { error: "TMDB lookup failed." });
+    }
+  };
+
+  const tmdbSearchHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed." });
+    const incoming = new URL(req.url || "/api/tmdb-search", "http://127.0.0.1");
+    const title = incoming.searchParams.get("title");
+    if (!title) return sendJson(res, 400, { error: "Missing title parameter." });
+    const tmdbKey = process.env.TMDB_API_KEY || (await readLocalEnvValue("TMDB_API_KEY"));
+    if (!tmdbKey) return sendJson(res, 500, { error: "TMDB API key not configured." });
+    try {
+      const mediaType = incoming.searchParams.get("mediaType") || "tv";
+      const year = incoming.searchParams.get("year");
+      const searchUrl = `https://api.themoviedb.org/3/search/${mediaType}?api_key=${tmdbKey}&query=${encodeURIComponent(title)}${year ? `&year=${encodeURIComponent(year)}` : ""}`;
+      const response = await fetch(searchUrl, { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return sendJson(res, 502, { error: "TMDB search failed." });
+      const data = await response.json() as { results?: Array<{ id?: number }> };
+      const results = Array.isArray(data?.results) ? data.results : [];
+      if (results.length === 0) return sendJson(res, 200, { tmdbId: null });
+      const tmdbId = String(results[0]?.id ?? "");
+      let imdbId: string | null = null;
+      if (tmdbId) {
+        const detailsUrl = `https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=${tmdbKey}&append_to_response=external_ids`;
+        const detailsResponse = await fetch(detailsUrl, { signal: AbortSignal.timeout(8000) });
+        if (detailsResponse.ok) {
+          const details = await detailsResponse.json() as { external_ids?: { imdb_id?: string } };
+          const rawImdb = details?.external_ids?.imdb_id;
+          if (rawImdb && /^tt\d{5,10}$/i.test(rawImdb)) imdbId = rawImdb;
+        }
+      }
+      res.setHeader("Cache-Control", "s-maxage=604800, stale-while-revalidate=86400");
+      sendJson(res, 200, { tmdbId: tmdbId || null, imdbId });
+    } catch {
+      sendJson(res, 502, { error: "TMDB search failed." });
+    }
+  };
+
   const controlPlaneProxyHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "GET" && req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     const siteUrl = await readLocalEnvValue("CONVEX_SITE_URL");
@@ -570,14 +648,19 @@ export function createHttpHandlers() {
         target.searchParams.append(key, value);
       }
 
+      const requestBody = req.method === "POST"
+        ? JSON.stringify(await readJsonBody(req))
+        : undefined;
       const response = await fetch(target.toString(), {
         method: req.method,
         headers: {
           Accept: "application/json",
+          ...(requestBody ? { "Content-Type": "application/json" } : {}),
           ...(req.headers?.["x-spilled-control-plane-secret"]
             ? { "x-spilled-control-plane-secret": String(req.headers["x-spilled-control-plane-secret"]) }
             : {}),
         },
+        body: requestBody,
       });
       const text = await response.text();
       try {
@@ -675,6 +758,7 @@ export function createHttpHandlers() {
         feedId?: string;
         cursor?: string | null;
         limit?: number;
+        fresh?: boolean;
         repositoryUrls?: string[];
         svetserialuCredentials?: SvetSerialuCredentials | null;
       }>(req);
@@ -688,6 +772,7 @@ export function createHttpHandlers() {
         feedId,
         cursor: body.cursor ?? null,
         limit: body.limit,
+        fresh: body.fresh === true,
         repositoryUrls: Array.isArray(body.repositoryUrls) ? body.repositoryUrls : [],
         svetserialuCredentials: body.svetserialuCredentials,
       }));
@@ -736,12 +821,15 @@ export function createHttpHandlers() {
         svetserialuCredentials?: SvetSerialuCredentials | null;
         artworkSources?: ArtworkSourcesInput;
         artworkApiKeys?: ArtworkApiKeysInput;
+        resolverDiagnostics?: boolean;
+        resolverBenchmark?: boolean;
       }>(req);
       const moduleId = body.moduleId?.trim();
       const slug = body.slug?.trim();
       if (!moduleId || !slug) {
         return sendJson(res, 400, { error: "moduleId and slug are required." });
       }
+      const startedAt = performance.now();
       const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
       const show = await importProviderItem({
         moduleId,
@@ -751,11 +839,17 @@ export function createHttpHandlers() {
         svetserialuCredentials: body.svetserialuCredentials,
       });
       sendJson(res, 200, {
-        show: await enrichAndPersistImportedShow({
-          show,
-          sources: body.artworkSources,
-          apiKeys,
-        }),
+        show: body.resolverBenchmark
+          ? await refreshArtworkForImportedShow({ show, sources: body.artworkSources, apiKeys }).catch(() => show)
+          : await enrichAndPersistImportedShow({ show, sources: body.artworkSources, apiKeys }),
+        ...(body.resolverDiagnostics ? {
+          resolverDiagnostics: {
+            traceId: randomUUID(),
+            operation: "provider.import",
+            totalMs: Math.round(performance.now() - startedAt),
+            response: { jsonBytes: Buffer.byteLength(JSON.stringify(show)) },
+          },
+        } : {}),
       });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to import provider item." });
@@ -1010,6 +1104,33 @@ export function createHttpHandlers() {
       });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch title metadata." });
+    }
+  };
+
+  const episodePreviewsArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title: string;
+        altTitle?: string | null;
+        yearHint?: string | null;
+        description?: string | null;
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
+        seasonNumber: number;
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+      }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      sendJson(res, 200, { episodes: await fetchTmdbSeasonEpisodePreviews({
+        title: body.title,
+        altTitle: body.altTitle ?? null,
+        yearHint: body.yearHint ?? undefined,
+        description: body.description ?? null,
+        externalIds: body.externalIds ?? undefined,
+        seasonNumber: body.seasonNumber,
+        apiKeys,
+      }) });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch episode previews." });
     }
   };
 
@@ -1279,7 +1400,19 @@ export function createHttpHandlers() {
   const playbackResolveHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
-      sendJson(res, 200, await resolvePlaybackViaNode(await readJsonBody(req)));
+      const body = await readJsonBody<Record<string, unknown> & { resolverDiagnostics?: boolean }>(req);
+      const startedAt = performance.now();
+      const result = await resolvePlaybackViaNode(body as never);
+      sendJson(res, 200, {
+        ...result,
+        ...(body.resolverDiagnostics ? {
+          resolverDiagnostics: {
+            traceId: randomUUID(),
+            operation: "player.playback.resolve",
+            totalMs: Math.round(performance.now() - startedAt),
+          },
+        } : {}),
+      });
     } catch (error) {
       const failures = error && typeof error === "object" && "failures" in error ? (error as { failures?: unknown }).failures : undefined;
       sendJson(res, 422, {
@@ -1296,6 +1429,7 @@ export function createHttpHandlers() {
       const streamUrl = params.get("url");
       const fileName = getSafeFileName(params.get("name"));
       const referer = params.get("referer") || undefined;
+      const inlinePlayback = params.get("playback") === "1";
       if (!streamUrl) return sendJson(res, 400, { error: "Missing stream URL." });
 
       const parsed = new URL(streamUrl);
@@ -1303,17 +1437,39 @@ export function createHttpHandlers() {
         return sendJson(res, 400, { error: "Unsupported stream URL protocol." });
       }
       const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
+      const isXpassSegment = /play\.xpass\.top/i.test(referer ?? "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
 
-      const upstream = await fetchProxyTarget({
-        url: parsed,
-        method: req.method,
-        headers: {
-          "user-agent": USER_AGENT,
+      const isRetryable403 = (status: number) => status === 403 || status === 401;
+
+      function buildBrowserUpstreamHeaders(override: { stripReferer?: boolean; userAgent?: string; extra?: Record<string, string> } = {}) {
+        return {
+          "user-agent": override.userAgent ?? USER_AGENT,
           accept: "*/*",
-          ...(referer ? { referer } : {}),
+          ...(referer && !override.stripReferer ? { referer } : {}),
           ...(typeof req.headers?.range === "string" ? { range: req.headers.range } : {}),
-        },
-      });
+          ...override.extra,
+        };
+      }
+
+      const headerStrategies = [
+        () => buildBrowserUpstreamHeaders(),
+        () => buildBrowserUpstreamHeaders({ stripReferer: true }),
+        () => buildBrowserUpstreamHeaders({ stripReferer: true, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36" }),
+        () => buildBrowserUpstreamHeaders({ stripReferer: true, extra: { accept: "text/vtt,text/plain,*/*" } }),
+      ];
+
+      let upstream: Awaited<ReturnType<typeof fetchProxyTarget>> | undefined;
+      for (const buildHeaders of headerStrategies) {
+        upstream = await fetchProxyTarget({
+          url: parsed,
+          method: req.method,
+          headers: buildHeaders(),
+        });
+        if (upstream.ok || upstream.status === 206 || !isRetryable403(upstream.status)) {
+          break;
+        }
+      }
+      if (!upstream) return sendJson(res, 502, { error: "Failed to reach upstream." });
 
       if (!upstream.ok && upstream.status !== 206) {
         const detail = await upstream.text().catch(() => "");
@@ -1325,14 +1481,15 @@ export function createHttpHandlers() {
 
       res.statusCode = upstream.status;
       const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
-      const contentType = isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname) ? "video/mp2t" : upstreamContentType;
+      const contentType = (isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)) || isXpassSegment ? "video/mp2t" : upstreamContentType;
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Accept-Ranges", upstream.headers.get("accept-ranges") || "bytes");
+      const acceptRanges = getUpstreamAcceptRanges(upstream.headers);
+      if (acceptRanges) res.setHeader("Accept-Ranges", acceptRanges);
       res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
-      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.setHeader("Content-Disposition", `${inlinePlayback ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {
         const playlist = await upstream.text();
-        const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer);
+        const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer, inlinePlayback);
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
         res.setHeader("Content-Length", Buffer.byteLength(rewritten).toString());
         return res.end(rewritten);
@@ -1482,17 +1639,74 @@ export function createHttpHandlers() {
       const parsed = new URL(target);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return sendJson(res, 400, { error: "Unsupported protocol." });
 
-      const response = await fetch(parsed.toString(), {
-        redirect: "follow",
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          Accept: "text/vtt,text/plain,application/json,*/*",
-          Referer: "https://svetserialu.to/",
-        },
-      });
-      if (!response.ok) return sendJson(res, response.status, { error: "Failed to fetch subtitle file." });
+      const isRetryable403 = (status: number) => status === 403 || status === 401;
 
-      const body = await response.text();
+      const headerStrategies: Record<string, string>[] = [
+        { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", Accept: "text/vtt,text/plain,application/json,*/*", Referer: "https://svetserialu.to/" },
+        { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", Accept: "text/vtt,text/plain,*/*" },
+        { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36", Accept: "text/vtt,text/plain,*/*" },
+        { "User-Agent": "Mozilla/5.0" },
+      ];
+
+      const alternateHosts = ["svetserialu.io", "svetserialov.to"];
+
+      const targetCandidates = (() => {
+        try {
+          const url = new URL(target);
+          const host = url.hostname.toLowerCase();
+          if (host.endsWith(".svetserialu.to") || host === "svetserialu.to") {
+            const rewritten = alternateHosts.map((h) => {
+              const copy = new URL(url.href);
+              copy.hostname = h;
+              return copy.toString();
+            });
+            return [url.toString(), ...rewritten];
+          }
+        } catch {
+          // Not a rewritable URL; fall through.
+        }
+        return [target];
+      })();
+
+      const fetchBody = async (): Promise<{ status: number; body: string }> => {
+        let lastStatus = 0;
+        for (const candidate of targetCandidates) {
+          for (const h of headerStrategies) {
+            const response = await fetch(candidate, { redirect: "follow", headers: h });
+            lastStatus = response.status;
+            if (response.ok || !isRetryable403(response.status)) {
+              if (!response.ok) return { status: response.status, body: "" };
+              const contentType = (response.headers.get("content-type") || "").toLowerCase();
+              if (contentType.includes("application/json") || contentType.includes("text/json")) {
+                const payload = await response.json().catch(() => null);
+                if (Array.isArray(payload)) {
+                  const entry = payload.find((item: any) => item && item.default) ?? payload[0];
+                  if (entry && typeof entry.file === "string") {
+                    const safeFile = (() => {
+                      try { return new URL(entry.file).toString(); } catch { return null; }
+                    })();
+                    if (safeFile) {
+                      let vtt: Response | undefined;
+                      for (const vh of headerStrategies) {
+                        vtt = await fetch(safeFile, { redirect: "follow", headers: vh });
+                        if (vtt.ok || !isRetryable403(vtt.status)) break;
+                      }
+                      if (vtt?.ok) return { status: vtt.status, body: await vtt.text() };
+                      return { status: 502, body: "" };
+                    }
+                  }
+                }
+              }
+              return { status: response.status, body: await response.text() };
+            }
+          }
+        }
+        return { status: lastStatus || 502, body: "" };
+      };
+
+      const { status, body } = await fetchBody();
+      if (status !== 200) return sendJson(res, status, { error: "Failed to fetch subtitle file." });
+
       const normalized = normalizeSubtitleText(body);
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/vtt; charset=utf-8");
@@ -2050,6 +2264,8 @@ export function createHttpHandlers() {
   return {
     runtime,
     statusHandler,
+    tmdbToImdbHandler,
+    tmdbSearchHandler,
     controlPlaneProxyHandler,
     importSvetSerialuHandler,
     svetSerialuAuthVerifyHandler,
@@ -2069,6 +2285,7 @@ export function createHttpHandlers() {
     refreshArtworkHandler,
     searchArtworkHandler,
     titleMetadataArtworkHandler,
+    episodePreviewsArtworkHandler,
     castArtworkHandler,
     personCreditsArtworkHandler,
     composeHomepageBannerHandler,

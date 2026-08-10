@@ -13,6 +13,13 @@ async function getJson(url) {
 contextBridge.exposeInMainWorld("spilledNative", {
   kind: "native",
   serverUrl,
+  async requestRuntime(path, init = {}) {
+    return await ipcRenderer.invoke("node:rpc", {
+      path,
+      method: init.method || "GET",
+      body: init.body,
+    });
+  },
   async getStatus() {
     return await getJson(`${serverUrl}/api/status`);
   },

@@ -31,10 +31,12 @@ export type LibraryEpisode = {
   episodeUrl: string;
   players: EpisodePlayer[];
   selectedPlayerAlias: PlayerAlias;
+  directors?: CastMember[];
   durationSeconds?: number;
   playbackPositionSeconds?: number;
   playbackDurationSeconds?: number;
   playbackUpdatedAt?: number;
+  watched?: boolean;
   importedAt: number;
 };
 
@@ -71,6 +73,7 @@ export type ImportedShow = {
   posterUrl?: string | null;
   backdropUrl?: string | null;
   bannerUrl?: string | null;
+  bannerWithLogoUrl?: string | null;
   homepagePosterUrl?: string | null;
   homepageBannerUrl?: string | null;
   homepageArtworkVersion?: number | null;
@@ -377,6 +380,12 @@ export type IntegrationRuntimeManifest = {
   apiVersion: 2;
   entry: string;
   integrity?: string;
+  format?: "builtin" | "wasm" | "javascript";
+  publisherKeyId?: string;
+  signature?: string;
+  allowedMethods?: Array<"GET" | "POST">;
+  maxResponseBytes?: number;
+  timeoutMs?: number;
 };
 
 export type IntegrationConfigSchemaField = {

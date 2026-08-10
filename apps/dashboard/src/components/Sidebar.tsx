@@ -49,7 +49,7 @@ export function Sidebar({ activeView, onChangeView, feedLinks, downloadJobs, onC
     <aside className="fixed inset-y-0 left-0 z-[60] hidden h-screen w-64 flex-col border-r border-white/[0.08] bg-[#05060a]/94 px-5 py-6 backdrop-blur-2xl lg:flex">
       {/* Brand */}
       <div className="hidden items-center justify-between gap-3 px-2 pb-2 lg:flex">
-        <button className="flex items-center gap-3 opacity-95 transition-opacity hover:opacity-100" onClick={() => onChangeView("home")}>
+        <button className="flex items-center gap-3 opacity-95 transition-opacity hover:opacity-100" onClick={onOpenHomepage} aria-label="Go to homepage">
           <img 
             src="/Spilled.svg" 
             alt="Spilled Logo" 

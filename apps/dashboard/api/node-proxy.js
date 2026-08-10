@@ -38,6 +38,7 @@ export function isAllowedNodePath(path) {
     path === "/api/explore/feed" ||
     path === "/api/explore/people" ||
     path === "/api/trending/feed" ||
+    path === "/api/subtitle-proxy" ||
     path === "/api/player/resolve" ||
     path === "/api/player/clean-resolve" ||
     path === "/api/player/playback-resolve" ||
@@ -64,12 +65,43 @@ async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
-function buildProxyDownloadUrl(req, nodeOrigin, downloadPath) {
-  const baseUrl = `https://${req.headers.host || "spilled.overload.studio"}`;
-  const url = new URL("/api/node-proxy", baseUrl);
+export function buildNodeMediaUrl(nodeOrigin, downloadPath, hostedOrigin) {
+  const nodeUrl = new URL(nodeOrigin);
+  if (nodeUrl.hostname === "trycloudflare.com" || nodeUrl.hostname.endsWith(".trycloudflare.com")) {
+    return new URL(downloadPath, nodeOrigin).toString();
+  }
+  const url = new URL("/api/node-proxy", hostedOrigin);
   url.searchParams.set("node", nodeOrigin);
   url.searchParams.set("path", downloadPath);
   return `${url.pathname}${url.search}`;
+}
+
+function buildProxyDownloadUrl(req, nodeOrigin, downloadPath) {
+  const hostedOrigin = `https://${req.headers.host || "spilled.overload.studio"}`;
+  return buildNodeMediaUrl(nodeOrigin, downloadPath, hostedOrigin);
+}
+
+export function rewriteNodePlaylistUrls(playlist, nodeOrigin, hostedOrigin) {
+  const wrapPath = (path) => {
+    if (!path.startsWith("/api/download-full/browser-file?")) return path;
+    const url = new URL("/api/node-proxy", hostedOrigin);
+    url.searchParams.set("node", nodeOrigin);
+    url.searchParams.set("path", path);
+    return `${url.pathname}${url.search}`;
+  };
+
+  return playlist
+    .split(/\r?\n/)
+    .map((line) => {
+      if (line.trimStart().startsWith("#")) {
+        return line.replace(/\bURI=(["'])(\/api\/download-full\/browser-file\?[^"']+)\1/gi, (_match, quote, path) => (
+          `URI=${quote}${wrapPath(path)}${quote}`
+        ));
+      }
+      const trimmed = line.trim();
+      return trimmed.startsWith("/api/download-full/browser-file?") ? wrapPath(trimmed) : line;
+    })
+    .join("\n");
 }
 
 export default async function handler(req, res) {
@@ -118,6 +150,16 @@ export default async function handler(req, res) {
         payload.playbackUrl = buildProxyDownloadUrl(req, nodeOrigin, payload.playbackUrl);
       }
       res.status(response.status).json(payload);
+      return;
+    }
+
+    if (/mpegurl/i.test(contentType) && req.method !== "HEAD") {
+      const hostedOrigin = `https://${req.headers.host || "spilled.overload.studio"}`;
+      const playlist = rewriteNodePlaylistUrls(await response.text(), nodeOrigin, hostedOrigin);
+      res.status(response.status);
+      res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(playlist);
       return;
     }
 

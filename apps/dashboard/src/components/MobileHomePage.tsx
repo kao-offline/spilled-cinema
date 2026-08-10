@@ -1,11 +1,15 @@
-import { LoaderCircle, MoreHorizontal, Search, Settings, X } from "lucide-react";
-import { useState } from "react";
+import { Check, Library, LoaderCircle, MoreHorizontal, TriangleAlert } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import type { CommandSearchResult } from "../lib/command-search";
 import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import type { ImportedShow } from "../lib/types";
 import { balancedBackgroundImage } from "../lib/image-resolution";
 import { MobileDock } from "./MobileDock";
 import { CommandResultRow } from "./CommandResultRow";
+import { MobileBrandSearch } from "./MobileBrandSearch";
+import { HomeSourceTabs } from "./HomeSourceTabs";
+import type { HomepageTab } from "../lib/provider-home-preferences";
 
 type MobileHomePageProps = {
   featuredShow: ImportedShow | null;
@@ -26,6 +30,9 @@ type MobileHomePageProps = {
   onOpenLocal: (item: HomepageRailItem) => void;
   onImportRemote: (item: HomepageRailItem) => void;
   onPlayFeatured: () => void;
+  activeTab: HomepageTab;
+  onTabChange: (tab: HomepageTab) => void;
+  providerContent?: ReactNode;
 };
 
 function getItemImage(item: HomepageRailItem, kind: "banner" | "poster") {
@@ -38,6 +45,17 @@ function getItemImage(item: HomepageRailItem, kind: "banner" | "poster") {
   return item.kind === "local"
     ? item.homepagePosterUrl ?? item.posterUrl ?? item.backdropUrl ?? null
     : item.posterUrl ?? item.backdropUrl ?? null;
+}
+
+function MobileImportBadge({ item }: { item: HomepageRailItem }) {
+  if (item.kind !== "remote" || (!item.inVault && !item.importStatus)) return null;
+  const label = item.importStatus === "importing" ? "Importing" : item.importStatus === "added" ? "Added" : item.importStatus === "error" ? "Failed" : item.importStatus === "busy" ? "Busy" : "In vault";
+  return (
+    <span className="absolute left-2 top-2 z-10 inline-flex h-6 items-center gap-1 rounded-full border border-white/14 bg-black/72 px-2 text-[8px] font-black uppercase tracking-[.1em] text-white shadow-lg backdrop-blur-xl">
+      {item.importStatus === "importing" ? <LoaderCircle className="h-2.5 w-2.5 animate-spin" /> : item.importStatus === "error" ? <TriangleAlert className="h-2.5 w-2.5 text-red-200" /> : item.importStatus ? <Check className="h-2.5 w-2.5 text-emerald-200" /> : <Library className="h-2.5 w-2.5 text-emerald-200" />}
+      {label}
+    </span>
+  );
 }
 
 export function MobileHomePage({
@@ -59,13 +77,28 @@ export function MobileHomePage({
   onOpenLocal,
   onImportRemote,
   onPlayFeatured,
+  activeTab,
+  onTabChange,
+  providerContent,
 }: MobileHomePageProps) {
   const [searchActive, setSearchActive] = useState(false);
   const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
+  const [heroIndex, setHeroIndex] = useState(0);
   const bannerRails = rails.filter((rail) => rail.kind === "banner");
   const posterRails = rails.filter((rail) => rail.kind === "poster");
-  const primaryBanner = bannerRails[0]?.items[0] ?? null;
+  const heroItems = bannerRails[0]?.items.slice(0, 5) ?? [];
+  const primaryBanner = heroItems[heroIndex] ?? heroItems[0] ?? null;
   const heroImage = primaryBanner ? getItemImage(primaryBanner, "banner") : null;
+
+  useEffect(() => {
+    if (heroItems.length < 2 || searchActive) return;
+    const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroItems.length), 6500);
+    return () => window.clearInterval(timer);
+  }, [heroItems.length, searchActive]);
+
+  useEffect(() => {
+    if (heroIndex >= heroItems.length) setHeroIndex(0);
+  }, [heroIndex, heroItems.length]);
 
   const activateItem = (item: HomepageRailItem) => {
     if (item.kind === "local") onOpenLocal(item);
@@ -75,53 +108,26 @@ export function MobileHomePage({
   return (
     <div className="mobile-home min-h-[100dvh] bg-[#090a0e] pb-32 text-white lg:hidden">
       <header className="px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
-        <button type="button" onClick={onOpenLibrary} className="mx-auto block" aria-label="Open library">
-          <img src="/Spilled.svg" alt="Spilled" className="h-10 w-auto brightness-0 invert" />
-        </button>
-
-        <div className="mt-5 flex gap-2.5">
-          <label className="flex h-14 min-w-0 flex-1 items-center gap-3 rounded-[18px] bg-[#24262c] px-4 text-left text-[15px] font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] focus-within:ring-1 focus-within:ring-white/16">
-            <Search className="h-5 w-5 shrink-0 text-white/48" />
-            <input
-              value={searchQuery}
-              onFocus={() => {
-                setSearchActive(true);
-                onSearchActiveChange(true);
-              }}
-              onChange={(event) => {
-                onSearchQueryChange(event.target.value);
-                setExpandedResultId(null);
-              }}
-              placeholder="Search any movie, series or paste a link…"
-              className="min-w-0 flex-1 bg-transparent text-[15px] text-white outline-none placeholder:text-white/34"
-            />
-            {searchQuery ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onSearchQueryChange("");
-                  setExpandedResultId(null);
-                }}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-white/55"
-                aria-label="Clear search"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            ) : null}
-          </label>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] bg-[#24262c] text-white transition active:scale-95"
-            aria-label="Open settings"
-          >
-            <Settings className="h-6 w-6 fill-white" />
-          </button>
-        </div>
+        <MobileBrandSearch
+          query={searchQuery}
+          onQueryChange={(value) => {
+            onSearchQueryChange(value);
+            setExpandedResultId(null);
+          }}
+          onFocus={() => {
+            setSearchActive(true);
+            onSearchActiveChange(true);
+          }}
+          onOpenLibrary={onOpenLibrary}
+          onOpenSettings={onOpenSettings}
+        />
+        <HomeSourceTabs activeTab={activeTab} onTabChange={onTabChange} compact className="mt-3 w-full" />
       </header>
 
-      {searchActive && searchQuery.trim().length > 0 ? (
-        <section className="mx-4 mb-5 overflow-hidden rounded-[22px] border border-white/[0.07] bg-[#111319] shadow-[0_24px_60px_rgba(0,0,0,.38)]">
+      {activeTab === "home" && searchActive && searchQuery.trim().length > 0 ? (
+        <section className="relative mx-4 mb-5 overflow-hidden rounded-[22px] border border-white/[0.09] bg-white/[0.045] shadow-[0_24px_60px_rgba(0,0,0,.38)] backdrop-blur-2xl">
+          <div className="pointer-events-none absolute -left-12 top-0 h-36 w-36 rounded-full bg-orange-400/10 blur-3xl" />
+          <div className="pointer-events-none absolute right-0 top-10 h-44 w-44 rounded-full bg-cyan-300/8 blur-3xl" />
           <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/36">Search results</span>
             {searchLoading ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : <span className="text-[11px] font-bold text-white/28">{searchResults.length} found</span>}
@@ -151,15 +157,15 @@ export function MobileHomePage({
         </section>
       ) : null}
 
-      <main className="space-y-7">
+      {activeTab === "home" ? <main className="space-y-7">
         <section className="px-4 pt-1">
           <button
             type="button"
             onClick={() => primaryBanner ? activateItem(primaryBanner) : onPlayFeatured()}
-            className="group relative block aspect-[2.08/1] w-full overflow-hidden rounded-[26px] bg-[#191b20] text-left shadow-[0_18px_46px_rgba(0,0,0,0.34)]"
+            className="mobile-home-hero group relative block aspect-[2.08/1] w-full overflow-hidden rounded-[26px] bg-[#191b20] text-left shadow-[0_18px_46px_rgba(0,0,0,0.34)] transition active:scale-[0.985]"
           >
             {heroImage ? (
-              <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(heroImage, "backdrop-hero")} />
+              <div key={heroImage} className="mobile-home-hero-image absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(heroImage, "backdrop-hero")} />
             ) : (
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_30%,rgba(255,255,255,.14),transparent_34%),linear-gradient(135deg,#252832,#111218)]" />
             )}
@@ -170,6 +176,13 @@ export function MobileHomePage({
               </div>
             ) : null}
           </button>
+          {heroItems.length > 1 ? (
+            <div className="mt-3 flex justify-center gap-1.5" aria-label="Featured titles">
+              {heroItems.map((item, index) => (
+                <button key={item.id} type="button" onClick={() => setHeroIndex(index)} className={`h-1.5 rounded-full transition-all duration-300 ${index === heroIndex ? "w-6 bg-white" : "w-1.5 bg-white/25"}`} aria-label={`Show ${item.title}`} />
+              ))}
+            </div>
+          ) : null}
         </section>
 
         {posterRails.map((rail) => (
@@ -187,8 +200,10 @@ export function MobileHomePage({
                     <button
                       type="button"
                       onClick={() => activateItem(item)}
-                      className="relative block aspect-[2/3] w-full overflow-hidden rounded-[15px] bg-[#181a20] text-left"
+                      disabled={item.kind === "remote" && item.importStatus === "importing"}
+                      className="mobile-home-card relative block aspect-[2/3] w-full overflow-hidden rounded-[15px] bg-[#181a20] text-left transition active:scale-[0.96]"
                     >
+                      <MobileImportBadge item={item} />
                       {image ? <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(image, "poster-card")} /> : null}
                       <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/35 to-transparent" />
                     </button>
@@ -226,8 +241,10 @@ export function MobileHomePage({
                     key={item.id}
                     type="button"
                     onClick={() => activateItem(item)}
+                    disabled={item.kind === "remote" && item.importStatus === "importing"}
                     className="relative aspect-[16/7] w-[82vw] max-w-[430px] shrink-0 snap-center overflow-hidden rounded-[20px] bg-[#181a20]"
                   >
+                    <MobileImportBadge item={item} />
                     {image ? <div className="absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(image, "backdrop-thumb")} /> : null}
                   </button>
                 );
@@ -235,7 +252,7 @@ export function MobileHomePage({
             </div>
           </section>
         ))}
-      </main>
+      </main> : providerContent}
 
       <MobileDock active="home" onHome={() => undefined} onLibrary={onOpenLibrary} onFavorites={onOpenFavorites} onExplore={onOpenExplore} />
     </div>

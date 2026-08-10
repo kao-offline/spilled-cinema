@@ -14,13 +14,13 @@ type MobileDockProps = {
 export function MobileDock({ active, onHome, onLibrary, onFavorites, onExplore }: MobileDockProps) {
   const items = [
     { id: "home" as const, label: "Home", icon: Home, action: onHome },
-    { id: "library" as const, label: "Library", icon: Library, action: onLibrary },
+    { id: "library" as const, label: "Vault", icon: Library, action: onLibrary },
     { id: "favorites" as const, label: "Favorites", icon: Heart, action: onFavorites },
     { id: "explore" as const, label: "Explore", icon: Compass, action: onExplore },
   ];
 
   return (
-    <nav className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-[90] grid h-[72px] grid-cols-4 gap-1.5 rounded-[24px] border border-white/[0.07] bg-[#303136]/94 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,.58)] backdrop-blur-2xl lg:hidden" aria-label="Primary navigation">
+    <nav className="mobile-dock fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-[200] grid h-[72px] grid-cols-4 gap-1.5 rounded-[24px] border border-white/[0.07] bg-[#303136]/96 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,.58)] backdrop-blur-2xl lg:hidden" aria-label="Primary navigation">
       {items.map((item) => {
         const selected = active === item.id;
         return (

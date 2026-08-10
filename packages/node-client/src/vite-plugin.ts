@@ -12,6 +12,8 @@ export function createDashboardApiPlugin(): Plugin {
   };
   const attach = (server: { middlewares: MiddlewareStack }) => {
     server.middlewares.use("/api/status", handlers.statusHandler);
+    server.middlewares.use("/api/tmdb-to-imdb", handlers.tmdbToImdbHandler);
+    server.middlewares.use("/api/tmdb-search", handlers.tmdbSearchHandler);
     server.middlewares.use("/api/server", handlers.controlPlaneProxyHandler);
     server.middlewares.use("/api/import-svetserialu", handlers.importSvetSerialuHandler);
     server.middlewares.use("/api/svetserialu/auth/verify", handlers.svetSerialuAuthVerifyHandler);

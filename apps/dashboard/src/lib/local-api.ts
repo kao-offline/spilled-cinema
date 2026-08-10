@@ -1,9 +1,17 @@
+import { requestPublicGateway } from "./v2-gateway-client";
+import {
+  isLocalhostProbeOnCooldown,
+  markLocalhostProbeAttempted,
+  markLocalhostProbeFailure,
+  resetLocalhostProbeCache,
+} from "./localhost-probe-cache";
+
 type RuntimeApiResult<T> = {
   ok: boolean;
   status: number;
   data: T;
   origin?: string;
-  transport: "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted";
+  transport: "native" | "extension" | "direct" | "node" | "fetch-server" | "gateway" | "hosted";
 };
 
 type JsonRequestInit = {
@@ -13,7 +21,9 @@ type JsonRequestInit = {
 };
 
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
+const DIRECT_LOCAL_TIMEOUT_MS = 3000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
+const PLAYBACK_RUNTIME_TIMEOUT_MS = 90000;
 
 function canUseHostedSameOriginApi() {
   return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
@@ -25,12 +35,22 @@ export function isHostedSameOriginApiPath(path: string) {
     path === "/api/artwork/refresh" ||
     path === "/api/artwork/cast" ||
     path === "/api/artwork/title-metadata" ||
+    path === "/api/artwork/episode-previews" ||
     path === "/api/artwork/person-credits" ||
     path === "/api/artwork/homepage-banner"
   );
 }
 
 function getRuntimeTimeoutMs(path: string) {
+  if (
+    path.startsWith("/api/player/resolve") ||
+    path.startsWith("/api/player/clean-resolve") ||
+    path.startsWith("/api/player/playback-resolve") ||
+    path.startsWith("/api/download-full/browser-start")
+  ) {
+    return PLAYBACK_RUNTIME_TIMEOUT_MS;
+  }
+
   if (
     path.startsWith("/api/import-") ||
     path.startsWith("/api/provider-import") ||
@@ -40,6 +60,7 @@ function getRuntimeTimeoutMs(path: string) {
     path.startsWith("/api/artwork/search") ||
     path.startsWith("/api/artwork/cast") ||
     path.startsWith("/api/artwork/title-metadata") ||
+    path.startsWith("/api/artwork/episode-previews") ||
     path.startsWith("/api/artwork/person-credits") ||
     path.startsWith("/api/artwork/homepage-banner")
   ) {
@@ -96,9 +117,20 @@ async function fetchHostedSameOriginApi<T>(path: string, init: JsonRequestInit):
 }
 
 async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
-  if (!window.spilledNative?.serverUrl) {
+  if (!window.spilledNative) {
     return null;
   }
+  if (window.spilledNative.requestRuntime) {
+    const result = await window.spilledNative.requestRuntime(path, init);
+    return {
+      ok: result.status >= 200 && result.status < 300,
+      status: result.status,
+      data: result.data as T,
+      origin: "spilled-native://desktop",
+      transport: "native",
+    };
+  }
+  if (!window.spilledNative.serverUrl) return null;
 
   const response = await fetchWithTimeout(`${window.spilledNative.serverUrl}${path}`, {
     method: init.method ?? "GET",
@@ -118,11 +150,24 @@ async function fetchNative<T>(path: string, init: JsonRequestInit): Promise<Runt
   };
 }
 
+// The extension bridge posts a message and waits for a response that never
+// arrives when no extension is installed. On the hosted dashboard that wait
+// (2.5s) was paid on every runtime request even though the bridge could never
+// succeed. Track whether the bridge has ever answered and skip it for the rest
+// of the page session once it times out, so the transport cascade falls through
+// to the gateway immediately instead of stalling on a dead extension.
+let extensionBridgeAvailable: boolean | null = null;
+
 async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  if (extensionBridgeAvailable === false) {
+    return null;
+  }
+
   const id = `runtime_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 
   const payload = await new Promise<{ ok: boolean; status: number; origin?: string; data?: T }>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
+      extensionBridgeAvailable = false;
       window.removeEventListener("message", onMessage);
       reject(new Error("Extension bridge timed out."));
     }, 2500);
@@ -134,6 +179,8 @@ async function fetchExtension<T>(path: string, init: JsonRequestInit): Promise<R
 
       window.clearTimeout(timeout);
       window.removeEventListener("message", onMessage);
+      // Any answer proves the bridge is present, even an error payload.
+      extensionBridgeAvailable = true;
       if (!event.data.ok) {
         reject(new Error(event.data.error || "Extension bridge failed."));
         return;
@@ -169,9 +216,18 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
   if (!canUseDirectLocalFetch()) {
     return null;
   }
+  if (isLocalhostProbeOnCooldown()) {
+    return null;
+  }
 
-  for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787"]) {
-    try {
+  markLocalhostProbeAttempted();
+  // Probe both loopback hostnames in parallel instead of sequentially. When no
+  // local node is running, a refused connection fails fast but a firewall that
+  // silently drops the probe costs the full timeout; racing the two hosts keeps
+  // the worst-case probe to a single DIRECT_LOCAL_TIMEOUT_MS instead of two.
+  const origins = ["http://127.0.0.1:8787", "http://localhost:8787"];
+  const settled = await Promise.allSettled(
+    origins.map(async (origin) => {
       const response = await fetchWithTimeout(`${origin}${path}`, {
         method: init.method ?? "GET",
         headers: {
@@ -179,25 +235,36 @@ async function fetchDirect<T>(path: string, init: JsonRequestInit): Promise<Runt
           ...(init.headers ?? {}),
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      }, getRuntimeTimeoutMs(path));
+      }, DIRECT_LOCAL_TIMEOUT_MS);
+      return { origin, response };
+    }),
+  );
 
+  for (const result of settled) {
+    if (result.status === "fulfilled") {
       return {
-        ok: response.ok,
-        status: response.status,
-        data: (await readJsonSafe<T>(response)) as T,
-        origin,
+        ok: result.value.response.ok,
+        status: result.value.response.status,
+        data: (await readJsonSafe<T>(result.value.response)) as T,
+        origin: result.value.origin,
         transport: "direct",
       };
-    } catch {
-      // Try the next origin.
     }
   }
 
+  markLocalhostProbeFailure();
   return null;
 }
 
 function canUseDirectLocalFetch() {
-  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  // Browsers treat 127.0.0.1/localhost as potentially trustworthy, so even an
+  // https dashboard may fetch the user's local node directly. If no node is
+  // running the connection is refused quickly and we fall through.
+  return true;
+}
+
+export function resetLocalNodeProbeCache() {
+  resetLocalhostProbeCache();
 }
 
 async function fetchSameOriginLocalNode<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
@@ -360,6 +427,83 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
   return lastFailure;
 }
 
+async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
+  const body = init.body && typeof init.body === "object" && !Array.isArray(init.body)
+    ? init.body as Record<string, unknown>
+    : {};
+
+  if (path === "/api/search") {
+    const response = await requestPublicGateway(
+      "provider.search",
+      "search",
+      "provider.search",
+      body,
+    );
+    if (!response) return null;
+    return {
+      ok: true,
+      status: 200,
+      data: response.data as T,
+      origin: response.endpointUrl ?? response.nodeId,
+      transport: "gateway",
+    };
+  }
+
+  const operation = (() => {
+    if (path === "/api/provider-search") {
+      return { capability: "provider.search" as const, action: "search", method: "provider.search", params: body };
+    }
+    if (path === "/api/provider-feed") {
+      return { capability: "provider.feed" as const, action: "feed", method: "provider.feed", params: body };
+    }
+    if (path === "/api/provider-import") {
+      return { capability: "provider.import" as const, action: "import", method: "provider.import", params: body };
+    }
+    if (path === "/api/import-svetserialu") {
+      return {
+        capability: "provider.import" as const,
+        action: "import",
+        method: "provider.import",
+        params: { ...body, moduleId: "svetserialu" },
+      };
+    }
+    if (path === "/api/import-bombuj") {
+      return {
+        capability: "provider.import" as const,
+        action: "import",
+        method: "provider.import",
+        params: { ...body, moduleId: "bombuj" },
+      };
+    }
+    if (path === "/api/player/resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.embed.resolve", params: body };
+    }
+    if (path === "/api/player/clean-resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.clean.resolve", params: body };
+    }
+    if (path === "/api/player/playback-resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.playback.resolve", params: body };
+    }
+    return null;
+  })();
+  if (!operation) return null;
+
+  const response = await requestPublicGateway(
+    operation.capability,
+    operation.action,
+    operation.method,
+    operation.params,
+  );
+  if (!response) return null;
+  return {
+    ok: true,
+    status: 200,
+    data: response.data as T,
+    origin: response.endpointUrl ?? response.nodeId,
+    transport: "gateway",
+  };
+}
+
 function shouldTryNextRuntime<T>(result: RuntimeApiResult<T>) {
   if (result.ok) {
     return false;
@@ -434,6 +578,15 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     }
   } catch {
     // Fall through to discovered fetch servers.
+  }
+
+  try {
+    const gateway = await fetchViaV2Gateway<T>(path, init);
+    if (gateway) {
+      return gateway;
+    }
+  } catch {
+    // Fall through to legacy public fetch servers.
   }
 
   try {

@@ -18,9 +18,72 @@ export type ArtworkAsset = {
 
 type ArtworkMediaType = "movie" | "tv";
 
+export type EpisodePreview = {
+  episodeNumber: number;
+  title: string | null;
+  description: string | null;
+  runtimeMinutes: number | null;
+  airDate: string | null;
+  stillUrl: string | null;
+};
+
 export const HOMEPAGE_ARTWORK_VERSION = 6;
 
-export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown";
+async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
+  type TvmazeShow = { id?: number; name?: string; premiered?: string | null };
+  type TvmazeEpisode = { season?: number; number?: number; name?: string; summary?: string | null; runtime?: number | null; airdate?: string | null; image?: { medium?: string | null; original?: string | null } | null };
+  const readJson = async <T,>(url: string): Promise<T | null> => {
+    const response = await fetch(url, { headers: { Accept: "application/json" } }).catch(() => null);
+    return response?.ok ? response.json() as Promise<T> : null;
+  };
+  let match: TvmazeShow | null = null;
+  if (show.externalIds?.imdb) match = await readJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(show.externalIds.imdb)}`);
+  if (!match?.id && show.externalIds?.tvdb) match = await readJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(show.externalIds.tvdb)}`);
+  if (!match?.id) {
+    const matches = await readJson<Array<{ show?: TvmazeShow }>>(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(show.title)}`) ?? [];
+    const wantedYear = String(show.metadata?.year ?? show.years ?? "").match(/\b(19|20)\d{2}\b/)?.[0];
+    match = matches.map((entry) => entry.show).find((candidate) => candidate?.name?.localeCompare(show.title, undefined, { sensitivity: "base" }) === 0 && (!wantedYear || candidate.premiered?.startsWith(wantedYear))) ?? matches[0]?.show ?? null;
+  }
+  if (!match?.id) return [];
+  const episodes = await readJson<TvmazeEpisode[]>(`https://api.tvmaze.com/shows/${match.id}/episodes`) ?? [];
+  return episodes.flatMap((episode) => episode.season === seasonNumber && typeof episode.number === "number" ? [{
+    episodeNumber: episode.number,
+    title: episode.name?.trim() || null,
+    description: episode.summary?.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() || null,
+    runtimeMinutes: typeof episode.runtime === "number" && episode.runtime > 0 ? episode.runtime : null,
+    airDate: episode.airdate?.trim() || null,
+    stillUrl: episode.image?.original ?? episode.image?.medium ?? null,
+  }] : []);
+}
+
+export async function fetchEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
+  const directFallback = fetchTvmazeEpisodePreviews(show, seasonNumber);
+  if (import.meta.env.DEV || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) {
+    return directFallback;
+  }
+  const response = await requestRuntimeJson<{ episodes?: EpisodePreview[]; error?: string }>("/api/artwork/episode-previews", {
+    method: "POST",
+    body: {
+      title: show.title,
+      altTitle: show.altTitle ?? null,
+      yearHint: show.metadata?.year ? String(show.metadata.year) : show.years,
+      description: show.description ?? null,
+      externalIds: show.externalIds ?? null,
+      seasonNumber,
+      artworkApiKeys: readArtworkApiKeys(),
+    },
+  });
+  const runtimeEpisodes = response.ok ? response.data.episodes ?? [] : [];
+  const fallbackByNumber = new Map((await directFallback).map((episode) => [episode.episodeNumber, episode]));
+  const merged = runtimeEpisodes.map((episode) => {
+    const fallback = fallbackByNumber.get(episode.episodeNumber);
+    fallbackByNumber.delete(episode.episodeNumber);
+    return { ...fallback, ...episode, stillUrl: episode.stillUrl ?? fallback?.stillUrl ?? null };
+  });
+  return [...merged, ...fallbackByNumber.values()].sort((a, b) => a.episodeNumber - b.episodeNumber);
+}
+
+export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown" | "verifying";
 
 export type VidkingAvailabilityItem = {
   importSlug: string;
@@ -34,13 +97,14 @@ export type VidkingAvailabilityResult = {
   detailUrl: string;
   checkedAt: number;
   reason?: string | null;
+  verifying?: boolean;
 };
 
 const VIDKING_AVAILABILITY_CACHE_PREFIX = "spilled.vidking-availability.v1";
 let searchRuntimeBackoffUntil = 0;
 let warnedSearchRuntimeUnavailable = false;
-const SEARCH_CACHE_TTL_MS = 45_000;
-const SEARCH_CACHE_MAX = 100;
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const SEARCH_CACHE_MAX = 200;
 const searchCache = new Map<string, { expiresAt: number; results: Awaited<ReturnType<typeof requestRemoteSearch>> }>();
 const searchInflight = new Map<string, Promise<Awaited<ReturnType<typeof requestRemoteSearch>>>>();
 
@@ -281,6 +345,7 @@ function vidkingAvailabilityCacheKey(item: VidkingAvailabilityItem) {
 function vidkingAvailabilityTtl(availability: VidkingAvailabilityResult["availability"]) {
   if (availability === "available") return 6 * 60 * 60 * 1000;
   if (availability === "unavailable") return 30 * 60 * 1000;
+  if (availability === "verifying") return 5 * 60 * 1000;
   return 5 * 60 * 1000;
 }
 
@@ -294,7 +359,10 @@ function readCachedVidkingAvailability(item: VidkingAvailabilityItem) {
     const parsed = JSON.parse(raw) as Partial<VidkingAvailabilityResult>;
     if (
       typeof parsed.importSlug !== "string" ||
-      (parsed.availability !== "available" && parsed.availability !== "unavailable" && parsed.availability !== "unknown") ||
+      (parsed.availability !== "available" &&
+        parsed.availability !== "unavailable" &&
+        parsed.availability !== "unknown" &&
+        parsed.availability !== "verifying") ||
       typeof parsed.checkedAt !== "number"
     ) {
       return null;

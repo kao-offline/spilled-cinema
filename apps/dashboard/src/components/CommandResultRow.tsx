@@ -67,14 +67,22 @@ function ResultSourceIcons({ result }: { result: CommandSearchResult }) {
   }
 
   return (
-    <span className="flex shrink-0 items-center -space-x-1">
-      {result.sourceMatches.slice(0, 4).map((source) => (
-        <ProviderIcon
-          key={`${source.provider}:${source.importSlug}`}
-          provider={source.provider}
-          className="h-5 w-5 border border-[#080a0f]"
-        />
-      ))}
+    <span
+      className="flex shrink-0 items-center gap-1"
+      title={`Found on ${result.sourceMatches.length} ${result.sourceMatches.length === 1 ? "source" : "sources"}`}
+    >
+      <span className="flex -space-x-1">
+        {result.sourceMatches.slice(0, 4).map((source) => (
+          <ProviderIcon
+            key={`${source.provider}:${source.importSlug}`}
+            provider={source.provider}
+            className="h-5 w-5 border border-[#080a0f]"
+          />
+        ))}
+      </span>
+      {result.sourceMatches.length > 1 ? (
+        <span className="text-[9px] font-black uppercase tracking-[0.12em] text-white/38">{result.sourceMatches.length} sources</span>
+      ) : null}
     </span>
   );
 }
@@ -84,6 +92,7 @@ function availabilityLabel(result: CommandSearchResult) {
     return null;
   }
   if (result.availability === "checking") return "Checking";
+  if (result.availability === "verifying") return "VidKing verifying";
   if (result.availability === "available") return "Available";
   if (result.availability === "unavailable") return "Not on VidKing";
   if (result.availability === "unknown") return "Availability unknown";
@@ -93,6 +102,7 @@ function availabilityLabel(result: CommandSearchResult) {
 function availabilityClass(result: CommandSearchResult) {
   if (result.kind !== "remote-title") return "";
   if (result.availability === "available") return "bg-emerald-400/12 text-emerald-200";
+  if (result.availability === "verifying") return "bg-sky-400/12 text-sky-200";
   if (result.availability === "unavailable") return "bg-red-400/12 text-red-200";
   if (result.availability === "unknown") return "bg-amber-400/12 text-amber-100";
   return "bg-white/8 text-white/42";

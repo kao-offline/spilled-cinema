@@ -18,9 +18,11 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { enrichArtwork, searchArtworkAssets } from "../../../apps/dashboard/src/server/artwork";
 import {
+  hasRequiredSearchTokenCoverage,
   keepHighConfidenceSearchResults,
   scoreSearchCandidate,
   sortUnifiedSearchResults,
+  trimWeakSearchEdges,
 } from "../../../apps/dashboard/src/lib/search-ranking";
 import { fetchBombujMovie, searchBombuj } from "../../../apps/dashboard/src/server/bombuj";
 import { checkVidkingAvailabilityBatch, searchVidking } from "../../../apps/dashboard/src/server/vidking";
@@ -99,10 +101,15 @@ export async function searchNode(query: string, options: { svetserialuCredential
 
   const search = runParallelProviderSearch(normalizedQuery, options)
     .then((results) => {
-      remoteSearchCache.set(cacheKey, { expiresAt: Date.now() + REMOTE_SEARCH_CACHE_TTL_MS, results });
-      if (remoteSearchCache.size > REMOTE_SEARCH_CACHE_MAX) {
-        const oldestKey = remoteSearchCache.keys().next().value as string | undefined;
-        if (oldestKey) remoteSearchCache.delete(oldestKey);
+      // Do not turn a temporary provider timeout into 10 minutes of guaranteed
+      // "0 found" responses. Successful searches are safe to cache; empty
+      // searches must be allowed to retry immediately.
+      if (results.length > 0) {
+        remoteSearchCache.set(cacheKey, { expiresAt: Date.now() + REMOTE_SEARCH_CACHE_TTL_MS, results });
+        if (remoteSearchCache.size > REMOTE_SEARCH_CACHE_MAX) {
+          const oldestKey = remoteSearchCache.keys().next().value as string | undefined;
+          if (oldestKey) remoteSearchCache.delete(oldestKey);
+        }
       }
       return results;
     })
@@ -111,8 +118,8 @@ export async function searchNode(query: string, options: { svetserialuCredential
   return search;
 }
 
-const REMOTE_SEARCH_CACHE_TTL_MS = 45_000;
-const REMOTE_SEARCH_CACHE_MAX = 200;
+const REMOTE_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const REMOTE_SEARCH_CACHE_MAX = 500;
 const remoteSearchCache = new Map<string, { expiresAt: number; results: RemoteSearchItem[] }>();
 const remoteSearchInflight = new Map<string, Promise<RemoteSearchItem[]>>();
 
@@ -120,8 +127,11 @@ async function runParallelProviderSearch(
   query: string,
   options: { svetserialuCredentials?: SvetSerialuCredentials | null },
 ) {
-  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "850", 10);
-  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "2200", 10);
+  // Public provider pages regularly need more than 3.5 seconds even when they
+  // are healthy. The old budget returned and cached an empty result while the
+  // successful provider request was still in flight.
+  const timeoutMs = Number.parseInt(process.env.SPILLED_COMMAND_SEARCH_TIMEOUT_MS || "20000", 10);
+  const bombujTimeoutMs = Number.parseInt(process.env.SPILLED_BOMBUJ_SEARCH_TIMEOUT_MS || "20000", 10);
   const withSearchBudget = async <T>(search: Promise<T[]>, budgetMs = timeoutMs) => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -138,22 +148,41 @@ async function runParallelProviderSearch(
 
   // Start every provider immediately. Search used to await VidKing before even
   // starting the other providers, turning one deadline into two sequential waits.
+  // Providers receive the weak-word-trimmed query so "the friends show" searches
+  // for "friends" instead of raw phrasing, while ranking still uses the full
+  // query for relevance.
+  const providerQuery = trimWeakSearchEdges(query);
   const [vidking, svet, bomb] = await Promise.allSettled([
-    withSearchBudget(searchVidking(query)),
-    withSearchBudget(searchSvetSerialu(query, options.svetserialuCredentials)),
-    withSearchBudget(searchBombuj(query), bombujTimeoutMs),
+    withSearchBudget(searchVidking(providerQuery)),
+    withSearchBudget(searchSvetSerialu(providerQuery, options.svetserialuCredentials)),
+    withSearchBudget(searchBombuj(providerQuery), bombujTimeoutMs),
   ]);
-  const merged = [
+  const initialMerged = [
     ...(vidking.status === "fulfilled" ? vidking.value : []),
     ...(svet.status === "fulfilled" ? svet.value : []),
     ...(bomb.status === "fulfilled" ? bomb.value : []),
-  ].map<RemoteSearchItem>((item, index) => ({
-    ...item,
-    matchScore: Math.max(
-      typeof item.matchScore === "number" ? item.matchScore : 0,
-      scoreSearchCandidate(query, [item.title, item.slug, item.year], index),
-    ),
-  }));
+  ];
+
+  // A provider hit is often a better spelling/translation than the user's raw
+  // query. Use it to probe providers that did not return that identity, then
+  // attach only strict same-title/year/media matches. This turns e.g. a Czech
+  // Bombuj hit into a canonical VidKing lookup without broadening the result.
+  const crossProviderMatches = await runCrossProviderEnrichment(query, initialMerged, {
+    vidking: (value) => withSearchBudget(searchVidking(value), Math.min(timeoutMs, 5_000)),
+    svetserialu: (value) => withSearchBudget(searchSvetSerialu(value, options.svetserialuCredentials), Math.min(timeoutMs, 5_000)),
+    bombuj: (value) => withSearchBudget(searchBombuj(value), Math.min(bombujTimeoutMs, 5_000)),
+  });
+
+  const crossProviderSet = new Set(crossProviderMatches);
+  const merged = [...initialMerged, ...crossProviderMatches]
+    .filter((item) => crossProviderSet.has(item) || hasProviderSearchTokenCoverage(query, item))
+    .map<RemoteSearchItem>((item, index) => ({
+      ...item,
+      matchScore: Math.max(
+        typeof item.matchScore === "number" ? item.matchScore : 0,
+        scoreSearchCandidate(query, [item.title, item.slug, item.year], index),
+      ),
+    }));
 
   // Apply confidence pruning inside each provider. A perfect match from one
   // catalog must not erase a valid, playable match from another catalog.
@@ -172,7 +201,23 @@ async function runParallelProviderSearch(
       if (!unique.has(key)) unique.set(key, item);
     }
   }
-  return sortUnifiedSearchResults(query, [...unique.values()]).slice(0, 30);
+
+  // Rank the per-provider survivors, then re-attach cross-provider matches for
+  // the top titles so the dashboard can group every available source behind one
+  // result card. Without this, a title that is present on several providers can
+  // drop below the unified cut and show only a single source.
+  const ranked = sortUnifiedSearchResults(query, [...unique.values()]);
+  const top = ranked.slice(0, 30);
+  const kept = new Set(top);
+  for (const item of merged) {
+    if (top.length >= 48) break;
+    if (kept.has(item)) continue;
+    if (top.some((entry) => sameRemoteSearchIdentity(entry, item))) {
+      top.push(item);
+      kept.add(item);
+    }
+  }
+  return sortUnifiedSearchResults(query, top).slice(0, 48);
 }
 
 type RemoteSearchItem = {
@@ -195,6 +240,62 @@ type RemoteSearchItem = {
   };
 };
 
+type SearchProviderId = "vidking" | "svetserialu" | "bombuj";
+type ProviderSearchers = Record<SearchProviderId, (query: string) => Promise<RemoteSearchItem[]>>;
+
+function remoteSearchProvider(item: RemoteSearchItem) {
+  const value = item.provider ?? item.platform;
+  return value === "vidking" || value === "svetserialu" || value === "bombuj" ? value : null;
+}
+
+export type CrossProviderSearchTask = {
+  provider: SearchProviderId;
+  query: string;
+  seed: RemoteSearchItem;
+};
+
+export function buildCrossProviderSearchTasks(query: string, results: RemoteSearchItem[], maximumSeeds = 2) {
+  const normalizedOriginal = normalizeBridgeText(query);
+  const seeds: RemoteSearchItem[] = [];
+  for (const item of sortUnifiedSearchResults(query, results)) {
+    if (!seeds.some((seed) => sameRemoteSearchIdentity(seed, item))) seeds.push(item);
+    if (seeds.length >= maximumSeeds) break;
+  }
+
+  const tasks: CrossProviderSearchTask[] = [];
+  for (const seed of seeds) {
+    const queries = [seed.title, ...(seed.alternateTitles ?? [])]
+      .map((value) => value.trim())
+      .filter((value, index, all) => value.length >= 2 && normalizeBridgeText(value) !== normalizedOriginal && all.findIndex((entry) => normalizeBridgeText(entry) === normalizeBridgeText(value)) === index)
+      .slice(0, 1);
+    if (queries.length === 0) continue;
+
+    for (const provider of ["vidking", "svetserialu", "bombuj"] as const) {
+      if (results.some((item) => remoteSearchProvider(item) === provider && sameRemoteSearchIdentity(seed, item))) continue;
+      for (const followupQuery of queries) tasks.push({ provider, query: followupQuery, seed });
+    }
+  }
+  return tasks;
+}
+
+async function runCrossProviderEnrichment(query: string, results: RemoteSearchItem[], searchers: ProviderSearchers) {
+  const tasks = buildCrossProviderSearchTasks(query, results);
+  if (tasks.length === 0) return [];
+  const settled = await Promise.allSettled(tasks.map(async (task) => {
+    const candidates = await searchers[task.provider](task.query);
+    return candidates.filter((candidate) => sameRemoteSearchIdentity(task.seed, candidate));
+  }));
+  const unique = new Map<string, RemoteSearchItem>();
+  for (const outcome of settled) {
+    if (outcome.status !== "fulfilled") continue;
+    for (const item of outcome.value) {
+      const provider = remoteSearchProvider(item) ?? "unknown";
+      unique.set(`${provider}:${item.importSlug ?? item.slug}`, item);
+    }
+  }
+  return [...unique.values()];
+}
+
 function normalizeBridgeText(value: string | null | undefined) {
   return String(value ?? "")
     .toLowerCase()
@@ -203,6 +304,47 @@ function normalizeBridgeText(value: string | null | undefined) {
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+function remoteSearchTitleKeys(item: RemoteSearchItem) {
+  return [item.title, ...(item.alternateTitles ?? [])]
+    .map(normalizeBridgeText)
+    .filter(Boolean);
+}
+
+function parseRemoteSearchYear(value: string | null | undefined) {
+  const match = value?.match(/\b(19|20)\d{2}\b/);
+  return match ? Number.parseInt(match[0], 10) : null;
+}
+
+function sameRemoteSearchIdentity(left: RemoteSearchItem, right: RemoteSearchItem) {
+  const leftMedia = left.mediaType ?? "movie";
+  const rightMedia = right.mediaType ?? "movie";
+  if (leftMedia !== rightMedia) {
+    return false;
+  }
+
+  const leftYear = parseRemoteSearchYear(left.year);
+  const rightYear = parseRemoteSearchYear(right.year);
+  if (leftYear !== null && rightYear !== null && Math.abs(leftYear - rightYear) > 1) {
+    return false;
+  }
+
+  const rightKeys = new Set(remoteSearchTitleKeys(right));
+  return remoteSearchTitleKeys(left).some((key) => rightKeys.has(key));
+}
+
+export function hasProviderSearchTokenCoverage(
+  query: string,
+  item: Pick<RemoteSearchItem, "title" | "slug" | "alternateTitles" | "year" | "yearLabel">,
+) {
+  return hasRequiredSearchTokenCoverage(query, [
+    item.title,
+    item.slug,
+    item.year,
+    item.yearLabel,
+    ...(item.alternateTitles ?? []),
+  ]);
 }
 
 export async function verifySvetSerialuCredentials(credentials?: SvetSerialuCredentials | null) {

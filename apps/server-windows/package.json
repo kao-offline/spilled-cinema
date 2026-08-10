@@ -1,0 +1,65 @@
+{
+  "name": "@spilledcinema/server-windows",
+  "private": true,
+  "version": "0.2.0-beta.26",
+  "description": "Headless Spilled Server host for Windows",
+  "author": "Overload Studio",
+  "main": "main.js",
+  "scripts": {
+    "prepare:payload": "npm run build -w @spilledcinema/server && node ../../scripts/prepare-server-windows-payload.mjs",
+    "dist:windows": "npm run prepare:payload && electron-builder --win nsis",
+    "pack:windows": "npm run prepare:payload && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
+    "cloudflared": "^0.7.1",
+    "localtunnel": "^2.0.2",
+    "node-datachannel": "^0.31.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "studio.overload.spilled.server",
+    "productName": "Spilled Server",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@node-rs/argon2/**",
+      "node_modules/node-datachannel/**",
+      "node_modules/cloudflared/**"
+    ],
+    "files": [
+      "main.js",
+      "icon.png",
+      "package.json",
+      "server/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "../icon-dark-rounded.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Spilled-Server-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

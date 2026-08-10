@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 
-export type SpilledNodeMode = "public-fetch" | "private" | "full";
+export type SpilledNodeMode = "local" | "public-fetch" | "private" | "full";
 
 export type PrivateNodeProfileConfig = {
   profileId: string;
@@ -202,8 +202,8 @@ function normalizeConfig(raw: unknown, configPath: string): LoadedPrivateNodeCon
 }
 
 export function readNodeModeFromEnv(): SpilledNodeMode {
-  const mode = String(process.env.SPILLED_NODE_MODE || "public-fetch").trim();
-  if (mode === "private" || mode === "full" || mode === "public-fetch") {
+  const mode = String(process.env.SPILLED_NODE_MODE || "local").trim();
+  if (mode === "local" || mode === "private" || mode === "full" || mode === "public-fetch") {
     return mode;
   }
   throw new Error(`Unsupported SPILLED_NODE_MODE "${mode}".`);

@@ -1,4 +1,4 @@
-import { compareSearchScores, normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking";
+import { compareSearchScores, normalizeSearchText, scoreSearchCandidate } from "../lib/search-ranking.js";
 
 export type ExternalTitleCandidate = {
   id: string;

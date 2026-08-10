@@ -1,6 +1,7 @@
 import type { LibraryEpisode } from "./types";
 import { formatEpisodeTitle } from "./episode-title";
 import { requestRuntimeJson, resolveRuntimeUrl } from "./local-api";
+import { normalizePlaybackUrlForClient } from "./player-url-cache";
 
 export type FullDownloadJobState = "queued" | "resolving" | "downloading" | "completed" | "failed";
 
@@ -40,6 +41,7 @@ export type PlaybackResolveResult = {
   refererUrl: string;
   streamType: "hls" | "mp4" | "dash" | "embed" | "unknown";
   subtitlesUrl?: string;
+  duration?: number;
   failures?: PlaybackResolveFailure[];
 };
 
@@ -73,6 +75,16 @@ type BrowserStreamCandidate = {
 function shouldResolvePlayerUrl(provider: string | undefined, embedUrl: string | undefined) {
   const signature = `${provider ?? ""} ${embedUrl ?? ""}`.toLowerCase();
   return /(?:^|[^a-z])(2embed|multiembed|moviesclub|primewire)(?:[^a-z]|$)/i.test(signature);
+}
+
+function mediaOriginFromRuntime(origin: string | undefined, transport: string | undefined) {
+  // Gateway-transport responses carry the node id as origin when the node has no
+  // inbound HTTP endpoint. Media URLs can't be fetched from that origin, so route
+  // them through the hosted dashboard proxy (same origin as the page).
+  if (transport === "gateway" && origin && !/^https?:\/\//i.test(origin)) {
+    return window.location.origin;
+  }
+  return origin ?? window.location.origin;
 }
 
 function absoluteUrl(value: string, base: string) {
@@ -365,6 +377,22 @@ export async function startBrowserResolvedDownload(episode: LibraryEpisode): Pro
   ];
 
   const streamCandidates = buildBrowserStreamCandidates(sortedPlayers);
+  // A resolved stream URL is already the browser's best path: FFmpeg.wasm can
+  // fetch and mux it locally, without creating a server-side download job.
+  // Keep runtime resolution below for embed-only providers and gateway-scoped
+  // URLs that need node credentials or provider-specific headers.
+  const directCandidate = streamCandidates.find((candidate) => candidate.streamUrl || candidate.resolvedUrl);
+  if (directCandidate) {
+    const directUrl = directCandidate.streamUrl ?? directCandidate.resolvedUrl;
+    if (directUrl) {
+      return {
+        downloadUrl: directUrl,
+        resolvedUrl: directUrl,
+        refererUrl: directCandidate.sourcePageUrl ?? directCandidate.embedUrl,
+      };
+    }
+  }
+
   const isHostedDeployment = !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   let runtimeError: string | null = null;
 
@@ -385,7 +413,7 @@ export async function startBrowserResolvedDownload(episode: LibraryEpisode): Pro
 
     if (response.ok && response.data?.downloadUrl && response.data?.resolvedUrl && response.data?.refererUrl) {
       return {
-        downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, response.origin),
+        downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport)),
         resolvedUrl: response.data.resolvedUrl,
         refererUrl: response.data.refererUrl,
       };
@@ -469,7 +497,7 @@ export async function resolveCleanPlayback(episode: LibraryEpisode): Promise<Cle
   }
 
   return {
-    downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, response.origin),
+    downloadUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport))),
     resolvedUrl: response.data.resolvedUrl,
     refererUrl: response.data.refererUrl,
   };
@@ -500,7 +528,7 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     }
     return {
       playerAlias: data.playerAlias,
-      playbackUrl: resolveRuntimeUrl(data.playbackUrl, origin),
+      playbackUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(data.playbackUrl, origin)),
       resolvedUrl: data.resolvedUrl,
       refererUrl: data.refererUrl,
       streamType: data.streamType ?? "unknown",
@@ -539,5 +567,5 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     throw error;
   }
 
-  return handlePayload(response.data ?? null, response.origin ?? window.location.origin);
+  return handlePayload(response.data ?? null, mediaOriginFromRuntime(response.origin, response.transport));
 }

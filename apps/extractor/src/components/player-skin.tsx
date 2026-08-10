@@ -128,22 +128,6 @@ export function PlayerSkin({
           </div>
         </div>
       </div>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Center Play/Pause Indicator (Optional, but Netflix uses it) */}
-      {!playing && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <button
-            onClick={onTogglePlay}
-            className="flex h-24 w-24 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-xl transition hover:scale-110 hover:bg-white/20"
-          >
-            <Play className="ml-1 h-12 w-12" fill="currentColor" />
-          </button>
-        </div>
-      )}
 
       {/* Bottom Controls */}
       <div className="player-controls-reveal relative space-y-4 px-8 pb-10 pointer-events-auto">

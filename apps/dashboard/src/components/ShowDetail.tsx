@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
-import { ArrowLeft, ChevronDown, Download, ExternalLink, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, Trash2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
 import { clsx } from "clsx";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
@@ -20,6 +20,7 @@ type ShowDetailProps = {
   onBack: () => void;
   onOpenRelatedShow?: (slug: string) => void;
   onSelectEpisode: (episode: LibraryEpisode) => void;
+  onSetEpisodeWatched: (episodeId: string, watched: boolean) => void;
   onRemoveShow: () => void;
   onToggleFavorite: () => void;
   onUpdateArtwork: (artwork: {
@@ -29,12 +30,15 @@ type ShowDetailProps = {
     bannerWithLogoUrl?: string | null;
     clearLogoUrl?: string | null;
   }) => void;
+  onUpdateCast: (actors: CastMember[]) => void;
   artworkSources: ArtworkSourceSettings;
   fullDownloadJobsByEpisode: Record<string, FullDownloadJob>;
   onStartFullDownload: (episode: LibraryEpisode) => void;
   onCancelFullDownload: (episode: LibraryEpisode) => void;
   downloadedEpisodeIds: Set<string>;
   onDeleteFullDownload: (episode: LibraryEpisode) => void;
+  onCheckNewEpisodes?: () => void;
+  checkNewEpisodesState?: { checking: boolean; message: string | null; error: boolean };
 };
 
 function isBusy(job: FullDownloadJob | undefined) {
@@ -136,15 +140,19 @@ export function ShowDetail({
   onBack,
   onOpenRelatedShow,
   onSelectEpisode,
+  onSetEpisodeWatched,
   onRemoveShow,
   onToggleFavorite,
   onUpdateArtwork,
+  onUpdateCast,
   artworkSources,
   fullDownloadJobsByEpisode,
   onStartFullDownload,
   onCancelFullDownload,
   downloadedEpisodeIds,
   onDeleteFullDownload,
+  onCheckNewEpisodes,
+  checkNewEpisodesState,
 }: ShowDetailProps) {
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
   const [episodeMenuOpen, setEpisodeMenuOpen] = useState(false);
@@ -187,6 +195,9 @@ export function ShowDetail({
   const movieBusy = isBusy(movieJob);
   const movieDownloaded = Boolean(movieEpisode && (downloadedEpisodeIds.has(movieEpisode.id) || movieJob?.state === "completed"));
   const moviePercent = movieJob?.percent ?? 0;
+  const seriesDownloadJob = latestEpisode ? fullDownloadJobsByEpisode[latestEpisode.id] : undefined;
+  const seriesDownloadBusy = isBusy(seriesDownloadJob);
+  const seriesDownloaded = Boolean(latestEpisode && (downloadedEpisodeIds.has(latestEpisode.id) || seriesDownloadJob?.state === "completed"));
 
   const heroMetadata = getTitleMetadataParts(show);
 
@@ -257,7 +268,10 @@ export function ShowDetail({
     setCastLoading(true);
     void fetchCastForShow(show)
       .then((cast) => {
-        if (!canceled) setFetchedActors(cast);
+        if (!canceled) {
+          setFetchedActors(cast);
+          if (cast.length > 0) onUpdateCast(cast);
+        }
       })
       .catch(() => {
         if (!canceled) setFetchedActors([]);
@@ -268,7 +282,7 @@ export function ShowDetail({
     return () => {
       canceled = true;
     };
-  }, [show, actors.length]);
+  }, [show, actors.length, onUpdateCast]);
 
   useEffect(() => {
     let canceled = false;
@@ -339,7 +353,7 @@ export function ShowDetail({
       <section className="min-h-screen bg-[#08090d] px-5 py-6 text-white">
         <button onClick={onBack} className="inline-flex h-11 items-center gap-2 rounded-full bg-white/10 px-4 text-sm font-bold text-white hover:bg-white/16">
           <ArrowLeft className="h-4 w-4" />
-          Back to library
+          Back to home
         </button>
         <div className="mt-10 text-sm font-bold text-white/70">Show not found.</div>
       </section>
@@ -361,16 +375,16 @@ export function ShowDetail({
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_65%_20%,rgba(42,48,40,0.7),rgba(8,9,13,1)_62%)]" />
         )}
 
-        <div className="relative z-20 flex min-h-[100svh] flex-col px-4 pb-8 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
+        <div className="relative z-20 flex min-h-[100svh] flex-col px-4 pb-28 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between px-5 pt-6 sm:px-8 lg:px-12">
             <div className="pointer-events-auto flex items-center gap-3">
-              <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to library">
+              <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to home">
                 <ArrowLeft className="h-5 w-5" />
               </button>
               <img src="/Spilled.svg" alt="Spilled" className="hidden h-11 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
             </div>
 
-            <div className="pointer-events-auto absolute left-1/2 top-4 w-[min(58vw,23rem)] -translate-x-1/2 sm:top-6 sm:w-[min(74vw,23rem)]">
+            <div className="hidden">
               {sortedEpisodes.length > 1 ? (
                 <div className="relative">
                   <button
@@ -425,11 +439,35 @@ export function ShowDetail({
                                   title={episodeTitle}
                                 >
                                   <span className="spilled-episode-code">{episodeShortLabel(episode)}</span>
-                                  <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
-                                  {hasCzSubs ? <span className="spilled-subtitle-tag" title="Czech subtitles">CZ TIT</span> : null}
-                                </button>
+                                   <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
+                                   {episode.watched ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-400/18 text-emerald-200" title="Watched"><Check className="h-3 w-3" /></span> : null}
+                                   {hasCzSubs ? <span className="spilled-subtitle-tag inline-flex h-5 w-5 items-center justify-center" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
+                                 </button>
+                                 {episode.directors?.length ? (
+                                   <div className="flex min-w-0 items-center gap-1 text-xs text-white/40 mt-0.5 pl-11">
+                                     <Film className="h-3 w-3 shrink-0 opacity-60" />
+                                     <span className="truncate">{episode.directors.map((d) => d.name).join(", ")}</span>
+                                   </div>
+                                 ) : null}
 
                                 <div className="flex shrink-0 items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onSetEpisodeWatched(episode.id, !episode.watched);
+                                    }}
+                                    className={clsx(
+                                      "spilled-episode-action",
+                                      episode.watched
+                                        ? "bg-emerald-400/16 text-emerald-100 ring-emerald-300/15 hover:bg-emerald-400/24"
+                                        : "bg-white/[0.07] text-white/58 ring-white/[0.08] hover:bg-white/12 hover:text-white",
+                                    )}
+                                    title={episode.watched ? "Mark as unseen" : "Mark as seen"}
+                                    aria-label={episode.watched ? `Mark ${episodeTitle} as unseen` : `Mark ${episodeTitle} as seen`}
+                                  >
+                                    <Check className="h-4 w-4" />
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={(event) => {
@@ -474,6 +512,25 @@ export function ShowDetail({
                     </div>
                   ) : null}
                 </div>
+              ) : null}
+              {!movieEpisode && latestEpisode ? (
+                <>
+                  <button
+                    onClick={() => {
+                      if (!seriesDownloadBusy && !seriesDownloaded) onStartFullDownload(latestEpisode);
+                    }}
+                    className={clsx(
+                      "inline-flex h-9 items-center gap-2 rounded-full border px-4 text-sm font-black transition",
+                      seriesDownloaded ? "border-emerald-300/25 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-white/10 text-white hover:bg-white/16",
+                    )}
+                    title={seriesDownloaded ? "Latest episode saved" : "Download latest episode"}
+                  >
+                    {seriesDownloadBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    {seriesDownloadBusy ? `${seriesDownloadJob?.percent ?? 0}%` : seriesDownloaded ? "LATEST SAVED" : "DOWNLOAD LATEST"}
+                  </button>
+                  {seriesDownloadBusy ? <button onClick={() => onCancelFullDownload(latestEpisode)} className="inline-flex h-9 items-center gap-2 rounded-full border border-red-300/20 bg-red-400/16 px-4 text-sm font-black text-red-100 hover:bg-red-400/24"><X className="h-4 w-4" /> CANCEL</button> : null}
+                  {seriesDownloaded ? <button onClick={() => onDeleteFullDownload(latestEpisode)} className="inline-flex h-9 items-center gap-2 rounded-full border border-red-300/20 bg-red-400/16 px-4 text-sm font-black text-red-100 hover:bg-red-400/24"><Trash2 className="h-4 w-4" /> DELETE</button> : null}
+                </>
               ) : null}
             </div>
 
@@ -526,7 +583,7 @@ export function ShowDetail({
                 </span>
               ))}
             </div>
-            <p className="line-clamp-4 max-w-[44rem] text-[13px] font-medium leading-snug text-white/88 drop-shadow-[0_2px_14px_rgba(0,0,0,0.85)] sm:line-clamp-none sm:text-base">
+            <p className="line-clamp-4 max-w-[44rem] text-[13px] font-medium leading-snug text-white/88 drop-shadow-[0_2px_14px_rgba(0,0,0,0.85)] sm:text-base">
               {displayDescription}
             </p>
 
@@ -596,6 +653,63 @@ export function ShowDetail({
           </div>
         ) : null}
 
+        {sortedEpisodes.length > 1 ? (
+          <section className="tv-episode-browser mb-9" aria-labelledby="episode-browser-heading">
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <div id="episode-browser-heading" className="inline-flex items-center gap-2 text-2xl font-black text-white">
+                <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
+                Episodes
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {onCheckNewEpisodes ? (
+                  <button
+                    type="button"
+                    onClick={() => onCheckNewEpisodes()}
+                    disabled={Boolean(checkNewEpisodesState?.checking)}
+                    className={clsx(
+                      "inline-flex h-9 w-9 items-center justify-center rounded-full border transition",
+                      checkNewEpisodesState?.checking
+                        ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
+                        : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
+                    )}
+                    aria-label="Check for new episodes"
+                    title="Scan svetserialu for episodes you don't have yet"
+                  >
+                    <RefreshCw className={clsx("h-3.5 w-3.5", checkNewEpisodesState?.checking && "animate-spin")} />
+                  </button>
+                ) : null}
+                <span className="text-xs font-bold text-white/32">{sortedEpisodes.length} available</span>
+              </div>
+            </div>
+            {checkNewEpisodesState?.message ? (
+              <div className={clsx("mb-4 text-xs font-semibold", checkNewEpisodesState.error ? "text-red-300" : "text-emerald-300")}>
+                {checkNewEpisodesState.message}
+              </div>
+            ) : null}
+            <div className="no-scrollbar mb-4 flex gap-2 overflow-x-auto pb-1">
+              {seasons.map(([seasonNumber, episodes]) => (
+                <button key={seasonNumber} type="button" onClick={() => setSelectedSeason(seasonNumber)} className={clsx("tv-episode-season shrink-0 rounded-full border px-4 py-2 text-xs font-black transition", activeSeason === seasonNumber ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.035] text-white/52 hover:bg-white/[0.08] hover:text-white")}>
+                  Season {seasonNumber} <span className="ml-1 opacity-50">{episodes.length}</span>
+                </button>
+              ))}
+            </div>
+            <div className="tv-episode-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {activeSeasonEpisodes.map((episode) => (
+                <button key={episode.id} type="button" onClick={() => onSelectEpisode(episode)} className="tv-episode-card group min-w-0 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3 text-left transition hover:border-white/18 hover:bg-white/[0.065] active:scale-[0.98]">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.18em] text-white/35">{episodeShortLabel(episode)}</span>
+                    <Play className="h-3.5 w-3.5 fill-white/65 text-white/65 transition group-hover:fill-white group-hover:text-white" />
+                  </div>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <div className="min-w-0 truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
+                    {hasCzechSubtitles(episode) ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-300/10 text-sky-200/80" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <div className="mb-5 inline-flex items-center gap-2 bg-[#050609] pr-8 text-2xl font-black text-white">
           <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
           Actors
@@ -606,7 +720,7 @@ export function ShowDetail({
               <button key={`${actor.name}:${index}`} type="button" onClick={() => setSelectedActor(actor)} className="flex min-w-0 items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3 py-3 text-left transition hover:border-white/16 hover:bg-white/[0.055]">
                 <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-white/10">
                   {actor.profileUrl ? (
-                    <img src={actor.profileUrl} alt={actor.name} className="h-full w-full object-cover" loading="lazy" decoding="async" />
+                    <img src={balanceImageResolution(actor.profileUrl, "poster-thumb") ?? actor.profileUrl} alt={actor.name} className="h-full w-full object-cover" loading="lazy" decoding="async" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center text-sm font-black text-white/54">{initialsForName(actor.name)}</div>
                   )}
@@ -671,7 +785,7 @@ export function ShowDetail({
               <div className="flex min-w-0 items-center gap-4 pr-12">
                 <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-white/8 ring-1 ring-white/10">
                     {selectedActor.profileUrl ? (
-                      <img src={selectedActor.profileUrl} alt={selectedActor.name} className="h-full w-full object-cover" />
+                      <img src={balanceImageResolution(selectedActor.profileUrl, "poster-thumb") ?? selectedActor.profileUrl} alt={selectedActor.name} className="h-full w-full object-cover" loading="lazy" decoding="async" />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-2xl font-black text-white/54">{initialsForName(selectedActor.name)}</div>
                     )}

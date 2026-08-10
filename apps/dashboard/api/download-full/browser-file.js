@@ -1,4 +1,4 @@
-const { Readable } = require("node:stream");
+import { Readable } from "node:stream";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -29,7 +29,7 @@ function isCacheableHlsAsset(url, contentType) {
     /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
 }
 
-function buildBrowserFileProxyPath(streamUrl, fileName, referer) {
+function buildBrowserFileProxyPath(streamUrl, fileName, referer, inlinePlayback = false) {
   const params = new URLSearchParams({
     url: streamUrl,
     name: fileName,
@@ -37,21 +37,24 @@ function buildBrowserFileProxyPath(streamUrl, fileName, referer) {
   if (referer) {
     params.set("referer", referer);
   }
+  if (inlinePlayback) {
+    params.set("playback", "1");
+  }
   return `/api/download-full/browser-file?${params.toString()}`;
 }
 
-function rewriteHlsTagUris(line, playlistUrl, fileName, referer) {
+function rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback = false) {
   return line.replace(/\bURI=(["'])([^"']+)\1/gi, (match, quote, rawUrl) => {
     try {
       const absolute = new URL(rawUrl, playlistUrl).toString();
-      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString())}${quote}`;
+      return `URI=${quote}${buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback)}${quote}`;
     } catch {
       return match;
     }
   });
 }
 
-function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
+function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer, inlinePlayback = false) {
   const preserveImageNamedSegments = Boolean(getBrowserFileOriginHeader(referer));
   return playlist
     .split(/\r?\n/)
@@ -61,7 +64,7 @@ function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
         return line;
       }
       if (trimmed.startsWith("#")) {
-        return rewriteHlsTagUris(line, playlistUrl, fileName, referer);
+        return rewriteHlsTagUris(line, playlistUrl, fileName, referer, inlinePlayback);
       }
       const isKnownAd = /ad-site|\.image(?:[?#]|$)/i.test(trimmed);
       const isImageNamed = /\.(?:png|jpe?g|webp|gif)(?:[?#]|$)/i.test(trimmed);
@@ -71,7 +74,7 @@ function rewriteHlsPlaylistUrls(playlist, playlistUrl, fileName, referer) {
 
       try {
         const absolute = new URL(trimmed, playlistUrl).toString();
-        return buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString());
+        return buildBrowserFileProxyPath(absolute, fileName, referer || playlistUrl.toString(), inlinePlayback);
       } catch {
         return line;
       }
@@ -92,7 +95,7 @@ function getBrowserFileOriginHeader(referer) {
   return undefined;
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");
@@ -108,6 +111,7 @@ module.exports = async function handler(req, res) {
     const streamUrl = params.get("url");
     const fileName = getSafeName(params.get("name"));
     const referer = params.get("referer") || undefined;
+    const inlinePlayback = params.get("playback") === "1";
 
     if (!streamUrl) {
       res.statusCode = 400;
@@ -134,18 +138,38 @@ module.exports = async function handler(req, res) {
     }
 
     const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
-    const upstreamHeaders = {
-      "user-agent": USER_AGENT,
-      accept: "*/*",
-      ...(referer ? { referer } : {}),
-      ...(typeof req.headers.range === "string" ? { range: req.headers.range } : {}),
-    };
+    const isXpassSegment = /play\.xpass\.top/i.test(referer || "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
 
-    const upstream = await fetch(parsed.toString(), {
-      method: req.method,
-      headers: upstreamHeaders,
-      redirect: "follow",
-    });
+    const isRetryable403 = (status) => status === 403 || status === 401;
+
+    function buildUpstreamHeaders(override = {}) {
+      return {
+        "user-agent": override.userAgent ?? USER_AGENT,
+        accept: "*/*",
+        ...(referer && !override.stripReferer ? { referer } : {}),
+        ...(typeof req.headers.range === "string" ? { range: req.headers.range } : {}),
+        ...override.extra,
+      };
+    }
+
+    const headerStrategies = [
+      () => buildUpstreamHeaders(),
+      () => buildUpstreamHeaders({ stripReferer: true }),
+      () => buildUpstreamHeaders({ stripReferer: true, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36" }),
+      () => buildUpstreamHeaders({ stripReferer: true, extra: { accept: "text/vtt,text/plain,*/*" } }),
+    ];
+
+    let upstream;
+    for (const buildHeaders of headerStrategies) {
+      upstream = await fetch(parsed.toString(), {
+        method: req.method,
+        headers: buildHeaders(),
+        redirect: "follow",
+      });
+      if (upstream.ok || upstream.status === 206 || !isRetryable403(upstream.status)) {
+        break;
+      }
+    }
 
     if (!upstream.ok && upstream.status !== 206) {
       const body = await upstream.text().catch(() => "");
@@ -156,22 +180,24 @@ module.exports = async function handler(req, res) {
     }
 
     const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const contentType = isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)
+    const contentType = (isVidkingRequest && /\.jpe?g$/i.test(parsed.pathname)) || isXpassSegment
       ? "video/mp2t"
       : upstreamContentType;
     const contentLength = upstream.headers.get("content-length");
     const contentRange = upstream.headers.get("content-range");
-    const acceptRanges = upstream.headers.get("accept-ranges") || "bytes";
+    const acceptRanges = upstream.headers.get("accept-ranges");
 
     res.statusCode = upstream.status;
     res.setHeader("Content-Type", contentType);
-    res.setHeader("Accept-Ranges", acceptRanges);
+    if (acceptRanges) {
+      res.setHeader("Accept-Ranges", acceptRanges);
+    }
     res.setHeader("Cache-Control", isCacheableHlsAsset(parsed, contentType) ? "private, max-age=600" : "no-store");
-    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader("Content-Disposition", `${inlinePlayback ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
 
     if (req.method !== "HEAD" && upstream.body && isHlsPlaylistResponse(parsed, contentType)) {
       const playlist = await upstream.text();
-      const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer);
+      const rewritten = rewriteHlsPlaylistUrls(playlist, parsed, fileName, referer, inlinePlayback);
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
       res.setHeader("Content-Length", Buffer.byteLength(rewritten).toString());
       res.end(rewritten);

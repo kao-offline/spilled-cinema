@@ -5,22 +5,17 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/server/:path*",
+      "destination": "/api/server"
+    },
+    {
       "source": "/((?!api/|server/|assets/|worker-).*)",
       "destination": "/index.html"
     }
   ],
   "functions": {
-    "api/import-svetserialu.js": {
+    "api/artwork/[action].ts": {
       "maxDuration": 60
-    },
-    "api/import-bombuj.js": {
-      "maxDuration": 30
-    },
-    "api/artwork/refresh.ts": {
-      "maxDuration": 60
-    },
-    "api/artwork/search.ts": {
-      "maxDuration": 30
     },
     "api/node-proxy.js": {
       "maxDuration": 60

@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -45,14 +46,23 @@ next-env.d.ts
 downloads/
 server.err
 server.out
+secrets/
 apps/dashboard/.spilledcinema/
 apps/extractor/.spilledcinema-data/
 
 # local app artifacts
 apps/dashboard/dist/
+apps/server/dist/
 apps/client/extension/dist/
+apps/client/native/dist/
 apps/extractor/.next/
+apps/extractor/.next-build/
+apps/server-windows/release/
+apps/server-windows/server/
+apps/server-windows/icon.png
 test-results/
+deployment-secrets.json
+node-enrollment.json
 tmp-dashboard-*.log
 tmp-dashboard-home.png
 

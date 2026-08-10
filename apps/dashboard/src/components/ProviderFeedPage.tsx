@@ -3,12 +3,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import type { ExploreItem, ProviderFeedManifest, ProviderModuleManifest } from "../lib/types";
+import { formatEpisodeTitle } from "../lib/episode-title";
+import { balanceImageResolution } from "../lib/image-resolution";
+import { showToast } from "./ToastHost";
 
 type ProviderFeedPageProps = {
   module: ProviderModuleManifest;
   feed: ProviderFeedManifest;
   items: ExploreItem[];
   query: string;
+  animeFilterMode: AnimeFilterMode;
+  onAnimeFilterModeChange: (mode: AnimeFilterMode) => void;
   loading: boolean;
   error: string | null;
   stale: boolean;
@@ -32,10 +37,13 @@ type AnimeFilterMode = "all" | "anime" | "no-anime";
 const FEED_CHUNK_SIZE = 8;
 
 function buildEpisodeLabel(item: ExploreItem) {
-  const parts = [item.episode?.episodeCode?.toUpperCase(), item.episode?.episodeTitle]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-  return parts.join(" - ");
+  if (!item.episode) return "";
+  return formatEpisodeTitle({
+    showTitle: item.title,
+    episodeTitle: item.episode.episodeTitle ?? null,
+    episodeCode: item.episode.episodeCode ?? null,
+    episodeNumber: item.episode.episodeNumber ?? null,
+  });
 }
 
 function isAnimeItem(item: ExploreItem) {
@@ -102,6 +110,7 @@ function ProviderFeedItemCard({
   onClick: (item: ExploreItem) => void;
 }) {
   const artwork = getFeedArtwork(item);
+  const artworkUrl = balanceImageResolution(artwork.src, artwork.isBannerLike ? "backdrop-thumb" : "poster-card");
   const episodeLabel = buildEpisodeLabel(item);
 
   return (
@@ -111,22 +120,26 @@ function ProviderFeedItemCard({
       className="group relative overflow-hidden rounded-[24px] border border-white/8 bg-[#11141b] text-left shadow-[0_20px_52px_rgba(0,0,0,0.24)] transition-all duration-500 hover:-translate-y-1 hover:border-white/18"
     >
       <div className="relative aspect-[2/3] overflow-hidden">
-        {artwork.src ? (
+        {artworkUrl ? (
           <>
             <img
-              src={artwork.src}
+              src={artworkUrl}
               alt=""
               aria-hidden="true"
               className="absolute inset-0 h-full w-full scale-110 object-cover object-center opacity-26 blur-2xl transition-transform duration-700 group-hover:scale-[1.14]"
+              loading="lazy"
+              decoding="async"
             />
             <div className="absolute inset-[10px] overflow-hidden rounded-[18px] border border-white/8 bg-black/24">
               <img
-                src={artwork.src}
+                src={artworkUrl}
                 alt={item.title}
                 className={clsx(
                   "absolute inset-0 h-full w-full transition-transform duration-700 group-hover:scale-[1.03]",
                   artwork.isBannerLike ? "object-contain object-center p-1.5" : "object-cover object-center",
                 )}
+                loading="lazy"
+                decoding="async"
               />
             </div>
           </>
@@ -176,9 +189,14 @@ function ProviderFeedItemModal({
   }
 
   const artwork = getFeedArtwork(item);
+  const artworkUrl = balanceImageResolution(artwork.src, artwork.isBannerLike ? "backdrop-thumb" : "poster-detail");
   const metadata = [
-    item.episode?.episodeCode?.toUpperCase(),
-    item.episode?.episodeTitle,
+    item.episode ? formatEpisodeTitle({
+      showTitle: item.title,
+      episodeTitle: item.episode.episodeTitle ?? null,
+      episodeCode: item.episode.episodeCode ?? null,
+      episodeNumber: item.episode.episodeNumber ?? null,
+    }) : null,
     item.yearLabel,
     providerLabel,
   ]
@@ -201,21 +219,25 @@ function ProviderFeedItemModal({
         </button>
         <div className="grid min-h-[24rem] lg:grid-cols-[minmax(0,1.1fr)_minmax(22rem,0.9fr)]">
           <div className="relative min-h-[16rem]">
-            {artwork.src ? (
+            {artworkUrl ? (
               <>
                 <img
-                  src={artwork.src}
+                  src={artworkUrl}
                   alt=""
                   aria-hidden="true"
                   className="absolute inset-0 h-full w-full scale-110 object-cover object-center opacity-30 blur-2xl"
+                  loading="eager"
+                  decoding="async"
                 />
                 <img
-                  src={artwork.src}
+                  src={artworkUrl}
                   alt={item.title}
                   className={clsx(
                     "absolute inset-0 h-full w-full",
                     artwork.isBannerLike ? "object-contain object-center p-4" : "object-cover object-center",
                   )}
+                  loading="eager"
+                  decoding="async"
                 />
               </>
             ) : (
@@ -296,6 +318,8 @@ export function ProviderFeedPage({
   module,
   items,
   query,
+  animeFilterMode,
+  onAnimeFilterModeChange,
   loading,
   error,
   generatedAt,
@@ -307,9 +331,11 @@ export function ProviderFeedPage({
 }: ProviderFeedPageProps) {
   const [selectedItem, setSelectedItem] = useState<ExploreItem | null>(null);
   const [visibleCount, setVisibleCount] = useState(FEED_CHUNK_SIZE);
-  const [animeFilterMode, setAnimeFilterMode] = useState<AnimeFilterMode>("all");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const providerLabel = module.displayName;
+  useEffect(() => {
+    if (error) showToast(error);
+  }, [error]);
   const filteredItems = useMemo(() => {
     if (animeFilterMode === "all") {
       return items;
@@ -373,7 +399,7 @@ export function ProviderFeedPage({
             <button
               key={option.id}
               type="button"
-              onClick={() => setAnimeFilterMode(option.id)}
+      onClick={() => onAnimeFilterModeChange(option.id)}
               className={clsx(
                 "rounded-full px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.18em] transition-colors",
                 animeFilterMode === option.id ? "bg-white text-black" : "text-white/52 hover:text-white",
@@ -393,12 +419,6 @@ export function ProviderFeedPage({
           Refresh
         </button>
       </div>
-
-      {error ? (
-        <div className="relative mt-6 rounded-[24px] border border-rose-400/14 bg-rose-400/8 px-5 py-4 text-sm text-rose-100">
-          {error}
-        </div>
-      ) : null}
 
       {loading && items.length === 0 ? (
         <div className="relative mt-8 flex min-h-[18rem] items-center justify-center rounded-[28px] border border-white/8 bg-white/[0.03] text-white/54">

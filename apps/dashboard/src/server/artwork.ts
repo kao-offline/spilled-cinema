@@ -985,6 +985,94 @@ export async function fetchTmdbTitleMetadata(input: {
   };
 }
 
+export type ArtworkEpisodePreview = {
+  episodeNumber: number;
+  title: string | null;
+  description: string | null;
+  runtimeMinutes: number | null;
+  airDate: string | null;
+  stillUrl: string | null;
+};
+
+async function fetchTvmazeEpisodePreviews(input: { title: string; yearHint?: string; externalIds?: ArtworkExternalIds; seasonNumber: number }): Promise<ArtworkEpisodePreview[]> {
+  type TvmazeShow = { id?: number; name?: string; premiered?: string | null };
+  type TvmazeEpisode = { season?: number; number?: number; name?: string; summary?: string | null; runtime?: number | null; airdate?: string | null; image?: { medium?: string | null; original?: string | null } | null };
+  const fetchJson = async <T,>(url: string): Promise<T | null> => {
+    const response = await fetch(url, { headers: { Accept: "application/json" } }).catch(() => null);
+    return response?.ok ? response.json() as Promise<T> : null;
+  };
+  let show: TvmazeShow | null = null;
+  if (input.externalIds?.imdb) show = await fetchJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(input.externalIds.imdb)}`);
+  if (!show?.id && input.externalIds?.tvdb) show = await fetchJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(input.externalIds.tvdb)}`);
+  if (!show?.id) {
+    const matches = await fetchJson<Array<{ show?: TvmazeShow }>>(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(input.title)}`) ?? [];
+    const wantedYear = input.yearHint?.match(/\b(19|20)\d{2}\b/)?.[0];
+    show = matches.map((entry) => entry.show).find((candidate) => candidate?.name?.localeCompare(input.title, undefined, { sensitivity: "base" }) === 0 && (!wantedYear || candidate.premiered?.startsWith(wantedYear))) ?? matches[0]?.show ?? null;
+  }
+  if (!show?.id) return [];
+  const episodes = await fetchJson<TvmazeEpisode[]>(`https://api.tvmaze.com/shows/${show.id}/episodes`) ?? [];
+  return episodes.flatMap((episode) => episode.season === input.seasonNumber && typeof episode.number === "number" ? [{
+    episodeNumber: episode.number,
+    title: episode.name?.trim() || null,
+    description: episode.summary?.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() || null,
+    runtimeMinutes: typeof episode.runtime === "number" && episode.runtime > 0 ? episode.runtime : null,
+    airDate: episode.airdate?.trim() || null,
+    stillUrl: episode.image?.original ?? episode.image?.medium ?? null,
+  }] : []);
+}
+
+export async function fetchTmdbSeasonEpisodePreviews(input: {
+  title: string;
+  altTitle?: string | null;
+  yearHint?: string;
+  description?: string | null;
+  externalIds?: ArtworkExternalIds;
+  seasonNumber: number;
+  apiKeys?: ArtworkApiKeys;
+}): Promise<ArtworkEpisodePreview[]> {
+  const match = await resolveTmdbMatch({
+    mediaType: "tv",
+    title: input.title,
+    altTitle: input.altTitle,
+    yearHint: input.yearHint,
+    description: input.description,
+    externalIds: input.externalIds,
+    apiKeys: input.apiKeys,
+  });
+  const tvmazePreviewsPromise = fetchTvmazeEpisodePreviews(input);
+  if (!match?.id) return tvmazePreviewsPromise;
+
+  const season = await fetchTmdbJson<{
+    episodes?: Array<{
+      episode_number?: number;
+      name?: string;
+      overview?: string;
+      runtime?: number | null;
+      air_date?: string | null;
+      still_path?: string | null;
+    }>;
+  }>(`/tv/${match.id}/season/${input.seasonNumber}`, undefined, input.apiKeys);
+
+  const tmdbPreviews = (season?.episodes ?? []).flatMap((episode) => {
+    if (typeof episode.episode_number !== "number") return [];
+    return [{
+      episodeNumber: episode.episode_number,
+      title: episode.name?.trim() || null,
+      description: episode.overview?.trim() || null,
+      runtimeMinutes: typeof episode.runtime === "number" && episode.runtime > 0 ? Math.round(episode.runtime) : null,
+      airDate: episode.air_date?.trim() || null,
+      stillUrl: episode.still_path ? `https://image.tmdb.org/t/p/w780${episode.still_path}` : null,
+    }];
+  });
+  const tvmazeByEpisode = new Map((await tvmazePreviewsPromise).map((episode) => [episode.episodeNumber, episode]));
+  const merged = tmdbPreviews.map((episode) => {
+    const fallback = tvmazeByEpisode.get(episode.episodeNumber);
+    tvmazeByEpisode.delete(episode.episodeNumber);
+    return { ...fallback, ...episode, title: episode.title ?? fallback?.title ?? null, description: episode.description ?? fallback?.description ?? null, runtimeMinutes: episode.runtimeMinutes ?? fallback?.runtimeMinutes ?? null, airDate: episode.airDate ?? fallback?.airDate ?? null, stillUrl: episode.stillUrl ?? fallback?.stillUrl ?? null };
+  });
+  return [...merged, ...tvmazeByEpisode.values()].sort((a, b) => a.episodeNumber - b.episodeNumber);
+}
+
 function tmdbProfileUrl(path: string | null | undefined) {
   return path ? `https://image.tmdb.org/t/p/w185${path}` : null;
 }
@@ -1082,8 +1170,7 @@ export async function fetchTmdbPersonCredits(input: {
         (candidate.known_for_department?.toLowerCase() === "acting" ? 24 : 0) +
         Math.min(candidate.popularity ?? 0, 40),
     }))
-    .sort((left, right) => right.score - left.score)
-    [0]?.candidate;
+    .sort((left, right) => right.score - left.score)[0]?.candidate;
 
   if (!person?.id) {
     return [];

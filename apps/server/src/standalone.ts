@@ -1,12 +1,26 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { createServer as createNetServer, type Server as NetServer } from "node:net";
+import { Readable } from "node:stream";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
+import { hostname } from "node:os";
 import { createHttpHandlers, type JsonResponse, type RequestLike } from "./http-handlers";
 import { ControlPlaneReporter, readControlPlaneReporterOptionsFromEnv } from "./control-plane";
 import { readRelayMeshOptionsFromEnv, SecureRelayMesh } from "./mesh";
 import { setNodeEndpointUrl } from "../../../packages/node-client/src/index";
 import { getPrivateNodeConfigPathFromEnv, isPrivateSetupBootstrapEnabled, loadPrivateNodeConfigFromEnv, readNodeModeFromEnv } from "../../node/src/private-config";
+import { ManagedGatewayLink } from "./gateway-link";
+import { createV2RpcExecutor } from "./v2-rpc";
+import { NodeBackupManager } from "../../node/src/backups";
+import { SqliteNodeStorage } from "../../../packages/storage/src";
+import { V2_CAPABILITIES, type Capability } from "../../../packages/node-protocol/src";
+import { TransientDownloadScheduler } from "../../node/src/transient-downloads";
+import { tmpdir } from "node:os";
+import { AdaptiveResourceGovernor } from "../../node/src/resource-governor";
+import { RelayOnlyBulkTransferManager } from "./bulk-webrtc";
+import { renderSetupWizard } from "./setup-wizard";
 
 type RouteHandler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
 
@@ -49,22 +63,75 @@ function loadRootEnvLocal() {
 
 loadRootEnvLocal();
 
+function applyHeadlessWindowsDefaults() {
+  if (process.platform !== "win32") return;
+  const localData = process.env.LOCALAPPDATA || process.env.APPDATA;
+  if (!localData) return;
+  const root = resolve(localData, "SpilledCinema", "Server");
+  const data = resolve(root, "data");
+  const vault = resolve(root, "vault");
+  const temporary = resolve(root, "temp");
+  for (const path of [root, data, vault, temporary]) {
+    mkdirSync(path, { recursive: true });
+  }
+  process.env.SPILLED_NODE_DATABASE ||= resolve(data, "node.db");
+  process.env.SPILLED_SECRET_RECORDS_FILE ||= resolve(data, "secrets.json");
+  process.env.SPILLED_PRIVATE_CONFIG ||= resolve(data, "spilled.private.json");
+  process.env.SPILLED_VAULT_PATH ||= vault;
+  process.env.SPILLED_PUBLIC_TEMP_PATH ||= temporary;
+  process.env.SPILLED_OPEN_SETUP_BROWSER ||= "1";
+}
+
+applyHeadlessWindowsDefaults();
+
 const handlers = createHttpHandlers();
 const requestedNodeMode = readNodeModeFromEnv();
 const privateConfig = loadPrivateNodeConfigFromEnv(requestedNodeMode);
 const nodeMode = privateConfig && !process.env.SPILLED_NODE_MODE ? "full" : requestedNodeMode;
 const privateSetupEnabled = (isPrivateSetupBootstrapEnabled() || process.env.SPILLED_DISABLE_PRIVATE_SETUP !== "1") && !privateConfig;
 const port = Number.parseInt(process.env.PORT || "8787", 10);
-const host = process.env.HOST || "0.0.0.0";
+const host = process.env.HOST || "127.0.0.1";
 handlers.runtime.configure({
   mode: nodeMode,
   privateConfig,
   privateSetupEnabled,
   privateConfigPath: getPrivateNodeConfigPathFromEnv(),
+  v2PublicCapabilities: process.env.SPILLED_PUBLIC_CAPABILITIES === undefined ? undefined : new Set(
+    process.env.SPILLED_PUBLIC_CAPABILITIES
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry): entry is Capability => V2_CAPABILITIES.includes(entry as Capability)),
+  ),
+  passkeyOrigin: process.env.SPILLED_PASSKEY_ORIGIN?.trim(),
 });
 const mesh = new SecureRelayMesh(handlers.runtime, readRelayMeshOptionsFromEnv());
 const controlPlaneOptions = readControlPlaneReporterOptionsFromEnv();
 const controlPlane = controlPlaneOptions ? new ControlPlaneReporter(handlers.runtime, controlPlaneOptions) : null;
+const managedGatewayEnabled = process.env.SPILLED_DISABLE_MANAGED_GATEWAY !== "1";
+const controlPlaneUrl = (
+  process.env.SPILLED_CONTROL_PLANE_URL?.trim() ||
+  (managedGatewayEnabled ? "https://cheerful-lynx-4.convex.site/server" : "")
+).replace(/\/$/, "");
+const gatewayUrl = process.env.SPILLED_GATEWAY_URL?.trim() ||
+  (managedGatewayEnabled ? "https://spilled-node-gateway.4thsj85ywn.workers.dev" : "");
+const gatewayJwksUrl = process.env.SPILLED_CONTROL_PLANE_JWKS_URL?.trim() ||
+  (controlPlaneUrl ? `${controlPlaneUrl}/v2/jwks` : "");
+const publicTempRoot = resolve(process.env.SPILLED_PUBLIC_TEMP_PATH || tmpdir(), "spilled-public-jobs");
+const resourceGovernor = new AdaptiveResourceGovernor(publicTempRoot);
+const transientDownloads = new TransientDownloadScheduler(
+  publicTempRoot,
+  2,
+  async () => await resourceGovernor.decision("bulk"),
+);
+const bulkTransfers = new RelayOnlyBulkTransferManager(
+  async () => await resourceGovernor.decision("bulk"),
+);
+let gatewayLink: ManagedGatewayLink | null = null;
+let gatewayEnrollmentTimer: NodeJS.Timeout | null = null;
+let refreshManagedGatewayApplication: (() => Promise<void>) | null = null;
+const backupManager = handlers.runtime.storage instanceof SqliteNodeStorage && process.env.SPILLED_NODE_DATABASE
+  ? new NodeBackupManager(handlers.runtime.storage, resolve(process.env.SPILLED_NODE_DATABASE))
+  : null;
 let publicTunnel: { url: string; close: () => void } | null = null;
 let publicTunnelMonitor: NodeJS.Timeout | null = null;
 let restartingPublicTunnel: Promise<void> | null = null;
@@ -72,42 +139,12 @@ let publicTunnelFailureCount = 0;
 
 const PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_HEALTH_FAILURE_LIMIT || "3", 10);
 const PUBLIC_TUNNEL_START_TIMEOUT_MS = Number.parseInt(process.env.SPILLED_PUBLIC_TUNNEL_START_TIMEOUT_MS || "15000", 10);
-
-function withStartTimeout<T>(promise: Promise<T>, label: string) {
-  let timeout: NodeJS.Timeout | null = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new Error(`${label} did not return a tunnel URL within ${PUBLIC_TUNNEL_START_TIMEOUT_MS}ms`));
-    }, PUBLIC_TUNNEL_START_TIMEOUT_MS);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  });
-}
-
-function sanitizeTunnelSubdomain(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 63);
-}
-
-async function getPreferredTunnelSubdomain() {
-  const explicit = process.env.SPILLED_PUBLIC_TUNNEL_SUBDOMAIN?.trim();
-  if (explicit) {
-    return sanitizeTunnelSubdomain(explicit);
-  }
-
-  const record = await handlers.runtime.getNodeRecord();
-  return sanitizeTunnelSubdomain(`spilled-${record.nodeId.slice(0, 18)}`);
-}
+let nativePipeServer: NetServer | null = null;
 
 const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/status", handler: handlers.statusHandler },
+  { path: "/api/tmdb-to-imdb", handler: handlers.tmdbToImdbHandler },
+  { path: "/api/tmdb-search", handler: handlers.tmdbSearchHandler },
   { path: "/api/server", handler: handlers.controlPlaneProxyHandler },
   { path: "/api/import-svetserialu", handler: handlers.importSvetSerialuHandler },
   { path: "/api/svetserialu/auth/verify", handler: handlers.svetSerialuAuthVerifyHandler },
@@ -130,6 +167,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/artwork/refresh", handler: handlers.refreshArtworkHandler },
   { path: "/api/artwork/search", handler: handlers.searchArtworkHandler },
   { path: "/api/artwork/title-metadata", handler: handlers.titleMetadataArtworkHandler },
+  { path: "/api/artwork/episode-previews", handler: handlers.episodePreviewsArtworkHandler },
   { path: "/api/artwork/cast", handler: handlers.castArtworkHandler },
   { path: "/api/artwork/person-credits", handler: handlers.personCreditsArtworkHandler },
   { path: "/api/download-full/start", handler: handlers.startDownloadHandler },
@@ -192,10 +230,50 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/node/mesh/nodes", handler: handlers.meshNodesHandler },
 ];
 
-function applyCors(res: ServerResponse) {
-  res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
+const DEFAULT_DASHBOARD_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  "https://spilled.overload.studio",
+];
+
+function configuredDashboardOrigins() {
+  return new Set(
+    (process.env.CORS_ORIGIN?.split(",") ?? [
+      ...DEFAULT_DASHBOARD_ORIGINS,
+      `http://127.0.0.1:${port}`,
+      `http://localhost:${port}`,
+    ])
+      .map((origin) => origin.trim().replace(/\/$/, ""))
+      .filter(Boolean),
+  );
+}
+
+function applyCors(req: IncomingMessage, res: ServerResponse) {
+  const origin = req.headers.origin?.replace(/\/$/, "");
+  if (!origin) {
+    return true;
+  }
+  if (origin === "null" || !configuredDashboardOrigins().has(origin)) {
+    return false;
+  }
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,HEAD,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder, Range, If-None-Match, If-Modified-Since");
+  res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type");
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
+  return true;
+}
+
+function applyPermissiveCors(req: IncomingMessage, res: ServerResponse) {
+  const origin = req.headers.origin?.replace(/\/$/, "");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Spilled-Node, bypass-tunnel-reminder, Range, If-None-Match, If-Modified-Since");
+  res.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Disposition, Content-Type");
   res.setHeader("Access-Control-Allow-Private-Network", "true");
 }
 
@@ -212,12 +290,126 @@ function findHandler(url = "") {
   ))?.handler;
 }
 
+async function invokeNativeRoute(message: {
+  version?: number;
+  requestId?: string;
+  path?: string;
+  method?: string;
+  body?: unknown;
+}) {
+  if (message.version !== 2 || !message.requestId || !message.path?.startsWith("/")) {
+    throw new Error("Invalid native RPC envelope.");
+  }
+  const handler = findHandler(message.path);
+  if (!handler) throw new Error("Native RPC route was not found.");
+  const body = message.body === undefined ? "" : JSON.stringify(message.body);
+  const request = Readable.from(body ? [Buffer.from(body)] : []) as RequestLike;
+  request.method = message.method ?? "GET";
+  request.url = message.path;
+  request.headers = { "content-type": "application/json", origin: "spilled-native://desktop" };
+  return await new Promise<{ status: number; data: unknown }>((resolvePromise, rejectPromise) => {
+    const response: JsonResponse = {
+      statusCode: 200,
+      setHeader: () => undefined,
+      end: (chunk) => {
+        try {
+          const data = chunk ? JSON.parse(chunk) : null;
+          resolvePromise({ status: response.statusCode, data });
+        } catch (error) {
+          rejectPromise(error);
+        }
+      },
+    };
+    Promise.resolve(handler(request, response)).catch(rejectPromise);
+  });
+}
+
+function startNativePipe() {
+  const pipePath = process.env.SPILLED_NATIVE_PIPE?.trim();
+  if (!pipePath || process.platform !== "win32") return;
+  nativePipeServer = createNetServer((socket) => {
+    let buffered = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffered += chunk;
+      if (Buffer.byteLength(buffered) > 1024 * 1024) {
+        socket.destroy(new Error("Native RPC frame is too large."));
+        return;
+      }
+      const newline = buffered.indexOf("\n");
+      if (newline < 0) return;
+      const line = buffered.slice(0, newline);
+      buffered = "";
+      void Promise.resolve()
+        .then(() => invokeNativeRoute(JSON.parse(line)))
+        .then((result) => socket.end(`${JSON.stringify({ ok: true, ...result })}\n`))
+        .catch((error) => socket.end(`${JSON.stringify({
+          ok: false,
+          status: 500,
+          error: error instanceof Error ? error.message : "Native RPC failed.",
+        })}\n`));
+    });
+  });
+  nativePipeServer.listen(pipePath);
+}
+
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  applyCors(res);
+  const pathname = req.url?.split("?")[0];
+  const isBrowserFile = pathname === "/api/download-full/browser-file";
+  if (!isBrowserFile && !applyCors(req, res)) {
+    res.statusCode = 403;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Origin is not allowed." }));
+    return;
+  }
+  if (isBrowserFile) {
+    applyPermissiveCors(req, res);
+  }
 
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.end();
+    return;
+  }
+
+  if (pathname === "/setup" && req.method === "GET") {
+    const remote = req.socket.remoteAddress ?? "";
+    const loopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+    if (!loopback) {
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Initial setup is available only from this computer.");
+      return;
+    }
+    const setup = await handlers.runtime.getSetupCodeForTerminal();
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.end(renderSetupWizard({
+      setupCode: setup?.setupCode ?? "",
+      setupRequired: Boolean(setup?.setupCode),
+      suggestedNodeName: `${hostname() || "Home"} Server`,
+    }));
+    return;
+  }
+  if (pathname === "/v2/health/live" || pathname === "/v2/health/ready") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+  if (pathname === "/v2/protocol") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ protocolVersion: 2, transports: ["loopback-http"] }));
+    return;
+  }
+  if (pathname === "/v2/node/identity" && req.method === "GET") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Cache-Control", "no-store");
+    res.end(JSON.stringify(await handlers.runtime.getTransportIdentityRecord()));
     return;
   }
 
@@ -229,6 +421,9 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
   try {
     await handler(req as RequestLike, res as JsonResponse);
+    if (pathname === "/api/node/setup/complete" && res.statusCode >= 200 && res.statusCode < 300) {
+      void refreshManagedGatewayApplication?.();
+    }
   } catch (error) {
     res.statusCode = 500;
     res.setHeader("Content-Type", "application/json");
@@ -253,17 +448,53 @@ server.listen(port, host, () => {
     }
     console.log("");
     console.log("[spilledcinema-server] private node setup is waiting");
-    console.log("[spilledcinema-server] open: https://spilled.overload.studio/node/setup");
+    console.log(`[spilledcinema-server] open: http://127.0.0.1:${port}/setup`);
     console.log(`[spilledcinema-server] local node: http://127.0.0.1:${port}`);
     console.log(`[spilledcinema-server] setup code: ${setup.setupCode}`);
     console.log("[spilledcinema-server] this code expires in 15 minutes");
     console.log(`[spilledcinema-server] config will be written to: ${setup.configPath}`);
     console.log("");
+    if (process.platform === "win32" && process.env.SPILLED_OPEN_SETUP_BROWSER === "1") {
+      execFile("rundll32.exe", ["url.dll,FileProtocolHandler", `http://127.0.0.1:${port}/setup`], () => undefined);
+    }
   });
   void startServerServices();
 });
 
-async function startPublicTunnel() {
+function withStartTimeout<T>(promise: Promise<T>, label: string) {
+  let timeout: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} did not return a tunnel URL within ${PUBLIC_TUNNEL_START_TIMEOUT_MS}ms`));
+    }, PUBLIC_TUNNEL_START_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
+function sanitizeTunnelSubdomain(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 63);
+}
+
+async function getPreferredTunnelSubdomain() {
+  const explicit = process.env.SPILLED_PUBLIC_TUNNEL_SUBDOMAIN?.trim();
+  if (explicit) {
+    return sanitizeTunnelSubdomain(explicit);
+  }
+
+  const record = await handlers.runtime.getNodeRecord();
+  return sanitizeTunnelSubdomain(`spilled-${record.nodeId.slice(0, 18)}`);
+}
+
+async function startPublicTunnel(): Promise<{ url: string; close: () => void } | null> {
   if (process.env.SPILLED_NODE_ENDPOINT_URL || process.env.SPILLED_DISABLE_AUTO_TUNNEL === "1") {
     return null;
   }
@@ -326,8 +557,20 @@ async function startLocalTunnel() {
   };
 }
 
+function resolveCloudflaredCliPath() {
+  try {
+    const resolved = createRequire(import.meta.url).resolve("cloudflared/lib/cloudflared.js");
+    // Inside an Electron asar archive the native binary cannot be spawned
+    // directly; point at the unpacked copy electron-builder provides.
+    return resolved.replace(/\.asar([\\/]|$)/, ".asar.unpacked$1");
+  } catch {
+    // Fall back to the workspace layout used by the legacy dev scripts.
+    return resolve(process.cwd(), "..", "..", "node_modules", "cloudflared", "lib", "cloudflared.js");
+  }
+}
+
 async function startCloudflaredTunnel() {
-  const cloudflaredCliPath = resolve(process.cwd(), "..", "..", "node_modules", "cloudflared", "lib", "cloudflared.js");
+  const cloudflaredCliPath = resolveCloudflaredCliPath();
   const child = spawn(process.execPath, [cloudflaredCliPath, "tunnel", "--url", `http://127.0.0.1:${port}`, "--no-autoupdate"], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -457,9 +700,7 @@ async function restartPublicTunnel() {
         console.log(`[spilledcinema-server] setup URL: https://spilled.overload.studio/node/setup?node=${encodeURIComponent(nextTunnel.url)}`);
       }
     });
-    await controlPlane?.register().catch((error) => {
-      console.warn("[control-plane] register failed", error instanceof Error ? error.message : String(error));
-    });
+    void refreshManagedGatewayApplication?.();
   })().finally(() => {
     restartingPublicTunnel = null;
   });
@@ -469,6 +710,9 @@ async function restartPublicTunnel() {
 
 async function startServerServices() {
   console.log(`[spilledcinema-server] listening on http://${host}:${port}`);
+  await transientDownloads.initialize();
+  startNativePipe();
+  resourceGovernor.start();
   publicTunnel = await startPublicTunnel();
   if (publicTunnel) {
     handlers.runtime.setEndpointUrl(publicTunnel.url);
@@ -487,20 +731,123 @@ async function startServerServices() {
   }
 
   mesh.start();
-  if (publicTunnel || process.env.SPILLED_NODE_ENDPOINT_URL) {
+  backupManager?.start();
+  await startManagedGateway();
+  if (
+    process.env.SPILLED_ENABLE_LEGACY_CONTROL_PLANE === "1" &&
+    (publicTunnel || process.env.SPILLED_NODE_ENDPOINT_URL)
+  ) {
     controlPlane?.start();
   } else {
-    console.warn("[control-plane] not registering a local-only node");
+    console.warn("[control-plane] legacy public registration is disabled");
   }
   startPublicTunnelMonitor();
+}
+
+async function startManagedGateway() {
+  if (!gatewayUrl || !gatewayJwksUrl || !controlPlaneUrl) {
+    console.warn("[managed-gateway] disabled; the node remains local-only");
+    return;
+  }
+
+  const createLink = (enrollmentCredential: string) => {
+    if (gatewayLink) return;
+    gatewayLink = new ManagedGatewayLink({
+      gatewayUrl,
+      enrollmentCredential,
+      jwksUrl: gatewayJwksUrl,
+      runtime: handlers.runtime,
+      execute: createV2RpcExecutor(handlers, transientDownloads, handlers.runtime, bulkTransfers),
+      onReconnectStalled: () => {
+        console.log("[managed-gateway] reconnect stalled; refreshing enrollment application");
+        void refreshManagedGatewayApplication?.();
+      },
+    });
+    gatewayLink.start();
+  };
+
+  // Establish the link immediately with the persisted credential so the node
+  // stays reachable even if the control-plane apply is temporarily down.
+  const storedCredential = await handlers.runtime.storage.getProtectedSecret?.("gateway.enrollmentCredential");
+  if (storedCredential) {
+    createLink(storedCredential);
+    console.log("[managed-gateway] node link started with stored enrollment credential");
+  }
+
+  const applyOnce = async (forceReconnect = false) => {
+    const application = await handlers.runtime.createGatewayEnrollmentApplication({
+      enrollmentCredential: process.env.SPILLED_GATEWAY_ENROLLMENT?.trim() || undefined,
+    });
+    const response = await fetch(`${controlPlaneUrl}/v2/nodes/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(application),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      throw new Error(`application returned ${response.status}`);
+    }
+    createLink(application.enrollmentCredential);
+    gatewayLink?.setEnrollmentCredential(application.enrollmentCredential);
+    if (forceReconnect || !gatewayLink?.getStatus().connected) {
+      gatewayLink?.reconnectNow("Enrollment accepted.");
+    }
+    console.log("[managed-gateway] node application accepted; verification is pending");
+  };
+
+  let refreshInFlight: Promise<void> | null = null;
+  const apply = (forceReconnect = false) => {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = applyOnce(forceReconnect)
+      .catch((error) => {
+        console.warn(`[managed-gateway] enrollment refresh failed; retrying shortly (${error instanceof Error ? error.message : "unknown error"})`);
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+    return refreshInFlight;
+  };
+  refreshManagedGatewayApplication = () => apply(true);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await applyOnce();
+      break;
+    } catch (error) {
+      if (attempt < 2) {
+        const delay = 2_000 * 2 ** attempt;
+        console.warn(`[managed-gateway] apply attempt ${attempt + 1} failed; retrying in ${delay / 1000}s (${error instanceof Error ? error.message : "unknown error"})`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        console.warn(`[managed-gateway] all apply attempts failed; node link continues with stored credential (${error instanceof Error ? error.message : "unknown error"})`);
+      }
+    }
+  }
+
+  let lastPeriodicEnrollmentAt = Date.now();
+  gatewayEnrollmentTimer = setInterval(() => {
+    const disconnected = !gatewayLink?.getStatus().connected;
+    const periodicRefreshDue = Date.now() - lastPeriodicEnrollmentAt >= 30 * 60_000;
+    if (!disconnected && !periodicRefreshDue) return;
+    if (periodicRefreshDue) lastPeriodicEnrollmentAt = Date.now();
+    void apply(disconnected);
+  }, 30_000);
+  gatewayEnrollmentTimer.unref?.();
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     mesh.stop();
+    backupManager?.stop();
+    gatewayLink?.stop();
+    if (gatewayEnrollmentTimer) clearInterval(gatewayEnrollmentTimer);
+    refreshManagedGatewayApplication = null;
+    resourceGovernor.stop();
+    bulkTransfers.close();
     controlPlane?.stop();
     stopPublicTunnelMonitor();
     publicTunnel?.close();
+    nativePipeServer?.close();
     server.close(() => process.exit(0));
   });
 }

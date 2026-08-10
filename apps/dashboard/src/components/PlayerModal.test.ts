@@ -4,11 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("universal playback modal policy", () => {
-  it("does not render provider iframes as playback", () => {
+  it("never falls back to a provider iframe or raw provider stream", () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
     expect(source).not.toContain("<iframe");
+    expect(source).not.toContain("activeProviderFrameUrl");
+    expect(source).not.toContain("providerInteractionUnlocked");
+    expect(source).not.toContain("Open provider page");
+    expect(source).not.toContain("canRetryRawPlaybackUrl");
     expect(source).not.toContain('playback?.streamType === "embed"');
-    expect(source).not.toContain("sandbox=");
   });
 
   it("resolves remote players automatically into the universal player", () => {
@@ -24,5 +27,11 @@ describe("universal playback modal policy", () => {
     expect(source).toContain("getLibraryVaultFileObjectUrl");
     expect(source).toContain("readCachedPlayerUrl");
     expect(source).toContain("writeCachedPlayerUrl");
+  });
+
+  it("pins the player to the mobile viewport and respects the safe-area inset", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
+    expect(source).toContain("fixed inset-0 z-[120] h-[100dvh]");
+    expect(source).toContain("env(safe-area-inset-top)");
   });
 });

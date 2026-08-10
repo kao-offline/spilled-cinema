@@ -1,5 +1,7 @@
 import type { LibraryEpisode } from "./types";
 
+const LANGUAGE_JUNK_RE = /\s*[-–—]\s*(?:cz(?:ech)?|sk(?: Slovak)?|sloven(?:čina|cina)?|tit(?:ulky)?|dab(?:ing)?|dub(?:bed)?|audio|sub(?:titles?)?|english|en(?:glish)?|(?:audio|sub(?:titles?)?)\s+(?:cz|sk|en|de|fr|es|it|pt|pl|hu|ro|bg|hr|sl|sr|uk|ru|tr|ar|zh|ja|ko|hi|th|vi|id|ms|fa|he|sv|no|da|fi|nl|cs)\b|(?:cz|sk|en|de|fr|es|it|pt|pl|hu|ro|bg|hr|sl|sr|uk|ru|tr|ar|zh|ja|ko|hi|th|vi|id|ms|fa|he|sv|no|da|fi|nl|cs)\s+(?:audio|sub(?:titles?)?)\b)\s*$/i;
+
 export function formatEpisodeTitleParts(input: {
   showTitle?: string | null;
   episodeTitle?: string | null;
@@ -23,7 +25,7 @@ export function formatEpisodeTitleParts(input: {
   }
 
   title = title
-    .replace(/\s+\b(?:tit(?:ulky)?|dab|dabing|dubbed)\b(?:\s+\b(?:tit(?:ulky)?|dab|dabing|dubbed)\b)*$/i, "")
+    .replace(LANGUAGE_JUNK_RE, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 

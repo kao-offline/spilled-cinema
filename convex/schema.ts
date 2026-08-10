@@ -67,6 +67,15 @@ const integrationSecretStatusValidator = v.union(
   v.literal("testing"),
 );
 
+const nodeVerificationStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("verified"),
+  v.literal("degraded"),
+  v.literal("quarantined"),
+  v.literal("disabled"),
+  v.literal("legacy-unverified"),
+);
+
 export default defineSchema({
   nodes: defineTable({
     nodeId: v.string(),
@@ -79,6 +88,9 @@ export default defineSchema({
     publishedAt: v.number(),
     ttlMs: v.number(),
     signature: v.string(),
+    verificationStatus: v.optional(nodeVerificationStatusValidator),
+    verifiedAt: v.optional(v.number()),
+    quarantinedAt: v.optional(v.number()),
     registeredAt: v.number(),
     updatedAt: v.number(),
   }).index("by_node_id", ["nodeId"]),
@@ -154,4 +166,123 @@ export default defineSchema({
     count: v.number(),
     resetAt: v.number(),
   }).index("by_integration_id_and_bucket", ["integrationId", "bucket"]),
+  nodeIdentities: defineTable({
+    nodeId: v.string(),
+    ed25519PublicKey: v.string(),
+    x25519PublicKey: v.string(),
+    transportKeySignature: v.string(),
+    installIdHash: v.string(),
+    protocolVersion: v.number(),
+    keyVersion: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_node_id", ["nodeId"]),
+  nodeRegistrations: defineTable({
+    nodeId: v.string(),
+    status: nodeVerificationStatusValidator,
+    enrollmentCredentialHash: v.optional(v.string()),
+    advertisedCapabilities: v.optional(v.array(v.string())),
+    endpointUrl: v.optional(v.string()),
+    gatewayConnectionId: v.optional(v.string()),
+    region: v.optional(v.string()),
+    registeredAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_node_id", ["nodeId"])
+    .index("by_status", ["status"]),
+  nodeHeartbeatsV2: defineTable({
+    nodeId: v.string(),
+    gatewayAttestedAt: v.number(),
+    expiresAt: v.number(),
+    capacityClass: v.string(),
+    region: v.optional(v.string()),
+    protocolVersion: v.number(),
+  })
+    .index("by_node_id", ["nodeId"])
+    .index("by_expires_at", ["expiresAt"]),
+  nodeCapabilityHealth: defineTable({
+    nodeId: v.string(),
+    capability: v.string(),
+    status: nodeVerificationStatusValidator,
+    successCount: v.number(),
+    failureCount: v.number(),
+    medianLatencyMs: v.optional(v.number()),
+    p95LatencyMs: v.optional(v.number()),
+    lastVerifiedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_node_and_capability", ["nodeId", "capability"])
+    .index("by_capability_and_status", ["capability", "status"]),
+  nodeAttestations: defineTable({
+    attestationId: v.string(),
+    nodeId: v.string(),
+    kind: v.string(),
+    challengeHash: v.string(),
+    gatewaySignature: v.string(),
+    status: v.union(v.literal("pending"), v.literal("passed"), v.literal("failed")),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_attestation_id", ["attestationId"])
+    .index("by_node_id", ["nodeId"]),
+  nodeRevocations: defineTable({
+    nodeId: v.string(),
+    keyVersion: v.optional(v.number()),
+    reason: v.string(),
+    revokedAt: v.number(),
+    revokedBy: v.string(),
+  }).index("by_node_id", ["nodeId"]),
+  spillshareAvailabilityV2: defineTable({
+    contentId: v.string(),
+    nodeId: v.string(),
+    renditionClass: v.string(),
+    verifiedAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_content_id", ["contentId"])
+    .index("by_content_id_and_node_id", ["contentId", "nodeId"])
+    .index("by_node_id", ["nodeId"])
+    .index("by_expires_at", ["expiresAt"]),
+  capabilityTicketAudit: defineTable({
+    ticketId: v.string(),
+    nodeId: v.string(),
+    principalKind: v.string(),
+    capability: v.string(),
+    action: v.string(),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    outcome: v.string(),
+  })
+    .index("by_ticket_id", ["ticketId"])
+    .index("by_node_id", ["nodeId"])
+    .index("by_expires_at", ["expiresAt"]),
+  providerReleases: defineTable({
+    providerId: v.string(),
+    version: v.string(),
+    artifactSha256: v.string(),
+    artifactUrl: v.string(),
+    publisherKeyId: v.string(),
+    signature: v.string(),
+    status: v.union(v.literal("active"), v.literal("revoked"), v.literal("disabled")),
+    publishedAt: v.number(),
+  })
+    .index("by_provider_id", ["providerId"])
+    .index("by_provider_and_version", ["providerId", "version"]),
+  operatorSecurityEvents: defineTable({
+    actorTokenIdentifier: v.string(),
+    action: v.string(),
+    target: v.optional(v.string()),
+    success: v.boolean(),
+    createdAt: v.number(),
+    details: v.optional(v.string()),
+  })
+    .index("by_actor", ["actorTokenIdentifier"])
+    .index("by_created_at", ["createdAt"]),
+  operatorRoles: defineTable({
+    tokenIdentifier: v.string(),
+    role: v.union(v.literal("operator"), v.literal("security-admin")),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_token_identifier", ["tokenIdentifier"]),
 });

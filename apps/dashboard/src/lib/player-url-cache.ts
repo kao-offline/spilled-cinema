@@ -12,25 +12,62 @@ type CachedPlayerFailure = {
   cachedAt: number;
 };
 
+const BROWSER_FILE_PATH = "/api/download-full/browser-file";
+
+function findBrowserFileSegment(url: string) {
+  const searchIndex = url.indexOf("?");
+  const pathPart = searchIndex === -1 ? url : url.slice(0, searchIndex);
+  const markerIndex = pathPart.indexOf(BROWSER_FILE_PATH);
+  if (markerIndex === -1) {
+    return null;
+  }
+  return {
+    search: searchIndex === -1 ? "" : url.slice(searchIndex),
+  };
+}
+
+export function normalizePlaybackUrlForClient(url: string) {
+  if (typeof window === "undefined") {
+    return url;
+  }
+
+  const segment = findBrowserFileSegment(url);
+  if (!segment) {
+    return url;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url, window.location.origin);
+  } catch {
+    return url;
+  }
+
+  const isCanonicalPath = parsed.pathname === BROWSER_FILE_PATH;
+  if (isCanonicalPath && parsed.origin === window.location.origin) {
+    return url;
+  }
+
+  const localRuntimeHost = ["127.0.0.1", "localhost"].includes(parsed.hostname);
+  if (isCanonicalPath && !localRuntimeHost) {
+    // A reachable node endpoint (e.g. a public fetch tunnel) proxies media from
+    // the source IP and rewrites the playlist to its own origin, so it works on
+    // every device, including Apple mobile. Keep it as-is.
+    return url;
+  }
+
+  // Local-runtime hosts (127.0.0.1/localhost) are never reachable from a hosted
+  // page, and stale node-id-prefixed cache entries are not resolvable; route
+  // those through the same-origin dashboard proxy.
+  return `${window.location.origin}${BROWSER_FILE_PATH}${segment.search}`;
+}
+
 function normalizeRuntimePlaybackUrl(kind: string, url: string) {
   if (kind !== "playback" || typeof window === "undefined") {
     return url;
   }
 
-  try {
-    const parsed = new URL(url, window.location.origin);
-    if (
-      parsed.pathname === "/api/download-full/browser-file" &&
-      ["127.0.0.1", "localhost"].includes(parsed.hostname) &&
-      parsed.origin !== window.location.origin
-    ) {
-      return `${window.location.origin}${parsed.pathname}${parsed.search}`;
-    }
-  } catch {
-    return url;
-  }
-
-  return url;
+  return normalizePlaybackUrlForClient(url);
 }
 
 function cacheKey(kind: string, key: string) {
@@ -112,6 +149,14 @@ export function writeCachedPlayerFailure(kind: string, key: string, error: strin
       error,
       cachedAt: Date.now(),
     } satisfies CachedPlayerFailure));
+  } catch {
+    // Cache failure should not block playback.
+  }
+}
+
+export function removeCachedPlayerFailure(kind: string, key: string) {
+  try {
+    localStorage.removeItem(cacheKey(`${kind}:failure`, key));
   } catch {
     // Cache failure should not block playback.
   }

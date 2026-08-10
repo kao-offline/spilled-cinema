@@ -4,7 +4,7 @@ import type { ExplorePersonSuggestion } from "./discovery-client";
 import { hasRequiredSearchTokenCoverage, scoreSearchCandidate, sortUnifiedSearchResults } from "./search-ranking";
 import { getShowArtwork, getShowMetadata } from "./media-library";
 
-export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown";
+export type RemoteAvailability = "available" | "checking" | "unavailable" | "unknown" | "verifying";
 
 export type RemoteCommandResult = {
   title: string;
@@ -256,11 +256,34 @@ export function buildRemoteCommandResults(input: {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const group = groups.find((entry) => entry.items.some((item) => sameRemoteIdentity(item, result)));
-    if (group) {
-      group.items.push(result);
-    } else {
+    // Merge transitively: a result may match items spread across several
+    // groups (e.g. Bombuj serial "Game of Thrones" + VidKing "Hra o trůny"
+    // only share a title through SvetSerialu's alternate name). Collapse all
+    // matching groups into one before adding the result.
+    const matchingIndexes = groups
+      .map((entry, index) => (entry.items.some((item) => sameRemoteIdentity(item, result)) ? index : -1))
+      .filter((index) => index >= 0);
+
+    if (matchingIndexes.length === 0) {
       groups.push({ primary: result, items: [result] });
+      continue;
+    }
+
+    const targetIndex = matchingIndexes[0];
+    const target = groups[targetIndex];
+    target.items.push(result);
+    for (const index of matchingIndexes.slice(1).reverse()) {
+      const extra = groups[index];
+      for (const item of extra.items) {
+        if (!target.items.includes(item)) {
+          target.items.push(item);
+        }
+      }
+      groups.splice(index, 1);
+    }
+    if (targetIndex !== 0) {
+      const moved = groups.splice(targetIndex, 1)[0];
+      groups.unshift(moved);
     }
   }
 
@@ -296,11 +319,13 @@ export function buildRemoteCommandResults(input: {
         ? "available"
         : sourceMatches.some((source) => source.availability === "checking")
           ? "checking"
-          : sourceMatches.every((source) => source.availability === "unavailable")
-            ? "unavailable"
-            : sourceMatches.some((source) => source.availability === "unknown")
-              ? "unknown"
-              : primary.availability,
+          : sourceMatches.some((source) => source.availability === "verifying")
+            ? "verifying"
+            : sourceMatches.every((source) => source.availability === "unavailable")
+              ? "unavailable"
+              : sourceMatches.some((source) => source.availability === "unknown")
+                ? "unknown"
+                : primary.availability,
       availabilityReason: primary.availabilityReason ?? sourceMatches.find((source) => source.availabilityReason)?.availabilityReason ?? null,
       saved: Boolean(savedShow),
       savedShowSlug: savedShow?.slug,

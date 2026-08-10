@@ -1,3 +1,9 @@
+import {
+  isLocalhostProbeOnCooldown,
+  markLocalhostProbeAttempted,
+  markLocalhostProbeFailure,
+} from "./localhost-probe-cache";
+
 export type LocalRuntimeTransport = "native" | "extension" | "direct" | "node" | "fetch-server" | "hosted" | null;
 
 export type LocalRuntimeStatus = {
@@ -44,7 +50,10 @@ function nextRequestId() {
 }
 
 function canUseDirectLocalFetch() {
-  return window.location.protocol === "http:" || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  // Browsers treat 127.0.0.1/localhost as potentially trustworthy, so even an
+  // https dashboard may reach the user's local node directly. If no node is
+  // running the connection is refused quickly and we fall through.
+  return true;
 }
 
 function requestExtension(message: {
@@ -86,7 +95,11 @@ async function probeDirectLocalRuntime() {
   if (!canUseDirectLocalFetch()) {
     return null;
   }
+  if (isLocalhostProbeOnCooldown()) {
+    return null;
+  }
 
+  markLocalhostProbeAttempted();
   const origins = ["http://127.0.0.1:8787", "http://localhost:8787"];
   for (const origin of origins) {
     try {
@@ -105,6 +118,7 @@ async function probeDirectLocalRuntime() {
     }
   }
 
+  markLocalhostProbeFailure();
   return null;
 }
 

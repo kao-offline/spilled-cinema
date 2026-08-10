@@ -11,11 +11,31 @@ import {
   scoreSearchCandidate,
 } from "../lib/search-ranking";
 import { searchSvetSerialuCatalog } from "./svetserialu-catalog";
-import { searchSvetSerialuAlgolia } from "./svetserialu-algolia";
+import {
+  isSvetSerialuAlgoliaAvailable,
+  saveSvetSerialuRecords,
+  searchSvetSerialuAlgolia,
+  type SvetSerialuIndexRecord,
+} from "./svetserialu-algolia";
 
 const BASE_URLS: string[] = ["https://svetserialu.to", "https://svetserialu.io", "https://svetserialov.to"];
 const BASE_URL = BASE_URLS[0];
 const FETCH_PROXY_TEMPLATE = process.env.IMPORT_FETCH_PROXY_TEMPLATE || "";
+const RESOLVER_PROFILE = process.env.SPILLED_RESOLVER_PROFILE?.trim().toLowerCase() === "baseline"
+  ? "baseline"
+  : "fast";
+const FAST_EPISODE_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(process.env.SPILLED_IMPORT_EPISODE_CONCURRENCY ?? "24", 10) || 24,
+);
+const FAST_SOURCE_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(process.env.SPILLED_IMPORT_SOURCE_CONCURRENCY ?? "64", 10) || 64,
+);
+const FAST_IMPORT_DEADLINE_MS = Math.max(
+  1_000,
+  Number.parseInt(process.env.SPILLED_IMPORT_DEADLINE_MS ?? "8500", 10) || 8500,
+);
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
@@ -53,6 +73,7 @@ type SvetSerialuSession = {
 };
 
 const svetSerialuSessions = new Map<string, SvetSerialuSession>();
+const svetSerialuSessionInflight = new Map<string, Promise<SvetSerialuSession>>();
 
 function decodeHtml(value: string) {
   return value
@@ -71,6 +92,24 @@ function stripTags(value: string) {
 function absoluteUrl(value: string, base = BASE_URL) {
   try {
     return new URL(value, base).toString();
+  } catch {
+    return value;
+  }
+}
+
+function normalizeSvetSubtitleUrl(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    const primary = new URL(BASE_URL);
+    if (parsed.hostname === primary.hostname || !/^svetserial/.test(parsed.hostname)) {
+      return parsed.toString();
+    }
+    parsed.hostname = primary.hostname;
+    parsed.port = primary.port;
+    return parsed.toString();
   } catch {
     return value;
   }
@@ -154,7 +193,11 @@ function isSvetSerialuLoginPage(html: string) {
   return /\/user\/login/i.test(html) || /class="login-user"/i.test(html) || /name="user_pass"/i.test(html);
 }
 
-async function loginSvetSerialu(credentials: { username: string; password: string }, baseUrl: string) {
+async function loginSvetSerialu(
+  credentials: { username: string; password: string },
+  baseUrl: string,
+  signal?: AbortSignal,
+) {
   const cookies = new Map<string, string>();
   const loginPage = await fetch(`${baseUrl}/user/login`, {
     headers: {
@@ -163,6 +206,7 @@ async function loginSvetSerialu(credentials: { username: string; password: strin
       "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
       Referer: `${baseUrl}/login`,
     },
+    signal,
   }).catch(() => null);
 
   if (loginPage) {
@@ -189,6 +233,7 @@ async function loginSvetSerialu(credentials: { username: string; password: strin
     },
     body,
     redirect: "follow",
+    signal,
   });
 
   mergeSetCookies(cookies, getSetCookieHeaders(response.headers));
@@ -213,13 +258,24 @@ async function loginSvetSerialu(credentials: { username: string; password: strin
   return session;
 }
 
-async function getSvetSerialuSession(credentials: { username: string; password: string }, baseUrl: string, force = false) {
+async function getSvetSerialuSession(
+  credentials: { username: string; password: string },
+  baseUrl: string,
+  force = false,
+  signal?: AbortSignal,
+) {
   const key = getSessionKey(credentials);
   const existing = svetSerialuSessions.get(key);
   if (!force && existing && existing.expiresAt > Date.now()) {
     return existing;
   }
-  return loginSvetSerialu(credentials, baseUrl);
+  const inflightKey = `${key}:${baseUrl}`;
+  const pending = svetSerialuSessionInflight.get(inflightKey);
+  if (pending) return pending;
+  const login = loginSvetSerialu(credentials, baseUrl, signal)
+    .finally(() => svetSerialuSessionInflight.delete(inflightKey));
+  svetSerialuSessionInflight.set(inflightKey, login);
+  return login;
 }
 
 async function fetchTextViaProxy(
@@ -227,6 +283,7 @@ async function fetchTextViaProxy(
   referer: string | undefined,
   baseUrl: string,
   session?: SvetSerialuSession | null,
+  signal?: AbortSignal,
 ) {
   const proxyUrl = buildProxyUrl(targetUrl);
   if (!proxyUrl) {
@@ -243,6 +300,7 @@ async function fetchTextViaProxy(
       ...(session?.cookies.size ? { "X-Target-Cookie": buildCookieHeader(session.cookies) } : {}),
     },
     redirect: "follow",
+    signal,
   });
 
   mergeSetCookies(session?.cookies ?? new Map(), getSetCookieHeaders(response.headers));
@@ -269,7 +327,12 @@ async function fetchTextViaProxy(
   return response.text();
 }
 
-async function fetchText(url: string, referer?: string, credentials?: SvetSerialuCredentials | null) {
+async function fetchText(
+  url: string,
+  referer?: string,
+  credentials?: SvetSerialuCredentials | null,
+  signal?: AbortSignal,
+) {
   const attempts: string[] = [];
   const normalizedCredentials = normalizeSvetSerialuCredentials(credentials);
 
@@ -278,7 +341,7 @@ async function fetchText(url: string, referer?: string, credentials?: SvetSerial
     const targetReferer = referer
       ? withSvetSerialuBaseUrl(referer, baseUrl)
       : baseUrl;
-    const session = normalizedCredentials ? await getSvetSerialuSession(normalizedCredentials, baseUrl) : null;
+    const session = normalizedCredentials ? await getSvetSerialuSession(normalizedCredentials, baseUrl, false, signal) : null;
 
     console.log(`[svetserialu:fetch] GET ${targetUrl}`);
     const response = await fetch(targetUrl, {
@@ -301,6 +364,7 @@ async function fetchText(url: string, referer?: string, credentials?: SvetSerial
         ...(session?.cookies.size ? { Cookie: buildCookieHeader(session.cookies) } : {}),
       },
       redirect: "follow",
+      signal,
     });
 
     console.log(`[svetserialu:fetch] ${response.status} ${response.statusText} ${targetUrl}`);
@@ -312,7 +376,7 @@ async function fetchText(url: string, referer?: string, credentials?: SvetSerial
           throw new Error("SvetSerialu now requires login. Add your SvetSerialu username and password in Settings > Sources.");
         }
 
-        const refreshedSession = await getSvetSerialuSession(normalizedCredentials, baseUrl, true);
+        const refreshedSession = await getSvetSerialuSession(normalizedCredentials, baseUrl, true, signal);
         const retry = await fetch(targetUrl, {
           headers: {
             "User-Agent": USER_AGENT,
@@ -322,6 +386,7 @@ async function fetchText(url: string, referer?: string, credentials?: SvetSerial
             Cookie: buildCookieHeader(refreshedSession.cookies),
           },
           redirect: "follow",
+          signal,
         });
         if (retry.ok) {
           mergeSetCookies(refreshedSession.cookies, getSetCookieHeaders(retry.headers));
@@ -339,7 +404,7 @@ async function fetchText(url: string, referer?: string, credentials?: SvetSerial
     attempts.push(`${baseUrl}: ${response.status} ${response.statusText}`);
     if ((response.status === 403 || response.status === 503) && FETCH_PROXY_TEMPLATE) {
       try {
-        const proxiedHtml = await fetchTextViaProxy(targetUrl, targetReferer, baseUrl, session);
+        const proxiedHtml = await fetchTextViaProxy(targetUrl, targetReferer, baseUrl, session, signal);
         if (proxiedHtml && !isSvetSerialuLoginPage(proxiedHtml)) {
           return proxiedHtml;
         }
@@ -512,7 +577,12 @@ function normalizeSourceLanguageLabel(rawLabel: string) {
   return detectLanguage(value) ?? value;
 }
 
-async function extractPlayers(episodeHtml: string, episodeUrl: string, credentials?: SvetSerialuCredentials | null) {
+async function extractPlayers(
+  episodeHtml: string,
+  episodeUrl: string,
+  credentials?: SvetSerialuCredentials | null,
+  signal?: AbortSignal,
+) {
   const players: { provider: string; sourcePageUrl: string; language?: string }[] = [];
   const linkPattern = /<a([^>]*\bclass="[^"]*\bsource_link\b[^"]*"[^>]*)>([\s\S]*?)<\/a>/gi;
 
@@ -567,7 +637,7 @@ async function extractPlayers(episodeHtml: string, episodeUrl: string, credentia
     const before = players.length;
     if (dataIframeUrl) {
       try {
-        const loadedList = await fetchText(absoluteUrl(dataIframeUrl, episodeUrl), episodeUrl, credentials);
+        const loadedList = await fetchText(absoluteUrl(dataIframeUrl, episodeUrl), episodeUrl, credentials, signal);
         extractFromBlock(loadedList, language);
       } catch {
         // fall through to any inline content if the AJAX list cannot be loaded
@@ -594,7 +664,7 @@ function resolvePlayerHtml(playerHtml: string, sourcePageUrl: string) {
       let subtitlesUrl: string | undefined;
 
       try {
-        subtitlesUrl = new URL(embedUrl).searchParams.get("sub.info") ?? undefined;
+        subtitlesUrl = normalizeSvetSubtitleUrl(new URL(embedUrl).searchParams.get("sub.info") ?? undefined) ?? undefined;
       } catch {
         subtitlesUrl = undefined;
       }
@@ -628,10 +698,11 @@ async function resolvePlayers(
   players: { provider: string; sourcePageUrl: string; language?: string }[],
   episodeUrl: string,
   credentials?: SvetSerialuCredentials | null,
+  signal?: AbortSignal,
 ) {
   const resolved = await mapWithConcurrency(players, 4, async (player) => {
     try {
-      const html = await fetchText(player.sourcePageUrl, episodeUrl, credentials);
+      const html = await fetchText(player.sourcePageUrl, episodeUrl, credentials, signal);
       const result = resolvePlayerHtml(html, player.sourcePageUrl);
       if (!result?.embedUrl) {
         return null;
@@ -652,15 +723,30 @@ async function resolvePlayers(
   return resolved.filter(Boolean) as ParsedPlayer[];
 }
 
-function buildEpisodeTitle(showTitle: string, episode: ParsedEpisode) {
-  const parts = [showTitle];
-  if (episode.episodeCode) {
-    parts.push(episode.episodeCode.toUpperCase());
+async function resolvePlayer(
+  player: { provider: string; sourcePageUrl: string; language?: string },
+  episodeUrl: string,
+  credentials?: SvetSerialuCredentials | null,
+  signal?: AbortSignal,
+): Promise<ParsedPlayer | null> {
+  try {
+    const html = await fetchText(player.sourcePageUrl, episodeUrl, credentials, signal);
+    const result = resolvePlayerHtml(html, player.sourcePageUrl);
+    if (!result?.embedUrl) return null;
+    return {
+      provider: player.provider,
+      sourcePageUrl: player.sourcePageUrl,
+      embedUrl: result.embedUrl,
+      subtitlesUrl: result.subtitlesUrl,
+      language: player.language,
+    };
+  } catch {
+    return null;
   }
-  if (episode.episodeTitle) {
-    parts.push(episode.episodeTitle);
-  }
-  return parts.join(" - ");
+}
+
+function buildEpisodeTitle(_showTitle: string, episode: ParsedEpisode) {
+  return episode.episodeTitle || null;
 }
 
 // Keep legacy deep-scrape helpers available for quick rollback/debugging.
@@ -713,8 +799,14 @@ function parseYearHint(value: string | null | undefined) {
 
 export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSerialuCredentials | null): Promise<ImportedShow> {
   console.log(`[svetserialu] import start slug=${slug}`);
+  const importController = RESOLVER_PROFILE === "fast" ? new AbortController() : null;
+  const importDeadline = importController
+    ? setTimeout(() => importController.abort(new Error(`Series import exceeded ${FAST_IMPORT_DEADLINE_MS}ms.`)), FAST_IMPORT_DEADLINE_MS)
+    : null;
+  importDeadline?.unref?.();
+  const importSignal = importController?.signal;
   const showUrl = `${BASE_URL}/serial/${slug}`;
-  const showHtml = await fetchText(showUrl, undefined, credentials);
+  const showHtml = await fetchText(showUrl, undefined, credentials, importSignal);
   console.log(`[svetserialu] show html length=${showHtml.length}`);
 
   const title = stripTags(matchOne(showHtml, /<h1 class="nunito">([\s\S]*?)<\/h1>/i) ?? slug);
@@ -735,8 +827,23 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     throw new Error(`Could not find a first episode link for show "${slug}".`);
   }
 
+  // Artwork is independent from provider episode scraping. Settling the
+  // promise immediately keeps a later import failure from creating an
+  // unhandled rejection while still overlapping the expensive network work.
+  const artworkPromise = enrichArtwork({
+    mediaType: "tv",
+    title,
+    altTitle: altTitle || null,
+    yearHint: parseYearHint(years),
+    description: description || null,
+    currentPosterUrl: posterPath ? absoluteUrl(posterPath, BASE_URL) : null,
+  }).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+
   const firstEpisodeUrl = absoluteUrl(firstEpisodePath, BASE_URL);
-  const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl, credentials);
+  const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl, credentials, importSignal);
   const tvShowId = matchOne(firstEpisodeHtml, /\/episodes-list\?tvShowId=(\d+)/i);
 
   const firstSeason = Number.parseInt(firstEpisodeUrl.match(/\/s(\d+)e\d+$/i)?.[1] ?? "1", 10);
@@ -748,6 +855,7 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
       `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${firstSeason}&episode=1`,
       firstEpisodeUrl,
       credentials,
+      importSignal,
     );
     console.log(`[svetserialu] first season list length=${firstSeasonListHtml.length} tvShowId=${tvShowId}`);
 
@@ -760,6 +868,7 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
               `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${seasonNumber}&episode=1`,
               showUrl,
               credentials,
+              importSignal,
             );
 
       console.log(`[svetserialu] season=${seasonNumber} list length=${html.length}`);
@@ -773,7 +882,7 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
 
     availableSeasons = accordionSeasons.map((season) => season.seasonNumber);
     seasonLists = await mapWithConcurrency(accordionSeasons, 4, async (season) => {
-      const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl, credentials);
+      const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl, credentials, importSignal);
       console.log(`[svetserialu] season=${season.seasonNumber} accordion=${season.accordionId} list length=${html.length}`);
       return getEpisodesFromList(html, season.seasonNumber);
     });
@@ -785,28 +894,14 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     throw new Error(`No episodes found for show "${slug}".`);
   }
 
-  const episodeHtmlCache = new Map<string, string>([[firstEpisodeUrl, firstEpisodeHtml]]);
   const importedAt = Date.now();
-  const resolvedEpisodes = await mapWithConcurrency(parsedEpisodes, 3, async (episode) => {
-    let episodePlayers: LibraryEpisode["players"] = [];
-    try {
-      const episodeHtml = episodeHtmlCache.get(episode.episodeUrl) ??
-        await fetchText(episode.episodeUrl, showUrl, credentials);
-      episodeHtmlCache.set(episode.episodeUrl, episodeHtml);
-      const sourcePlayers = await extractPlayers(episodeHtml, episode.episodeUrl, credentials);
-      const resolvedPlayers = await resolvePlayers(sourcePlayers, episode.episodeUrl, credentials);
-      episodePlayers = toEpisodePlayers(resolvedPlayers);
-    } catch (error) {
-      console.warn("[svetserialu] failed to resolve episode players", {
-        episodeUrl: episode.episodeUrl,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
+  const createResolvedEpisode = (
+    episode: ParsedEpisode,
+    episodePlayers: LibraryEpisode["players"],
+  ) => {
     const players = episodePlayers.length > 0
       ? episodePlayers
       : [buildSvetSerialuFallbackPlayer(episode.episodeUrl)];
-
     return {
       id: createEpisodeId(slug, episode),
       showSlug: slug,
@@ -821,7 +916,83 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
       selectedPlayerAlias: players[0].alias,
       importedAt,
     } satisfies LibraryEpisode;
-  });
+  };
+
+  const resolveBaselineEpisodes = async () => {
+    const episodeHtmlCache = new Map<string, string>([[firstEpisodeUrl, firstEpisodeHtml]]);
+    return mapWithConcurrency(parsedEpisodes, 3, async (episode) => {
+      let episodePlayers: LibraryEpisode["players"] = [];
+      try {
+        const episodeHtml = episodeHtmlCache.get(episode.episodeUrl) ??
+          await fetchText(episode.episodeUrl, showUrl, credentials, importSignal);
+        episodeHtmlCache.set(episode.episodeUrl, episodeHtml);
+        const sourcePlayers = await extractPlayers(episodeHtml, episode.episodeUrl, credentials, importSignal);
+        const resolvedPlayers = await resolvePlayers(sourcePlayers, episode.episodeUrl, credentials, importSignal);
+        episodePlayers = toEpisodePlayers(resolvedPlayers);
+      } catch (error) {
+        console.warn("[svetserialu] failed to resolve episode players", {
+          episodeUrl: episode.episodeUrl,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return createResolvedEpisode(episode, episodePlayers);
+    });
+  };
+
+  const resolveFastEpisodes = async () => {
+    // Stage one fills the episode/source inventory. Keeping this separate from
+    // source resolution removes the old nested 3 x 4 head-of-line bottleneck.
+    const inventories = await mapWithConcurrency(parsedEpisodes, FAST_EPISODE_CONCURRENCY, async (episode) => {
+      try {
+        const episodeHtml = episode.episodeUrl === firstEpisodeUrl
+          ? firstEpisodeHtml
+          : await fetchText(episode.episodeUrl, showUrl, credentials, importSignal);
+        return {
+          episode,
+          sourcePlayers: await extractPlayers(episodeHtml, episode.episodeUrl, credentials, importSignal),
+        };
+      } catch (error) {
+        console.warn("[svetserialu] failed to inspect episode players", {
+          episodeUrl: episode.episodeUrl,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { episode, sourcePlayers: [] };
+      }
+    });
+    if (importSignal?.aborted) throw importSignal.reason;
+
+    const sourceEntries = inventories.flatMap((inventory, episodeIndex) =>
+      inventory.sourcePlayers.map((player, playerIndex) => ({
+        episodeIndex,
+        playerIndex,
+        episodeUrl: inventory.episode.episodeUrl,
+        player,
+      })),
+    );
+    const resolvedEntries = await mapWithConcurrency(sourceEntries, FAST_SOURCE_CONCURRENCY, async (entry) => ({
+      ...entry,
+      resolved: await resolvePlayer(entry.player, entry.episodeUrl, credentials, importSignal),
+    }));
+    if (importSignal?.aborted) throw importSignal.reason;
+    const byEpisode = new Map<number, Array<{ playerIndex: number; player: ParsedPlayer }>>();
+    for (const entry of resolvedEntries) {
+      if (!entry.resolved) continue;
+      const players = byEpisode.get(entry.episodeIndex) ?? [];
+      players.push({ playerIndex: entry.playerIndex, player: entry.resolved });
+      byEpisode.set(entry.episodeIndex, players);
+    }
+
+    return inventories.map((inventory, episodeIndex) => {
+      const resolvedPlayers = (byEpisode.get(episodeIndex) ?? [])
+        .sort((left, right) => left.playerIndex - right.playerIndex)
+        .map((entry) => entry.player);
+      return createResolvedEpisode(inventory.episode, toEpisodePlayers(resolvedPlayers));
+    });
+  };
+
+  const resolvedEpisodes = RESOLVER_PROFILE === "baseline"
+    ? await resolveBaselineEpisodes()
+    : await resolveFastEpisodes();
 
   resolvedEpisodes.sort((a, b) => {
     if (a.seasonNumber !== b.seasonNumber) {
@@ -830,16 +1001,13 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     return (a.episodeNumber ?? 0) - (b.episodeNumber ?? 0);
   });
 
-  const artwork = await enrichArtwork({
-    mediaType: "tv",
-    title,
-    altTitle: altTitle || null,
-    yearHint: parseYearHint(years),
-    description: description || null,
-    currentPosterUrl: posterPath ? absoluteUrl(posterPath, BASE_URL) : null,
-  });
+  const artworkResult = await artworkPromise;
+  if (!artworkResult.ok) throw artworkResult.error;
+  const artwork = artworkResult.value;
 
   console.log(`[svetserialu] import success title=${title} episodes=${resolvedEpisodes.length}`);
+
+  if (importDeadline) clearTimeout(importDeadline);
 
   return {
     slug,
@@ -850,6 +1018,7 @@ export async function fetchSvetSerialuShow(slug: string, credentials?: SvetSeria
     posterUrl: artwork.posterUrl ?? (posterPath ? absoluteUrl(posterPath, BASE_URL) : null),
     backdropUrl: artwork.backdropUrl ?? null,
     bannerUrl: artwork.bannerUrl ?? null,
+    bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? null,
     clearLogoUrl: artwork.clearLogoUrl ?? null,
     availableSeasons: [...availableSeasons].sort((a, b) => a - b),
     importedAt,
@@ -883,6 +1052,7 @@ export type SvetSerialuSearchResult = {
   directors?: string[];
   detailUrl?: string | null;
   matchScore?: number;
+  _source?: "catalog" | "live";
 };
 
 async function searchSvetSerialuProvider(
@@ -971,7 +1141,19 @@ async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuC
     directors: item.directors,
     detailUrl: item.detailUrl,
     matchScore: item.matchScore,
+    _source: "catalog" as const,
   }));
+
+  const direct = (await searchSvetSerialuProvider(query, { limit: 8, credentials }))
+    .map((result) => ({ ...result, _source: "live" as const }));
+
+  if (catalogResults.length > 0 && direct.length > 0) {
+    const merged = new Map<string, SvetSerialuSearchResult>();
+    for (const r of [...catalogResults, ...direct].sort(compareSearchScores)) {
+      if (!merged.has(r.slug)) merged.set(r.slug, r);
+    }
+    return keepHighConfidenceSearchResults([...merged.values()]).slice(0, 8);
+  }
 
   if (catalogResults.length > 0) {
     return catalogResults;
@@ -997,12 +1179,14 @@ async function searchSvetSerialuLegacy(query: string, credentials?: SvetSerialuC
       posterUrl: result.posterUrl ?? candidate.posterUrl ?? null,
       year: result.year ?? candidate.year ?? null,
       matchScore: scoreSvetProviderMatchForCatalog(query, result, candidate, index),
+      _source: "live" as const,
     }));
   });
-  const direct = await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials });
+  const fallbackDirect = (await searchSvetSerialuProvider(query, { limit: catalog.length > 0 ? 4 : 8, credentials }))
+    .map((result) => ({ ...result, _source: "live" as const }));
   const unique = new Map<string, SvetSerialuSearchResult>();
 
-  for (const result of [...targeted.flat(), ...direct].sort(compareSearchScores)) {
+  for (const result of [...targeted.flat(), ...fallbackDirect].sort(compareSearchScores)) {
     if (!unique.has(result.slug)) {
       unique.set(result.slug, result);
     }
@@ -1068,6 +1252,166 @@ function mergeSvetSerialuResults(...groups: SvetSerialuSearchResult[][]) {
   return keepHighConfidenceSearchResults([...unique.values()].sort(compareSearchScores)).slice(0, 8);
 }
 
+function buildMinimalSvetSerialuIndexRecord(result: SvetSerialuSearchResult): SvetSerialuIndexRecord | null {
+  if (!result.slug || !result.title) {
+    return null;
+  }
+  return {
+    objectID: result.slug,
+    slug: result.slug,
+    title: result.title,
+    alt_title: result.alternateTitles?.find((title) => title && title !== result.title) ?? null,
+    year: result.year ?? null,
+    poster_url: result.posterUrl ?? null,
+    episode_count: 0,
+    season_count: 0,
+  };
+}
+
+async function scrapeSvetSerialuIndexRecord(slug: string): Promise<SvetSerialuIndexRecord | null> {
+  const showUrl = `${BASE_URL}/serial/${slug}`;
+  const showHtml = await fetchText(showUrl, undefined, undefined);
+
+  const title = stripTags(matchOne(showHtml, /<h1 class="nunito">([\s\S]*?)<\/h1>/i) ?? slug);
+  const altTitle = stripTags(matchOne(showHtml, /<span class="alt-name nunito">([\s\S]*?)<\/span>/i) ?? "");
+  const description = stripTags(matchOne(showHtml, /<div class="show-text nunito">([\s\S]*?)<\/div>/i) ?? "");
+  const posterPath = matchOne(showHtml, /<div class="show-image">\s*<img src="([^"]+)"/i);
+  const years = stripTags(matchOne(showHtml, /<span class="year nunito">([\s\S]*?)<\/span>/i) ?? "");
+  const firstEpisodePath = matchOne(
+    showHtml,
+    /<a href="(\/serial\/[^"]+\/s\d+e\d+)" class="button starwatch/i,
+  );
+
+  let scrapedEpisodes: ParsedEpisode[] = [];
+  if (firstEpisodePath) {
+    const firstEpisodeUrl = absoluteUrl(firstEpisodePath, BASE_URL);
+    const firstEpisodeHtml = await fetchText(firstEpisodeUrl, showUrl, undefined);
+    const tvShowId = matchOne(firstEpisodeHtml, /\/episodes-list\?tvShowId=(\d+)/i);
+
+    if (tvShowId) {
+      const firstSeason = Number.parseInt(firstEpisodeUrl.match(/\/s(\d+)e\d+$/i)?.[1] ?? "1", 10);
+      const firstSeasonListHtml = await fetchText(
+        `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${firstSeason}&episode=1`,
+        firstEpisodeUrl,
+        undefined,
+      );
+      const availableSeasons = getSeasonNumbers(firstSeasonListHtml);
+      const lists = await mapWithConcurrency(availableSeasons, 4, async (seasonNumber) =>
+        seasonNumber === firstSeason
+          ? firstSeasonListHtml
+          : await fetchText(
+              `${BASE_URL}/episodes-list?tvShowId=${tvShowId}&season=${seasonNumber}&episode=1`,
+              showUrl,
+              undefined,
+            ),
+      );
+      scrapedEpisodes = lists.flatMap((html, index) => getEpisodesFromList(html, availableSeasons[index]));
+    } else {
+      const accordionSeasons = getAccordionSeasons(showHtml);
+      scrapedEpisodes = (await mapWithConcurrency(accordionSeasons, 4, async (season) => {
+        const html = await fetchText(`${showUrl}?loadAccordionId=${season.accordionId}`, showUrl, undefined);
+        return getEpisodesFromList(html, season.seasonNumber);
+      })).flat();
+    }
+  }
+
+  const yearStart = years?.match(/\b(19|20)\d{2}\b/)?.[0] ?? null;
+  const yearEnd = years?.match(/\b(19|20)\d{2}\b\s*[–-]\s*((?:19|20)\d{2})/)?.[1] ?? yearStart;
+
+  const maxEpisodes = 50;
+  const episodes = scrapedEpisodes.slice(0, maxEpisodes).map((episode) => ({
+    c: episode.episodeCode ?? `s${String(episode.seasonNumber).padStart(2, "0")}e${String(episode.episodeNumber ?? 0).padStart(2, "0")}`,
+    t: episode.episodeTitle ? episode.episodeTitle.substring(0, 80) : null,
+    s: episode.seasonNumber,
+  }));
+  let episodesText: string | null = null;
+  if (scrapedEpisodes.length > maxEpisodes) {
+    episodesText = scrapedEpisodes.map((episode) =>
+      episode.episodeCode ?? `s${String(episode.seasonNumber).padStart(2, "0")}e${String(episode.episodeNumber ?? 0).padStart(2, "0")}`,
+    ).join(" ");
+    if (episodesText.length > 2000) {
+      episodesText = episodesText.substring(0, 2000);
+    }
+  }
+
+  return {
+    objectID: slug,
+    slug,
+    title,
+    alt_title: altTitle || null,
+    year: years || null,
+    year_start: yearStart ? Number.parseInt(yearStart, 10) : null,
+    year_end: yearEnd ? Number.parseInt(yearEnd, 10) : null,
+    description: description ? description.substring(0, 500) : null,
+    poster_url: posterPath ? absoluteUrl(posterPath, BASE_URL) : null,
+    episode_count: scrapedEpisodes.length,
+    season_count: new Set(scrapedEpisodes.map((episode) => episode.seasonNumber)).size,
+    episodes,
+    episodes_text: episodesText,
+  };
+}
+
+const SVET_INDEX_MAX_CONCURRENCY = 2;
+const SVET_INDEX_RECENT_TTL_MS = 10 * 60 * 1000;
+const svetIndexInFlight = new Map<string, Promise<void>>();
+const svetIndexRecentlyIndexed = new Map<string, number>();
+const svetIndexPending: Array<{ slug: string; fallback: SvetSerialuSearchResult | null }> = [];
+let svetIndexActive = 0;
+
+function isSvetIndexRecentlyIndexed(slug: string) {
+  const indexedAt = svetIndexRecentlyIndexed.get(slug);
+  if (!indexedAt) {
+    return false;
+  }
+  if (Date.now() - indexedAt >= SVET_INDEX_RECENT_TTL_MS) {
+    svetIndexRecentlyIndexed.delete(slug);
+    return false;
+  }
+  return true;
+}
+
+function pumpSvetIndexQueue() {
+  while (svetIndexActive < SVET_INDEX_MAX_CONCURRENCY && svetIndexPending.length > 0) {
+    const entry = svetIndexPending.shift()!;
+    svetIndexActive += 1;
+    const task = (async () => {
+      try {
+        const record = await scrapeSvetSerialuIndexRecord(entry.slug).catch(() => null)
+          ?? (entry.fallback ? buildMinimalSvetSerialuIndexRecord(entry.fallback) : null);
+        if (record) {
+          const saved = await saveSvetSerialuRecords([record]);
+          if (saved) {
+            svetIndexRecentlyIndexed.set(entry.slug, Date.now());
+          }
+        }
+      } catch {
+        // Indexing is best-effort and must never break the search path.
+      } finally {
+        svetIndexActive -= 1;
+        pumpSvetIndexQueue();
+      }
+    })();
+    svetIndexInFlight.set(entry.slug, task);
+    void task.finally(() => svetIndexInFlight.delete(entry.slug));
+  }
+}
+
+function queueSvetSerialuIndexing(results: SvetSerialuSearchResult[]) {
+  if (!isSvetSerialuAlgoliaAvailable()) {
+    return;
+  }
+  const queued = results
+    .filter((result) => result._source === "live")
+    .slice(0, 5);
+  for (const result of queued) {
+    if (svetIndexInFlight.has(result.slug) || isSvetIndexRecentlyIndexed(result.slug)) {
+      continue;
+    }
+    svetIndexPending.push({ slug: result.slug, fallback: result });
+  }
+  pumpSvetIndexQueue();
+}
+
 export async function searchSvetSerialu(query: string, credentials?: SvetSerialuCredentials | null): Promise<SvetSerialuSearchResult[]> {
   if (query.trim().length < 2) {
     return [];
@@ -1078,14 +1422,28 @@ export async function searchSvetSerialu(query: string, credentials?: SvetSerialu
 
   const algoliaFast = await waitForSearch(algoliaSearch, 250);
   const legacyFast = await waitForSearch(legacySearch, 0);
+  let algoliaFinal: SearchSettled | null;
+  let legacyFinal: SearchSettled | null;
+  let merged: SvetSerialuSearchResult[];
+
   if (algoliaFast?.status === "fulfilled" && algoliaFast.value.length >= 4) {
-    return mergeSvetSerialuResults(algoliaFast.value, legacyFast?.value ?? []);
+    algoliaFinal = algoliaFast;
+    legacyFinal = legacyFast ?? { status: "rejected", value: [] };
+    merged = mergeSvetSerialuResults(algoliaFast.value, legacyFast?.value ?? []);
+  } else {
+    [algoliaFinal, legacyFinal] = await Promise.all([
+      algoliaFast ?? waitForSearch(algoliaSearch, 10_000),
+      // The public SvetSerialu page commonly answers in 3-7 seconds. A two
+      // second race returned an empty result while the healthy request later
+      // logged 200 OK, which made command search appear randomly broken.
+      legacyFast ?? waitForSearch(legacySearch, 10_000),
+    ]);
+    merged = mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);
   }
 
-  const [algoliaFinal, legacyFinal] = await Promise.all([
-    algoliaFast ?? waitForSearch(algoliaSearch, 500),
-    legacyFast ?? waitForSearch(legacySearch, 500),
-  ]);
+  const algoliaSlugs = new Set((algoliaFinal?.value ?? []).map((result) => result.slug));
+  const missingFromIndex = (legacyFinal?.value ?? []).filter((result) => !algoliaSlugs.has(result.slug));
+  queueSvetSerialuIndexing(missingFromIndex);
 
-  return mergeSvetSerialuResults(algoliaFinal?.value ?? [], legacyFinal?.value ?? []);
+  return merged;
 }

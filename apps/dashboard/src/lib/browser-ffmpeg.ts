@@ -197,6 +197,24 @@ async function fetchProxyResponse(url: string, signal?: AbortSignal, maxRetries 
   throw lastError instanceof Error ? lastError : new Error("Proxy request failed.");
 }
 
+async function fetchMediaResponse(url: string, proxyUrl: string | undefined, signal?: AbortSignal) {
+  // Prefer a browser-readable source. This keeps phone/desktop downloads fully
+  // client-side when the provider exposes CORS, while the runtime cascade remains
+  // available for providers that require node/gateway headers.
+  try {
+    const direct = await fetchProxyResponse(url, signal, 1);
+    if (direct.ok || !proxyUrl || proxyUrl === url) {
+      return direct;
+    }
+  } catch {
+    if (!proxyUrl || proxyUrl === url) {
+      throw new Error("The media source is not readable from this browser.");
+    }
+  }
+
+  return fetchProxyResponse(proxyUrl, signal);
+}
+
 export function buildProxyUrl(sourceUrl: string, refererUrl: string, fileName: string, downloadProxyUrl: string) {
   const filePath = buildBrowserFilePath(sourceUrl, refererUrl, fileName);
   const base = new URL(downloadProxyUrl, window.location.origin);
@@ -292,7 +310,12 @@ async function materializeMediaManifest(
   downloadProxyUrl: string,
   signal?: AbortSignal,
 ): Promise<MaterializedManifest> {
-  const manifestText = await fetchText(buildProxyUrl(manifestUrl, refererUrl, "playlist.m3u8", downloadProxyUrl), signal);
+  const manifestProxyUrl = buildProxyUrl(manifestUrl, refererUrl, "playlist.m3u8", downloadProxyUrl);
+  const manifestResponse = await fetchMediaResponse(manifestUrl, manifestProxyUrl, signal);
+  if (!manifestResponse.ok) {
+    throw new Error(`Playlist request failed (${manifestResponse.status}).`);
+  }
+  const manifestText = await manifestResponse.text();
 
   if (!manifestText.includes("#EXTINF") && manifestText.includes("#EXT-X-STREAM-INF")) {
     const variantUrl = chooseHighestBandwidthVariant(manifestText, manifestUrl);
@@ -402,11 +425,32 @@ async function fetchAndWriteManifestAssets(
       }
 
       const proxiedAssetUrl = buildProxyUrl(asset.sourceUrl, resolved.refererUrl, asset.localName, resolved.downloadUrl);
-      const assetData = await fetchBinary(proxiedAssetUrl, signal, (receivedBytes, totalBytes) => {
+      const assetResponse = await fetchMediaResponse(asset.sourceUrl, proxiedAssetUrl, signal);
+      if (!assetResponse.ok || !assetResponse.body) {
+        throw new Error(`Media chunk request failed (${assetResponse.status}).`);
+      }
+      const contentLength = Number.parseInt(assetResponse.headers.get("content-length") ?? "", 10);
+      const totalBytes = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null;
+      const reader = assetResponse.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      while (true) {
+        signal?.throwIfAborted();
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        receivedBytes += value.byteLength;
         const fileProgress = totalBytes ? Math.min(receivedBytes / totalBytes, 1) : 0;
         const percent = 10 + ((completedAssets + fileProgress) / totalAssets) * 65;
         reportProgress(onProgress, percent, `Fetching video chunks ${completedAssets}/${totalAssets}`);
-      });
+      }
+      const assetData = new Uint8Array(receivedBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        assetData.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
       await enqueueWrite(asset, assetData);
       completedAssets += 1;
       reportProgress(onProgress, 10 + (completedAssets / totalAssets) * 65, `Fetched video chunks ${completedAssets}/${totalAssets}`);
@@ -428,12 +472,14 @@ export async function downloadResolvedVideoInBrowser(
   const outputFileName = getDownloadFileName(episode, resolved.downloadUrl);
   await requireWritableLibraryFolder();
   const releaseWakeLock = await acquireDownloadWakeLock();
+  let ffmpegForCleanup: FFmpeg | null = null;
+  let temporaryFiles: string[] = [];
 
   try {
     if (!isHlsPlaylistUrl(resolved.resolvedUrl)) {
       signal?.throwIfAborted();
       reportProgress(onProgress, 4, "Connecting to vault");
-      const response = await fetch(resolved.downloadUrl, { signal });
+      const response = await fetchMediaResponse(resolved.resolvedUrl, resolved.downloadUrl, signal);
       const saved = await writeResponseToLibraryVault(outputFileName, response, signal, (receivedBytes, totalBytes) => {
         const percent = totalBytes ? 8 + (receivedBytes / totalBytes) * 90 : 50;
         reportProgress(onProgress, percent, "Writing video into vault");
@@ -444,10 +490,12 @@ export async function downloadResolvedVideoInBrowser(
 
     reportProgress(onProgress, 2, "Loading ffmpeg.wasm");
     const ffmpeg = await getFfmpeg();
+    ffmpegForCleanup = ffmpeg;
     signal?.throwIfAborted();
 
     reportProgress(onProgress, 8, "Reading HLS playlist");
     const manifest = await materializeMediaManifest(resolved.resolvedUrl, resolved.refererUrl, resolved.downloadUrl, signal);
+    temporaryFiles = [...manifest.assets.map((asset) => asset.localName), "input.m3u8", "output.mp4"];
     signal?.throwIfAborted();
 
     if (progressListener) {
@@ -501,6 +549,9 @@ export async function downloadResolvedVideoInBrowser(
     reportProgress(onProgress, 100, "Saved into vault");
     return { fileName: saved.fileName };
   } finally {
+    if (ffmpegForCleanup && temporaryFiles.length > 0) {
+      await Promise.all(temporaryFiles.map((fileName) => ffmpegForCleanup!.deleteFile(fileName).catch(() => undefined)));
+    }
     await releaseWakeLock();
   }
 }

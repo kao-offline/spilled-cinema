@@ -1,5 +1,8 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, session, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
+const { createServer } = require("node:http");
+const { createConnection } = require("node:net");
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { readdir, readFile, rm, stat, writeFile } = require("node:fs/promises");
 const path = require("node:path");
@@ -12,7 +15,59 @@ let dashboardUrl = process.env.SPILLED_DASHBOARD_URL || `http://${DASHBOARD_HOST
 let mainWindow = null;
 let serverProcess = null;
 let dashboardProcess = null;
+let dashboardServer = null;
 const VAULT_SETTINGS_FILE = "vault.json";
+const INSTALL_ID_FILE = "install-id";
+
+function getInstallId() {
+  const file = path.join(app.getPath("userData"), INSTALL_ID_FILE);
+  try {
+    const existing = readFileSync(file, "utf8").trim();
+    if (/^[a-f0-9-]{36}$/i.test(existing)) return existing;
+  } catch {
+    // Create the per-install identity below.
+  }
+  const installId = randomUUID();
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, installId, { encoding: "utf8", mode: 0o600 });
+  return installId;
+}
+
+function getNativePipePath() {
+  return `\\\\.\\pipe\\spilled-node-${getInstallId()}`;
+}
+
+function requestNativeNode(payload) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(getNativePipePath());
+    let response = "";
+    const timeout = setTimeout(() => socket.destroy(new Error("Native node RPC timed out.")), 90000);
+    socket.setEncoding("utf8");
+    socket.once("connect", () => socket.write(`${JSON.stringify({
+      version: 2,
+      requestId: randomUUID(),
+      ...payload,
+    })}\n`));
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (response.length > 4 * 1024 * 1024) socket.destroy(new Error("Native node response is too large."));
+    });
+    socket.once("end", () => {
+      clearTimeout(timeout);
+      try {
+        const parsed = JSON.parse(response.trim());
+        if (!parsed.ok) reject(new Error(parsed.error || "Native node RPC failed."));
+        else resolve(parsed);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
 
 function getVaultSettingsPath() {
   return path.join(app.getPath("userData"), VAULT_SETTINGS_FILE);
@@ -82,6 +137,16 @@ async function restartLocalServices() {
 }
 
 async function registerNativeVaultHandlers() {
+  ipcMain.handle("node:rpc", async (_event, payload) => {
+    if (!payload || typeof payload.path !== "string" || !payload.path.startsWith("/api/")) {
+      throw new Error("Native node RPC path is not allowed.");
+    }
+    return await requestNativeNode({
+      path: payload.path,
+      method: payload.method,
+      body: payload.body,
+    });
+  });
   ipcMain.handle("vault:connect", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ["openDirectory", "createDirectory"],
@@ -414,11 +479,6 @@ async function startLocalServer() {
     return;
   }
 
-  const tsxCli = require.resolve("tsx/cli", {
-    paths: [path.resolve(__dirname, "../../../node_modules")],
-  });
-  const serverEntrypoint = path.resolve(__dirname, "../../server/src/standalone.ts");
-
   const rootPath = getStoredVaultPath();
   const vaultEnv = {};
   if (rootPath) {
@@ -426,15 +486,31 @@ async function startLocalServer() {
     vaultEnv.SPILLED_VAULT_PATH = vaultDir;
   }
 
-  serverProcess = spawn(getNodeCommand(), [tsxCli, serverEntrypoint], {
-    cwd: path.resolve(__dirname, "../../.."),
-    env: createChildEnv({
+  const serverEntrypoint = app.isPackaged
+    ? path.join(process.resourcesPath, "server", "standalone.mjs")
+    : path.resolve(__dirname, "../../server/src/standalone.ts");
+  const serverArgs = app.isPackaged
+    ? [serverEntrypoint]
+    : [
+        require.resolve("tsx/cli", { paths: [path.resolve(__dirname, "../../../node_modules")] }),
+        serverEntrypoint,
+      ];
+  const childEnv = createChildEnv({
       PORT: SERVER_PORT,
       HOST: "127.0.0.1",
-      SPILLED_NODE_ENDPOINT_URL: `http://127.0.0.1:${SERVER_PORT}`,
+      SPILLED_NODE_DATABASE: path.join(app.getPath("userData"), "node", "node.db"),
+      SPILLED_DPAPI_KEY_FILE: path.join(app.getPath("userData"), "node", "master-key.dpapi"),
+      SPILLED_SECRET_RECORDS_FILE: path.join(app.getPath("userData"), "node", "secrets.json"),
       SPILLED_CONTROL_PLANE_URL: inferControlPlaneUrl(),
+      SPILLED_NATIVE_PIPE: getNativePipePath(),
       ...vaultEnv,
-    }),
+  });
+  if (app.isPackaged) {
+    childEnv.ELECTRON_RUN_AS_NODE = "1";
+  }
+  serverProcess = spawn(app.isPackaged ? process.execPath : getNodeCommand(), serverArgs, {
+    cwd: app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "../../.."),
+    env: childEnv,
     stdio: "inherit",
   });
 
@@ -453,6 +529,45 @@ async function startLocalDashboard() {
   }
 
   if (await isUrlReachable(dashboardUrl)) {
+    return;
+  }
+
+  if (app.isPackaged) {
+    const dashboardRoot = path.join(process.resourcesPath, "dashboard");
+    const mimeTypes = {
+      ".css": "text/css; charset=utf-8",
+      ".html": "text/html; charset=utf-8",
+      ".js": "text/javascript; charset=utf-8",
+      ".json": "application/json; charset=utf-8",
+      ".svg": "image/svg+xml",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".webp": "image/webp",
+      ".woff2": "font/woff2",
+    };
+    dashboardServer = createServer(async (request, response) => {
+      try {
+        const requestPath = decodeURIComponent(new URL(request.url || "/", dashboardUrl).pathname);
+        const relativePath = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
+        const candidate = path.resolve(dashboardRoot, relativePath);
+        const safeCandidate = candidate.startsWith(`${path.resolve(dashboardRoot)}${path.sep}`)
+          ? candidate
+          : path.join(dashboardRoot, "index.html");
+        const selected = existsSync(safeCandidate) ? safeCandidate : path.join(dashboardRoot, "index.html");
+        const body = await readFile(selected);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", mimeTypes[path.extname(selected).toLowerCase()] || "application/octet-stream");
+        response.setHeader("Cache-Control", selected.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable");
+        response.end(body);
+      } catch {
+        response.statusCode = 500;
+        response.end("Dashboard failed to load.");
+      }
+    });
+    await new Promise((resolvePromise, rejectPromise) => {
+      dashboardServer.once("error", rejectPromise);
+      dashboardServer.listen(Number(DASHBOARD_PORT), DASHBOARD_HOST, resolvePromise);
+    });
     return;
   }
 
@@ -536,6 +651,20 @@ nativeTheme.on("updated", () => {
   mainWindow.setIcon(getNativeWindowIconPath());
 });
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+  }
+});
+
 app.whenReady()
   .then(async () => {
     configureNativeFileSystemPermissions();
@@ -564,4 +693,5 @@ app.on("before-quit", () => {
   if (dashboardProcess) {
     dashboardProcess.kill();
   }
+  dashboardServer?.close();
 });

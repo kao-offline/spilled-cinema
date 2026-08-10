@@ -1,5 +1,6 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import type { SidebarFeedLink, ViewState } from "./components/Sidebar";
@@ -23,6 +24,10 @@ import { DownloadEngineModal } from "./components/DownloadEngineModal";
 import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
+import { ToastHost } from "./components/ToastHost";
+import { TvModeToggle } from "./components/TvModeToggle";
+import { ImportActivityPopup, type ImportActivity } from "./components/ImportActivityPopup";
+import { RemoteImportPreview } from "./components/RemoteImportPreview";
 import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
 import { preloadHeroImage } from "./lib/hero-assets";
 import { getShowArtwork, mergeTitleMetadata, needsTitleMetadataEnrichment } from "./lib/media-library";
@@ -35,6 +40,8 @@ import {
   selectEpisode,
   updateSelectedPlayer,
   updateEpisodePlaybackProgress,
+  markEpisodeWatched,
+  setEpisodeWatched,
   updateEpisodePlayerFailure,
   updateEpisodePlayerResolution,
   upsertImportedShow,
@@ -48,6 +55,10 @@ import {
   removeDownloadedLanguage,
   exportLibraryState,
   importLibraryState,
+  mergeLibraryStates,
+  normalizeLibraryStateCandidate,
+  updateShowCast,
+  mergeImportedShowIntoState,
 } from "./lib/storage";
 import type { DownloadEngine, EpisodePlayer, ImportedShow, LibraryEpisode, LibraryState, PlayerAlias } from "./lib/types";
 import { clearOfflineCache } from "./lib/offline";
@@ -95,8 +106,10 @@ import {
 import { downloadResolvedVideoInBrowser } from "./lib/browser-ffmpeg";
 import { formatEpisodeTitle } from "./lib/episode-title";
 import { scoreSearchCandidate } from "./lib/search-ranking";
+import { prioritizeImportSearchResults, resolveImportInput } from "./lib/import-search";
 import { buildRuntimeUrl } from "./lib/local-api";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
+import { resetLocalNodeProbeCache } from "./lib/local-api";
 import { balancedBackgroundImage } from "./lib/image-resolution";
 import { cacheExploreFeed, deriveTasteProfileFromLibraryState, readDiscoveryUiState, readTasteProfile, recordAudioPreferenceSignal, recordEpisodePlaySignal, recordFavoriteSignal, recordImportedShowSignal, recordShowOpenSignal, updateDiscoveryUiState, type DiscoveryUiState } from "./lib/discovery-storage";
 import { fetchExploreFeed } from "./lib/discovery-client";
@@ -130,14 +143,25 @@ import {
 } from "./lib/provider-modules-shared";
 import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/private-node-client";
 import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLibraryPath } from "./lib/library-routes";
+import { scanProviderFeeds } from "./lib/library-watcher";
+import { applyTvMode, readTvMode, writeTvMode } from "./lib/tv-mode";
+import { createImportGate, findImportedShowBySource, importSourceKey } from "./lib/import-guard";
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
 };
 
+function providerDisplayName(provider: IntegrationId) {
+  if (provider === "svetserialu") return "SvetSerialu";
+  if (provider === "bombuj") return "Bombuj";
+  if (provider === "vidking") return "VidKing";
+  if (provider === "cineby") return "Cineby";
+  return provider;
+}
+
 function runRouteTransition(update: () => void) {
   const transitionDocument = document as ViewTransitionDocument;
-  if (!transitionDocument.startViewTransition) {
+  if (!transitionDocument.startViewTransition || window.matchMedia("(max-width: 1023px)").matches) {
     update();
     return;
   }
@@ -337,108 +361,6 @@ function filterImportSearchResults(results: RemoteSearchResult[], platformFilter
   return results.filter((result) => remoteResultPlatform(result) === platformFilter);
 }
 
-function prioritizeImportSearchResults(results: RemoteSearchResult[]) {
-  return results.slice(0, 6);
-}
-
-function resolveImportInput(rawValue: string): {
-  mode: "direct" | "search";
-  platform?: IntegrationId;
-  slug?: string;
-  mediaType?: "movie" | "serial";
-  query?: string;
-} {
-  const value = rawValue.trim();
-  if (!value) {
-    return { mode: "search", query: "" };
-  }
-
-  const vidkingSlug = value.match(/^(movie|tv)\/(\d+)(?:\/(\d+)\/(\d+))?$/i);
-  if (vidkingSlug) {
-    return {
-      mode: "direct",
-      platform: "vidking",
-      slug: value.toLowerCase(),
-      mediaType: vidkingSlug[1].toLowerCase() === "tv" ? "serial" : "movie",
-    };
-  }
-
-  try {
-    const parsed = new URL(value);
-    const host = parsed.hostname.toLowerCase();
-    const path = parsed.pathname.replace(/\/+$/, "");
-
-    if (host.includes("vidking.net")) {
-      const parts = path.split("/").filter(Boolean);
-      const embedIndex = parts.findIndex((part) => part === "embed");
-      const type = parts[embedIndex + 1];
-      const tmdbId = parts[embedIndex + 2];
-      if ((type === "movie" || type === "tv") && tmdbId) {
-        return {
-          mode: "direct",
-          platform: "vidking",
-          slug: parts.slice(embedIndex + 1, embedIndex + 5).join("/").trim().toLowerCase(),
-          mediaType: type === "tv" ? "serial" : "movie",
-        };
-      }
-    }
-
-    if (host.includes("svetserialu")) {
-      const serialMatch = path.match(/\/serial\/([^/?#]+)/i);
-      if (serialMatch?.[1]) {
-        return {
-          mode: "direct",
-          platform: "svetserialu",
-          slug: serialMatch[1].trim().toLowerCase(),
-          mediaType: "serial",
-        };
-      }
-    }
-
-    if (host.includes("bombuj")) {
-      const tail = path.split("/").filter(Boolean).pop() ?? "";
-      const filmMatch = tail.match(/^online-film-(.+)$/i);
-      if (filmMatch?.[1]) {
-        return {
-          mode: "direct",
-          platform: "bombuj",
-          slug: filmMatch[1].trim().toLowerCase(),
-          mediaType: "movie",
-        };
-      }
-
-      const serialMatch = tail.match(/^online-serial-(.+)$/i);
-      if (serialMatch?.[1]) {
-        return {
-          mode: "direct",
-          platform: "bombuj",
-          slug: serialMatch[1].trim().toLowerCase(),
-          mediaType: "serial",
-        };
-      }
-    }
-
-    if (host.includes("cineby.at")) {
-      const parts = path.split("/").filter(Boolean);
-      if ((parts[0] === "movie" || parts[0] === "tv") && parts[1]) {
-        return {
-          mode: "direct",
-          platform: "cineby",
-          slug: parts.slice(0, 3).join("/").trim().toLowerCase(),
-          mediaType: parts[0] === "tv" ? "serial" : "movie",
-        };
-      }
-    }
-  } catch {
-    // Non-URL input falls through to title search.
-  }
-
-  return {
-    mode: "search",
-    query: value,
-  };
-}
-
 function parseShowAndSeasonEpisodeFromFileName(fileName: string): { showKey: string; seasonEpisodeKey: string } | null {
   const name = fileName.replace(/\.mp4$/i, "");
   const match = name.match(/^(.*?)\s*-\s*S0*(\d+)\s*E0*(\d+)\b/i);
@@ -466,6 +388,7 @@ function toggleListValue(values: string[], value: string) {
 
 type ProviderFeedPageState = {
   query: string;
+  animeFilterMode: "all" | "anime" | "no-anime";
   feed: ProviderFeedResponse | null;
   feedLoading: boolean;
   feedError: string | null;
@@ -478,6 +401,7 @@ type ProviderFeedPageState = {
 function createEmptyProviderFeedPageState(): ProviderFeedPageState {
   return {
     query: "",
+    animeFilterMode: "all",
     feed: null,
     feedLoading: false,
     feedError: null,
@@ -491,7 +415,9 @@ function createEmptyProviderFeedPageState(): ProviderFeedPageState {
 function mergeProviderFeedItems(left: ExploreItem[], right: ExploreItem[]) {
   const merged = new Map<string, ExploreItem>();
   for (const item of [...left, ...right]) {
-    merged.set(item.id, item);
+    if (!merged.has(item.id)) {
+      merged.set(item.id, item);
+    }
   }
   return Array.from(merged.values());
 }
@@ -516,11 +442,19 @@ function AppContent() {
   const [importSlug, setImportSlug] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importActivity, setImportActivity] = useState<ImportActivity | null>(null);
+  const [pendingRemoteImport, setPendingRemoteImport] = useState<RemoteSearchResult | null>(null);
   const [importPlatformFilter, setImportPlatformFilter] = useState<ImportPlatformFilter>("all");
   const [activeShowSlug, setActiveShowSlug] = useState<string | null>(null);
   const [activeWatchEpisodeId, setActiveWatchEpisodeId] = useState<string | null>(null);
   const [playerAutoPlayToken, setPlayerAutoPlayToken] = useState<number | null>(null);
   const [activeView, setActiveView] = useState<ViewState>("home");
+  const [tvMode, setTvMode] = useState(() => {
+    const enabled = readTvMode();
+    applyTvMode(enabled);
+    return enabled;
+  });
+  const [routePath, setRoutePath] = useState(() => window.location.pathname);
   const [mediaFilter, setMediaFilter] = useState<"all" | "movies" | "series">("all");
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => !hasDismissedWelcome());
   const [downloadedEpisodeIds, setDownloadedEpisodeIds] = useState<Set<string>>(new Set());
@@ -543,6 +477,7 @@ function AppContent() {
   const [pendingRemoveShow, setPendingRemoveShow] = useState<ImportedShow | null>(null);
   const activeDownloadPollsRef = useRef(new Set<string>());
   const activeBrowserDownloadControllersRef = useRef(new Map<string, AbortController>());
+  const canceledBrowserDownloadsRef = useRef(new Set<string>());
   const [downloadBackendAvailable, setDownloadBackendAvailable] = useState<boolean | null>(null);
   const [localRuntimeStatus, setLocalRuntimeStatus] = useState<LocalRuntimeStatus>({
     available: false,
@@ -579,7 +514,24 @@ function AppContent() {
   const [enabledProviderFeeds, setEnabledProviderFeeds] = useState<EnabledProviderFeed[]>(() =>
     sanitizeEnabledProviderFeeds(readEnabledProviderFeeds(), initialProviderModules),
   );
-  const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>({});
+  const [providerFeedStates, setProviderFeedStates] = useState<Record<string, ProviderFeedPageState>>(() => {
+    try {
+      const raw = localStorage.getItem("spilled.provider-feed-preferences.v1");
+      const saved = raw ? JSON.parse(raw) as Record<string, Partial<ProviderFeedPageState>> : {};
+      return Object.fromEntries(Object.entries(saved).map(([viewId, preference]) => [viewId, {
+        ...createEmptyProviderFeedPageState(),
+        query: typeof preference.query === "string" ? preference.query : "",
+        animeFilterMode: preference.animeFilterMode === "anime" || preference.animeFilterMode === "no-anime" ? preference.animeFilterMode : "all",
+      }]));
+    } catch {
+      return {};
+    }
+  });
+  const [newEpisodeCheckState, setNewEpisodeCheckState] = useState<{ checking: boolean; message: string | null; error: boolean }>({
+    checking: false,
+    message: null,
+    error: false,
+  });
   const stateRef = useRef(state);
   const downloadedLanguageMapRef = useRef(downloadedEpisodeLanguageById);
   const downloadQueueRef = useRef(downloadQueue);
@@ -588,10 +540,18 @@ function AppContent() {
   const standbyResolverActiveRef = useRef(false);
   const playerPrefetchKeysRef = useRef(new Set<string>());
   const companionSourceImportsRef = useRef(new Set<string>());
+  const importGateRef = useRef(createImportGate());
+  const importActivityTimerRef = useRef<number | null>(null);
   const metadataEnrichmentActiveRef = useRef(false);
   const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
+  const libraryWatcherActiveRef = useRef(false);
   const activeWatchEpisodeIdRef = useRef(activeWatchEpisodeId);
   const deferredExploreQuery = useDeferredValue(discoveryState.exploreQuery);
+
+  function pushRoute(path: string) {
+    window.history.pushState({}, "", path);
+    setRoutePath(path);
+  }
 
   useEffect(() => {
     stateRef.current = state;
@@ -764,6 +724,181 @@ function AppContent() {
     };
   }, [providerRepositoryUrls]);
 
+  const performLibraryWatcherScan = async (modules: ProviderModuleManifest[]) => {
+    if (libraryWatcherActiveRef.current) {
+      return { skipped: true, checkedFeeds: 0, refreshedTitles: 0, changedTitles: [] as string[], failures: [] as string[] };
+    }
+    libraryWatcherActiveRef.current = true;
+    try {
+      const result = await scanProviderFeeds(
+        stateRef.current,
+        modules,
+        stateRef.current.settings.artworkSources,
+      );
+
+      if (result.changedTitles.length > 0) {
+        const nextState = mergeLibraryStates(stateRef.current, result.state);
+        writeLibraryState(nextState);
+        stateRef.current = nextState;
+        setState(nextState);
+      }
+
+      if (result.feedResponses.length > 0) {
+        setProviderFeedStates((current) => {
+          const next = { ...current };
+          for (const feedResponse of result.feedResponses) {
+            const viewId = createProviderFeedViewId(feedResponse.moduleId, feedResponse.feedId);
+            const page = next[viewId];
+            if (!page) continue;
+            next[viewId] = {
+              ...page,
+              feed: {
+                ...feedResponse,
+                items: mergeProviderFeedItems(feedResponse.items, page.feed?.items ?? []),
+              },
+              feedError: null,
+            };
+          }
+          return next;
+        });
+      }
+
+      return {
+        skipped: false,
+        checkedFeeds: result.checkedFeeds,
+        refreshedTitles: result.refreshedTitles,
+        changedTitles: result.changedTitles,
+        failures: result.failures,
+      };
+    } finally {
+      libraryWatcherActiveRef.current = false;
+    }
+  };
+
+  const handleCheckNewEpisodes = async (forSlug?: string) => {
+    setNewEpisodeCheckState({ checking: true, message: null, error: false });
+    try {
+      const result = await performLibraryWatcherScan(providerModules);
+      if (result.skipped) {
+        setNewEpisodeCheckState({ checking: false, message: "A check is already running.", error: false });
+        return;
+      }
+      if (result.failures.length > 0 && result.checkedFeeds === 0) {
+        setNewEpisodeCheckState({ checking: false, message: "Check failed — is your server running?", error: true });
+        return;
+      }
+      if (forSlug && result.changedTitles.includes(forSlug)) {
+        setNewEpisodeCheckState({ checking: false, message: "New episodes found for this show.", error: false });
+        return;
+      }
+      if (forSlug) {
+        setNewEpisodeCheckState({ checking: false, message: "No new episodes found for this show.", error: false });
+        return;
+      }
+      const updated = result.changedTitles.length;
+      if (updated > 0) {
+        setNewEpisodeCheckState({ checking: false, message: `Updated ${updated} ${updated === 1 ? "title" : "titles"} with new episodes.`, error: false });
+      } else if (result.refreshedTitles > 0) {
+        setNewEpisodeCheckState({ checking: false, message: "Checked — no new episodes, your library is up to date.", error: false });
+      } else {
+        setNewEpisodeCheckState({ checking: false, message: "No new episodes found.", error: false });
+      }
+    } catch {
+      setNewEpisodeCheckState({ checking: false, message: "Check failed.", error: true });
+    }
+  };
+
+  const handleCheckShowNewEpisodes = async (show: ImportedShow) => {
+    setNewEpisodeCheckState({ checking: true, message: null, error: false });
+    try {
+      let slug = show.providerMatches?.find((match) => match.integrationId === "svetserialu")?.providerItemId;
+      if (!slug) {
+        for (const episode of show.episodes) {
+          const url = episode.episodeUrl && /svetserialu/i.test(episode.episodeUrl) ? episode.episodeUrl : episode.players.map((player) => player.sourcePageUrl).find((candidate) => /svetserialu/i.test(candidate));
+          const pageMatch = url?.match(/\/serial\/([^/?#]+)/i);
+          if (pageMatch?.[1]) {
+            slug = decodeURIComponent(pageMatch[1]).trim().toLowerCase();
+            break;
+          }
+        }
+      }
+      if (!slug) {
+        const results = await searchRemotes(show.title);
+        const hit = results.find((result) => result.platform === "svetserialu" && result.mediaType === "serial") ?? results.find((result) => result.platform === "svetserialu");
+        slug = hit?.slug;
+      }
+      if (!slug) {
+        setNewEpisodeCheckState({ checking: false, message: "Couldn't find this show on svetserialu.", error: true });
+        return;
+      }
+      const existingCodes = new Set(
+        show.episodes.map((episode) => episode.episodeCode?.trim().toLowerCase()).filter(Boolean),
+      );
+      const imported = await importProviderItem("svetserialu", slug, "serial", stateRef.current.settings.artworkSources);
+      const newCodes = imported.episodes
+        .map((episode) => episode.episodeCode?.trim().toLowerCase())
+        .filter((code): code is string => Boolean(code) && !existingCodes.has(code!));
+      const newCount = newCodes.length;
+
+      if (newCount > 0) {
+        const nextState = mergeLibraryStates(stateRef.current, mergeImportedShowIntoState(stateRef.current, imported, show.slug));
+        writeLibraryState(nextState);
+        stateRef.current = nextState;
+        setState(nextState);
+        setNewEpisodeCheckState({ checking: false, message: `Found ${newCount} new ${newCount === 1 ? "episode" : "episodes"} for this show.`, error: false });
+      } else {
+        setNewEpisodeCheckState({ checking: false, message: "No new episodes found for this show.", error: false });
+      }
+    } catch (error) {
+      setNewEpisodeCheckState({ checking: false, message: `Check failed: ${error instanceof Error ? error.message : String(error)}`, error: true });
+    }
+  };
+
+  useEffect(() => {
+    if (providerModules.length === 0) return;
+    let canceled = false;
+    let timer: number | null = null;
+
+    const poll = async () => {
+      if (canceled) return;
+      let retrySoon = false;
+      try {
+        const result = await performLibraryWatcherScan(providerModules);
+        if (canceled) return;
+        retrySoon = result.failures.length > 0 && result.checkedFeeds === 0;
+      } catch {
+        retrySoon = true;
+      } finally {
+        if (!canceled) {
+          const delay = retrySoon
+            ? 15_000
+            : document.visibilityState === "visible"
+              ? 2 * 60_000
+              : 5 * 60_000;
+          timer = window.setTimeout(() => void poll(), delay);
+        }
+      }
+    };
+
+    const runNow = () => {
+      if (canceled || document.visibilityState === "hidden") return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void poll(), 0);
+    };
+
+    runNow();
+    window.addEventListener("focus", runNow);
+    window.addEventListener("online", runNow);
+    document.addEventListener("visibilitychange", runNow);
+    return () => {
+      canceled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("focus", runNow);
+      window.removeEventListener("online", runNow);
+      document.removeEventListener("visibilitychange", runNow);
+    };
+  }, [providerModules]);
+
   async function refreshVaultState() {
     const status = await getVaultStatus();
     setVaultStatus(status);
@@ -771,26 +906,32 @@ function AppContent() {
     return status;
   }
 
-  function applyVaultSnapshot(snapshot: VaultSnapshot, preserveUiState: boolean) {
+  function applyVaultSnapshot(snapshot: VaultSnapshot, preserveUiState: boolean, mergeLocalData = false) {
     const currentState = stateRef.current;
-    const importedState = importLibraryState(snapshot.libraryState);
+    const importedState = normalizeLibraryStateCandidate(snapshot.libraryState as Partial<LibraryState>);
+    const restoredState = mergeLocalData ? mergeLibraryStates(currentState, importedState) : importedState;
     const nextState = {
-      ...importedState,
-      query: preserveUiState ? currentState.query : importedState.query,
-      selectedEpisodeId: preserveUiState ? currentState.selectedEpisodeId : importedState.selectedEpisodeId,
+      ...restoredState,
+      query: preserveUiState ? currentState.query : restoredState.query,
+      selectedEpisodeId: preserveUiState ? currentState.selectedEpisodeId : restoredState.selectedEpisodeId,
       settings: {
-        ...importedState.settings,
+        ...restoredState.settings,
         connectedFolderName: vaultStatus.folderName ?? currentState.settings.connectedFolderName,
       },
     };
 
     writeLibraryState(nextState);
+    stateRef.current = nextState;
     setState(nextState);
 
-    const restoredLanguages = replaceDownloadedLanguageMap(snapshot.downloadedLanguages ?? readDownloadedLanguageMap());
+    const restoredLanguages = replaceDownloadedLanguageMap(mergeLocalData
+      ? { ...(snapshot.downloadedLanguages ?? {}), ...readDownloadedLanguageMap() }
+      : snapshot.downloadedLanguages ?? readDownloadedLanguageMap());
     setDownloadedEpisodeLanguageById(new Map(Object.entries(restoredLanguages)));
 
-    const restoredQueue = replaceDownloadQueue(snapshot.downloadQueue ?? readDownloadQueue());
+    const restoredQueue = replaceDownloadQueue(mergeLocalData
+      ? { ...(snapshot.downloadQueue ?? {}), ...readDownloadQueue() }
+      : snapshot.downloadQueue ?? readDownloadQueue());
     setDownloadQueue(restoredQueue);
     lastKnownVaultSnapshotAtRef.current = Math.max(lastKnownVaultSnapshotAtRef.current, snapshot.updatedAt);
   }
@@ -986,7 +1127,7 @@ function AppContent() {
       }
 
       if (snapshot?.libraryState) {
-        applyVaultSnapshot(snapshot, false);
+        applyVaultSnapshot(snapshot, false, true);
       }
 
       setVaultSnapshotReady(true);
@@ -1011,14 +1152,38 @@ function AppContent() {
 
     const timeout = window.setTimeout(() => {
       void (async () => {
+        // The vault may have been updated by the provider watcher, another tab,
+        // or a maintenance command since this render. Always reconcile the
+        // latest disk snapshot before writing so a stale browser tab cannot
+        // silently remove newly discovered seasons or episodes.
+        const currentVaultSnapshot = await readVaultSnapshot();
+        const stateToPersist = currentVaultSnapshot?.libraryState
+          ? mergeLibraryStates(
+              state,
+              normalizeLibraryStateCandidate(currentVaultSnapshot.libraryState as Partial<LibraryState>),
+            )
+          : state;
+
+        if (JSON.stringify(stateToPersist) !== JSON.stringify(state)) {
+          writeLibraryState(stateToPersist);
+          stateRef.current = stateToPersist;
+          setState(stateToPersist);
+        }
+
         const snapshotUpdatedAt = Date.now();
         lastKnownVaultSnapshotAtRef.current = Math.max(lastKnownVaultSnapshotAtRef.current, snapshotUpdatedAt);
         await writeVaultSnapshot({
           version: 1,
           updatedAt: snapshotUpdatedAt,
-          libraryState: state,
-          downloadedLanguages: Object.fromEntries(downloadedLanguageMapRef.current),
-          downloadQueue: downloadQueueRef.current,
+          libraryState: stateToPersist,
+          downloadedLanguages: {
+            ...(currentVaultSnapshot?.downloadedLanguages ?? {}),
+            ...Object.fromEntries(downloadedLanguageMapRef.current),
+          },
+          downloadQueue: {
+            ...(currentVaultSnapshot?.downloadQueue ?? {}),
+            ...downloadQueueRef.current,
+          },
         });
         setVaultDiagnostics(getVaultDiagnostics());
       })();
@@ -1175,18 +1340,33 @@ function AppContent() {
 
   useEffect(() => {
     let canceled = false;
+    let timer: number | null = null;
 
     const probe = async () => {
       const status = await probeLocalRuntime();
       if (!canceled) {
         setLocalRuntimeStatus(status);
+        timer = window.setTimeout(() => void probe(), status.available ? 60_000 : 30_000);
       }
     };
 
+    const probeNow = () => {
+      if (canceled) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void probe(), 0);
+    };
+
     void probe();
+    window.addEventListener("focus", probeNow);
+    window.addEventListener("online", probeNow);
+    document.addEventListener("visibilitychange", probeNow);
 
     return () => {
       canceled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("focus", probeNow);
+      window.removeEventListener("online", probeNow);
+      document.removeEventListener("visibilitychange", probeNow);
     };
   }, []);
 
@@ -1214,6 +1394,7 @@ function AppContent() {
 
   useEffect(() => {
     const syncFromPath = () => {
+      setRoutePath(window.location.pathname);
       const parsed = parseLibraryPath(window.location.pathname);
       if (parsed.kind === "watch") {
         const episodeId = parsed.episodeId;
@@ -1352,6 +1533,10 @@ function AppContent() {
     () => state.shows.filter((show) => (downloadedCountByShow[show.slug] ?? 0) > 0),
     [downloadedCountByShow, state.shows],
   );
+  const downloadedEpisodeSizes = useMemo(
+    () => Object.fromEntries(Object.entries(state.offlineDownloads).map(([episodeId, entry]) => [episodeId, entry.sizeBytes ?? 0])),
+    [state.offlineDownloads],
+  );
   const remoteByPlatform = useMemo(() => {
     return remoteResults.reduce(
       (acc, item) => {
@@ -1469,20 +1654,7 @@ function AppContent() {
   }
 
   function findImportedShowForItem(item: Pick<ExploreItem, "provider" | "importSlug">) {
-    return state.shows.find((show) => {
-      if (item.provider === "vidking") {
-        const match = item.importSlug.match(/^(movie|tv)\/(\d+)/i);
-        return match ? show.slug === `vidking-${match[1].toLowerCase()}-${match[2]}` : show.slug === item.importSlug;
-      }
-      if (item.provider === "bombuj") {
-        return show.slug === `bombuj-${item.importSlug}`;
-      }
-      if (item.provider === "cineby") {
-        const match = item.importSlug.match(/^(movie|tv)\/(\d+)/i);
-        return match ? show.slug === `cineby-${match[1].toLowerCase()}-${match[2]}` : show.slug === item.importSlug;
-      }
-      return show.slug === item.importSlug;
-    }) ?? null;
+    return findImportedShowBySource(state.shows, item.provider, item.importSlug);
   }
 
   const activeProviderFeedItems = useMemo(() => {
@@ -1568,6 +1740,7 @@ function AppContent() {
       moduleId: activeProviderFeedMeta.module.moduleId,
       feedId: activeProviderFeedMeta.feed.feedId,
       limit: 24,
+      fresh: true,
     })
       .then((feed) => {
         updateProviderFeedPageState(viewId, {
@@ -1890,6 +2063,9 @@ function AppContent() {
   }, [vaultSnapshotReady, vaultStatus.connected, vaultStatus.folderName]);
 
   async function persistDownloadJobUpdate(episodeId: string, patch: Partial<PersistentDownloadJob> | null) {
+    if (canceledBrowserDownloadsRef.current.has(episodeId)) {
+      return;
+    }
     setDownloadQueue((prev) => {
       const current = prev[episodeId];
       if (!current) {
@@ -1914,6 +2090,8 @@ function AppContent() {
 
   async function startBrowserManagedDownload(episode: LibraryEpisode) {
     await requireWritableLibraryFolder();
+
+    canceledBrowserDownloadsRef.current.delete(episode.id);
 
     const existing = downloadQueue[episode.id];
     if (existing && (existing.state === "queued" || existing.state === "resolving" || existing.state === "downloading")) {
@@ -2216,37 +2394,78 @@ function AppContent() {
     }
   }
 
+  function announceImport(activity: ImportActivity, dismissAfterMs?: number) {
+    if (importActivityTimerRef.current !== null) window.clearTimeout(importActivityTimerRef.current);
+    setImportActivity(activity);
+    importActivityTimerRef.current = dismissAfterMs
+      ? window.setTimeout(() => {
+          setImportActivity((current) => current?.key === activity.key ? null : current);
+          importActivityTimerRef.current = null;
+        }, dismissAfterMs)
+      : null;
+  }
+
   async function handleImport(
     platform: IntegrationId,
     overrideSlug?: string,
     mediaType?: "movie" | "serial",
-    options: { discoverCompanions?: boolean } = {},
+    options: { discoverCompanions?: boolean; title?: string; posterUrl?: string | null } = {},
   ) {
     const slug = (overrideSlug ?? importSlug).trim().toLowerCase();
     if (!slug) {
       setImportMessage("Enter a show slug, for example `upload` or `see`.");
-      return;
+      return null;
+    }
+
+    const key = importSourceKey(platform, slug);
+    const providerLabel = providerDisplayName(platform);
+    const existing = findImportedShowBySource(stateRef.current.shows, platform, slug);
+    if (existing) {
+      announceImport({ key, title: existing.title, providerLabel, posterUrl: existing.posterUrl, status: "already" }, 2600);
+      setImportMessage(`${existing.title} is already in your vault.`);
+      return existing;
+    }
+
+    const gateDecision = importGateRef.current.request(key);
+    if (gateDecision !== "started") {
+      announceImport({
+        key,
+        title: options.title ?? slug,
+        providerLabel,
+        posterUrl: options.posterUrl,
+        status: gateDecision === "duplicate" ? "importing" : "busy",
+        message: gateDecision === "duplicate" ? "This title is already being imported" : "Finish the current import first",
+      }, gateDecision === "busy" ? 2400 : undefined);
+      return null;
     }
 
     setImporting(true);
     setImportMessage(null);
+    announceImport({ key, title: options.title ?? slug, providerLabel, posterUrl: options.posterUrl, status: "importing" });
 
     try {
-      const show = await importProviderItem(platform, slug, mediaType, state.settings.artworkSources);
+      const show = await importProviderItem(platform, slug, mediaType, stateRef.current.settings.artworkSources);
 
       const nextState = upsertImportedShow(show);
+      stateRef.current = nextState;
       setState(nextState);
       setTasteProfile(recordImportedShowSignal(show));
       setImportSlug("");
       setImportMessage(
         `${show.title}: imported ${show.episodes.length} episode entries across ${show.availableSeasons.length} season(s).`,
       );
-      if (options.discoverCompanions !== false) {
+      announceImport({ key, title: show.title, providerLabel, posterUrl: show.posterUrl ?? options.posterUrl, status: "added" }, 2800);
+      if (options.discoverCompanions === true) {
         void discoverCompanionSources(show);
       }
+      return show;
     } catch (error) {
-      setImportMessage(error instanceof Error ? error.message : "Failed to import show.");
+      const message = error instanceof Error ? error.message : "Failed to import show.";
+      setImportMessage(message);
+      announceImport({ key, title: options.title ?? slug, providerLabel, posterUrl: options.posterUrl, status: "error", message }, 4200);
+      return null;
     } finally {
+      importGateRef.current.release(key);
       setImporting(false);
     }
   }
@@ -2299,7 +2518,7 @@ function AppContent() {
     }
     setImportSlug(result.slug);
     setImportSearchResults([]);
-    await handleImport(platform, result.slug, result.mediaType);
+    await handleImport(platform, result.slug, result.mediaType, { title: result.title, posterUrl: result.posterUrl });
   }
 
   function handleQueryChange(value: string) {
@@ -2372,6 +2591,7 @@ function AppContent() {
         moduleId: activeProviderFeedMeta.module.moduleId,
         feedId: activeProviderFeedMeta.feed.feedId,
         limit: 24,
+        fresh: true,
       });
       updateProviderFeedPageState(viewId, {
         feed,
@@ -2465,7 +2685,7 @@ function AppContent() {
       return;
     }
 
-    void handleImport(item.provider, item.importSlug, item.mediaType);
+    void handleImport(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
   }
 
   function handleLibraryQueryChange(value: string) {
@@ -2486,7 +2706,7 @@ function AppContent() {
       playerReturnPathRef.current = window.location.pathname === watchPath
         ? buildLibraryShowPath(episode.showSlug)
         : `${window.location.pathname}${window.location.search}${window.location.hash}`;
-      window.history.pushState({}, "", watchPath);
+      pushRoute(watchPath);
       setActiveWatchEpisodeId(episode.id);
       setActiveShowSlug(null);
       const show = state.shows.find((entry) => entry.episodes.some((entryEpisode) => entryEpisode.id === episode.id));
@@ -2511,7 +2731,7 @@ function AppContent() {
   function handleOpenShow(slug: string) {
     const nextPath = buildLibraryShowPath(slug);
     const openShow = () => {
-      window.history.pushState({}, "", nextPath);
+      pushRoute(nextPath);
       setActiveWatchEpisodeId(null);
       setActiveShowSlug(slug);
       const show = state.shows.find((entry) => entry.slug === slug);
@@ -2528,7 +2748,29 @@ function AppContent() {
 
   function handleCloseShow() {
     runRouteTransition(() => {
-      window.history.pushState({}, "", buildLibraryPath());
+      pushRoute(buildLibraryPath());
+      setActiveShowSlug(null);
+    });
+  }
+
+  function handleTvModeChange(enabled: boolean) {
+    applyTvMode(enabled);
+    writeTvMode(enabled);
+    setTvMode(enabled);
+  }
+
+  useEffect(() => {
+    const preferences = Object.fromEntries(Object.entries(providerFeedStates).map(([viewId, page]) => [viewId, {
+      query: page.query,
+      animeFilterMode: page.animeFilterMode,
+    }]));
+    localStorage.setItem("spilled.provider-feed-preferences.v1", JSON.stringify(preferences));
+  }, [providerFeedStates]);
+
+  function handleBackHomeFromShow() {
+    runRouteTransition(() => {
+      pushRoute("/");
+      setActiveView("home");
       setActiveShowSlug(null);
     });
   }
@@ -2546,7 +2788,7 @@ function AppContent() {
     const nextState = removeShow(show.slug);
     setState(nextState);
     if (activeShowSlug === show.slug) {
-      handleCloseShow();
+      handleBackHomeFromShow();
     }
   }
 
@@ -2565,7 +2807,7 @@ function AppContent() {
       setState(nextState);
       setActiveWatchEpisodeId(null);
       const returnPath = playerReturnPathRef.current || buildLibraryPath();
-      window.history.pushState({}, "", returnPath.startsWith(`${buildLibraryPath()}/watch/`) ? buildLibraryPath() : returnPath);
+      pushRoute(returnPath.startsWith(`${buildLibraryPath()}/watch/`) ? buildLibraryPath() : returnPath);
       const parsed = parseLibraryPath(window.location.pathname);
       setActiveShowSlug(parsed.kind === "show" ? parsed.slug : null);
     });
@@ -2947,6 +3189,7 @@ function AppContent() {
     try {
       const existing = downloadQueue[episode.id];
       if (existing && isBrowserDownloadJobId(existing.jobId)) {
+        canceledBrowserDownloadsRef.current.add(episode.id);
         activeBrowserDownloadControllersRef.current.get(episode.id)?.abort();
         activeBrowserDownloadControllersRef.current.delete(episode.id);
         await removeEpisodeFolderRecord(episode.id).catch(() => undefined);
@@ -3126,6 +3369,12 @@ function AppContent() {
     setState(nextState);
   }
 
+  const handleUpdateShowCast = useCallback((slug: string, actors: ImportedShow["actors"] = []) => {
+    const nextState = updateShowCast(slug, actors);
+    stateRef.current = nextState;
+    setState(nextState);
+  }, []);
+
   async function handleEnsureHomepageTextArtwork(slug: string) {
     const show = state.shows.find((entry) => entry.slug === slug);
     if (!show || show.homepageArtworkVersion === HOMEPAGE_ARTWORK_VERSION) {
@@ -3140,6 +3389,15 @@ function AppContent() {
         return current;
       }
 
+      // The import already has usable artwork in many cases.  Homepage
+      // enrichment also returns a poster while it searches for a baked-logo
+      // banner, so never let that background request replace the banner with
+      // a poster (or clear an existing WLogo banner) just because no new
+      // banner was found.
+      if (!artwork?.bannerUrl) {
+        return current;
+      }
+
       const nextState = {
         ...current,
         shows: current.shows.map((entry) =>
@@ -3147,13 +3405,13 @@ function AppContent() {
             ? {
                 ...entry,
                 homepagePosterUrl: artwork?.posterUrl ?? entry.homepagePosterUrl ?? null,
-                homepageBannerUrl: artwork?.bannerUrl ?? null,
+                homepageBannerUrl: artwork.bannerUrl,
                 artwork: {
                   ...(entry.artwork ?? {}),
                   posterUrl: artwork?.posterUrl ?? entry.artwork?.posterUrl ?? entry.posterUrl ?? null,
-                  bannerWithLogoUrl: artwork?.bannerUrl ?? entry.artwork?.bannerWithLogoUrl ?? null,
+                  bannerWithLogoUrl: artwork.bannerUrl,
                 },
-                homepageArtworkVersion: artwork?.bannerUrl ? HOMEPAGE_ARTWORK_VERSION : null,
+                homepageArtworkVersion: HOMEPAGE_ARTWORK_VERSION,
               }
             : entry,
         ),
@@ -3224,6 +3482,26 @@ function AppContent() {
     setState(nextState);
   }
 
+  function handleGoHomeFromPlayer() {
+    runRouteTransition(() => {
+      const nextState = selectEpisode(undefined);
+      stateRef.current = nextState;
+      setState(nextState);
+      setActiveWatchEpisodeId(null);
+      setActiveShowSlug(null);
+      setActiveView("home");
+      pushRoute("/");
+    });
+  }
+
+  function handleEpisodeEnded(episodeId: string) {
+    setState(markEpisodeWatched(episodeId));
+  }
+
+  function handleSetEpisodeWatched(episodeId: string, watched: boolean) {
+    setState(setEpisodeWatched(episodeId, watched));
+  }
+
   function handleCloseWelcome() {
     dismissWelcome();
     setWelcomeOpen(false);
@@ -3282,57 +3560,79 @@ function AppContent() {
   const isPlayerPage = Boolean(activeWatchEpisodeId && selectedEpisodeWithLocal);
   const isImmersivePage = Boolean(isPlayerPage || activeShowSlug);
   const showHeader = !isImmersivePage;
-  const currentRoute = parseLibraryPath(typeof window !== "undefined" ? window.location.pathname : "/");
+  const currentRoute = parseLibraryPath(routePath);
   const isHomeRoute = currentRoute.kind === "home";
+  const pendingRemotePlatform = pendingRemoteImport ? remoteResultPlatform(pendingRemoteImport) : null;
+  const pendingRemoteExisting = pendingRemoteImport && pendingRemotePlatform
+    ? findImportedShowBySource(state.shows, pendingRemotePlatform, pendingRemoteImport.slug)
+    : null;
 
   if (isHomeRoute) {
     return (
-      <CinematicHomePage
-        state={state}
-        featuredShow={featuredShow}
-        downloadedCountByShow={downloadedCountByShow}
-        tasteProfile={tasteProfile}
-        searchRemotes={searchRemotes}
-        onOpenLibrary={() => {
-          window.history.pushState({}, "", buildLibraryPath());
+      <>
+        <CinematicHomePage
+          state={state}
+          featuredShow={featuredShow}
+          downloadedCountByShow={downloadedCountByShow}
+          tasteProfile={tasteProfile}
+          searchRemotes={searchRemotes}
+          onOpenLibrary={() => {
+          pushRoute(buildLibraryPath());
           setActiveView("home");
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenFavorites={() => {
+          }}
+          onOpenFavorites={() => {
           setActiveView("favorites");
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenExplore={() => {
+          }}
+          onOpenExplore={() => {
           setActiveView("explore");
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenSettings={() => {
+          }}
+          onOpenSettings={() => {
           setActiveView("settings");
-          window.history.pushState({}, "", buildLibraryPath());
+          pushRoute(buildLibraryPath());
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
-        }}
-        onOpenShow={handleOpenShow}
-        onPlayShow={(show) => {
+          }}
+          onOpenShow={handleOpenShow}
+          onPlayShow={(show) => {
           const episode = show.episodes[show.episodes.length - 1];
           if (episode) {
             handleSelectEpisode(episode);
           } else {
             handleOpenShow(show.slug);
           }
-        }}
-        onImportRemote={async (platform, slug, mediaType) => {
-          await handleImport(platform, slug, mediaType);
-        }}
-        onEnsureHomepageTextArtwork={(slug) => {
-          void handleEnsureHomepageTextArtwork(slug);
-        }}
-      />
+          }}
+          onImportRemote={async (platform, slug, mediaType, context) => {
+            await handleImport(platform, slug, mediaType, context);
+          }}
+          onEnsureHomepageTextArtwork={(slug) => {
+            void handleEnsureHomepageTextArtwork(slug);
+          }}
+          importActivity={importActivity}
+        />
+        <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
+        <ImportActivityPopup activity={importActivity} />
+        <ToastHost />
+        {welcomeOpen ? (
+          <WelcomeModal
+            vaultConnected={vaultStatus.connected}
+            connectedFolderName={vaultStatus.folderName ?? undefined}
+            onClose={handleCloseWelcome}
+            onConnectVault={handleConnectVaultFromWelcome}
+            onOpenSettings={() => {
+              handleOpenSettingsFromWelcome();
+              handleCloseWelcome();
+            }}
+          />
+        ) : null}
+      </>
     );
   }
 
@@ -3357,7 +3657,7 @@ function AppContent() {
           }}
           onDismissDownload={handleDismissDownloadJob}
           onOpenHomepage={() => {
-            window.history.pushState({}, "", "/");
+            pushRoute("/");
             setActiveView("home");
             setActiveShowSlug(null);
           }}
@@ -3397,11 +3697,19 @@ function AppContent() {
               episode={selectedEpisodeWithLocal}
               show={selectedEpisodeShow}
               onClose={handleClosePlayer}
+              onHome={handleGoHomeFromPlayer}
               onSelectPlayer={handleSelectPlayer}
               onSelectEpisode={handleSelectEpisode}
+              onSetEpisodeWatched={handleSetEpisodeWatched}
               onResolvePlayer={handleResolvePlayer}
               onResolvePlayerFailure={handlePlayerResolveFailure}
               onPlaybackProgress={handlePlaybackProgress}
+              onEpisodeEnded={handleEpisodeEnded}
+              onStartFullDownload={handleStartFullDownload}
+              onCancelFullDownload={handleCancelFullDownload}
+              onDeleteFullDownload={handleDeleteFullDownload}
+              downloadedEpisodeIds={downloadedEpisodeIds}
+              fullDownloadJobsByEpisode={fullDownloadJobsByEpisode}
               autoPlayToken={playerAutoPlayToken}
             />
           ) : activeShowSlug ? (
@@ -3410,18 +3718,22 @@ function AppContent() {
               relatedShows={state.shows.filter((entry) => entry.slug !== activeShowSlug).slice(0, 8)}
               libraryState={state}
               tasteProfile={tasteProfile}
-              onBack={handleCloseShow}
+              onBack={handleBackHomeFromShow}
               onOpenRelatedShow={handleOpenShow}
               onSelectEpisode={handleSelectEpisode}
+              onSetEpisodeWatched={handleSetEpisodeWatched}
               onRemoveShow={() => handleRemoveShow(activeShowSlug)}
               onToggleFavorite={() => handleToggleFavorite(activeShowSlug)}
               onUpdateArtwork={(artwork) => handleUpdateShowArtwork(activeShowSlug, artwork)}
+              onUpdateCast={(actors) => handleUpdateShowCast(activeShowSlug, actors)}
               artworkSources={state.settings.artworkSources}
               fullDownloadJobsByEpisode={fullDownloadJobsByEpisode}
               onStartFullDownload={handleStartFullDownload}
               onCancelFullDownload={handleCancelFullDownload}
               downloadedEpisodeIds={downloadedEpisodeIds}
               onDeleteFullDownload={handleDeleteFullDownload}
+              onCheckNewEpisodes={activeShowWithLocal ? () => void handleCheckShowNewEpisodes(activeShowWithLocal) : undefined}
+              checkNewEpisodesState={newEpisodeCheckState}
             />
           ) : activeView === "import" ? (
             <ImportView 
@@ -3455,8 +3767,11 @@ function AppContent() {
           ) : activeView === "downloaded" ? (
             <DownloadedView
               shows={downloadedShows}
-              downloadedCountByShow={downloadedCountByShow}
+              downloadedEpisodeIds={downloadedEpisodeIds}
+              downloadedEpisodeSizes={downloadedEpisodeSizes}
               onOpenShow={handleOpenShow}
+              onPlayEpisode={handleSelectEpisode}
+              onDeleteEpisode={handleDeleteFullDownload}
             />
           ) : activeView === "settings" ? (
             <SettingsView 
@@ -3471,6 +3786,7 @@ function AppContent() {
               onImportLibrary={handleImportLibrary}
               localRuntimeStatus={localRuntimeStatus}
               onRefreshLocalRuntime={() => {
+                resetLocalNodeProbeCache();
                 void probeLocalRuntime().then(setLocalRuntimeStatus);
               }}
               vaultStatus={vaultStatus}
@@ -3520,7 +3836,7 @@ function AppContent() {
               onResetFilters={handleResetExploreFilters}
               onLoadMore={handleLoadMoreExplore}
               onImport={(item) => {
-                void handleImport(item.provider, item.importSlug, item.mediaType);
+                void handleImport(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
               }}
               onOpenVault={handleOpenDiscoveryItem}
             />
@@ -3530,6 +3846,8 @@ function AppContent() {
               feed={activeProviderFeedMeta.feed}
               items={activeProviderFeedItems}
               query={activeProviderFeedPageState.query}
+              animeFilterMode={activeProviderFeedPageState.animeFilterMode}
+              onAnimeFilterModeChange={(animeFilterMode) => updateProviderFeedPageState(activeProviderFeedMeta.viewId, { animeFilterMode })}
               loading={activeProviderFeedPageState.query.trim() ? activeProviderFeedPageState.searchLoading : activeProviderFeedPageState.feedLoading}
               error={activeProviderFeedPageState.query.trim() ? activeProviderFeedPageState.searchError : activeProviderFeedPageState.feedError}
               stale={activeProviderFeedPageState.feed?.stale ?? false}
@@ -3542,7 +3860,7 @@ function AppContent() {
                 void handleLoadMoreProviderFeed();
               }}
               onImport={(item) => {
-                void handleImport(item.provider, item.importSlug, item.mediaType);
+                void handleImport(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
               }}
               onOpenVault={handleOpenDiscoveryItem}
             />
@@ -3550,33 +3868,61 @@ function AppContent() {
             <>
               {/* Only show Hero if no search query, or adjust logically */}
               {!state.query && activeView === "home" && (
-                <Hero 
-                  featuredShow={featuredShow} 
-                  onPrev={handlePrevHero}
-                  onNext={handleNextHero}
-                  progressKey={featuredShow?.slug}
-                  progressDurationMs={HERO_ROTATION_MS}
-                  onPlay={() => {
-                    if (latestEpisodeOfFeatured) {
-                      handleSelectEpisode(latestEpisodeOfFeatured);
-                    } else if (featuredShow) {
-                      handleOpenShow(featuredShow.slug);
-                    }
-                  }} 
-                  onToggleFavorite={featuredShow ? () => handleToggleFavorite(featuredShow.slug) : undefined}
-                />
+                <div className="hidden lg:block">
+                  <Hero
+                    featuredShow={featuredShow}
+                    onPrev={handlePrevHero}
+                    onNext={handleNextHero}
+                    progressKey={featuredShow?.slug}
+                    progressDurationMs={HERO_ROTATION_MS}
+                    onPlay={() => {
+                      if (latestEpisodeOfFeatured) {
+                        handleSelectEpisode(latestEpisodeOfFeatured);
+                      } else if (featuredShow) {
+                        handleOpenShow(featuredShow.slug);
+                      }
+                    }}
+                    onToggleFavorite={featuredShow ? () => handleToggleFavorite(featuredShow.slug) : undefined}
+                  />
+                </div>
               )}
 
-              <div className="mt-2 px-4 pb-16 sm:px-6 lg:px-10">
-                <div className="mb-7 flex flex-col gap-2 border-b border-white/[0.07] pb-5 sm:flex-row sm:items-end sm:justify-between">
+              <div className="px-4 pb-16 sm:px-6 lg:mt-2 lg:px-10">
+                <div className="mb-5 flex items-end justify-between gap-3 border-b border-white/[0.07] pb-4 lg:mb-7 lg:pb-5">
                   <div>
-                    <div className="mb-1.5 text-[10px] font-black uppercase tracking-[0.3em] text-white/28">Your collection</div>
-                    <h2 className="text-2xl font-black tracking-[-0.035em] text-white capitalize sm:text-3xl">
+                    <div className="mb-1.5 hidden text-[10px] font-black uppercase tracking-[0.3em] text-white/28 lg:block">Your collection</div>
+                    <h2 className="text-xl font-black tracking-[-0.035em] text-white capitalize sm:text-3xl">
                     {state.query ? "Local Vault" : activeView === "favorites" ? "Favorites" : "All Library"}
                     </h2>
                   </div>
-                  <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {!state.query && (activeView === "home" || activeView === "favorites") ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleCheckNewEpisodes()}
+                        disabled={newEpisodeCheckState.checking}
+                        className={clsx(
+                          "inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-bold uppercase tracking-wide transition",
+                          newEpisodeCheckState.checking
+                            ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
+                            : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
+                        )}
+                        aria-label="Check for new episodes"
+                        title="Scan svetserialu for episodes you don't have yet"
+                      >
+                        <RefreshCw className={clsx("h-3.5 w-3.5", newEpisodeCheckState.checking && "animate-spin")} />
+                        {newEpisodeCheckState.checking ? "Checking…" : "Check for new episodes"}
+                      </button>
+                    ) : null}
+                    <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>
+                  </div>
                 </div>
+
+                {newEpisodeCheckState.message ? (
+                  <div className={clsx("-mt-4 mb-5 text-xs font-semibold lg:-mt-5 lg:mb-6", newEpisodeCheckState.error ? "text-red-300" : "text-emerald-300")}>
+                    {newEpisodeCheckState.message}
+                  </div>
+                ) : null}
 
                 <div
                   className="animate-fade-in grid grid-cols-3 gap-2.5 opacity-0 sm:grid-cols-[repeat(auto-fit,minmax(168px,1fr))] sm:gap-5 xl:grid-cols-[repeat(auto-fit,minmax(182px,1fr))]"
@@ -3634,8 +3980,10 @@ function AppContent() {
                                   const typeLabel =
                                     r.mediaType === "movie" ? "Movie" : r.mediaType === "serial" ? "Serial" : "Title";
                                   return (
-                                    <div
+                                    <button
+                                      type="button"
                                       key={`${platform ?? "unknown"}-${r.slug}`}
+                                      onClick={() => setPendingRemoteImport(r)}
                                       className="group relative w-40 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-[#14151b] shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
                                     >
                                       <div
@@ -3657,18 +4005,7 @@ function AppContent() {
                                             <span className="rounded-full bg-black/70 px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.18em] text-white/85 whitespace-nowrap shadow-sm">
                                               {platformLabel}
                                             </span>
-                                            <button
-                                              onClick={() => {
-                                                if (!platform) return;
-                                                setImportSlug(r.slug);
-                                                handleImport(platform, r.slug, r.mediaType);
-                                              }}
-                                              disabled={importing || !platform}
-                                              className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-black/90 shadow-sm transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 whitespace-nowrap"
-                                              title="Import to Vault"
-                                            >
-                                              Add
-                                            </button>
+                                            <span className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.2em] text-black/90 shadow-sm whitespace-nowrap">View</span>
                                           </div>
                                         </div>
 
@@ -3680,7 +4017,7 @@ function AppContent() {
                                           </div>
                                         )}
                                       </div>
-                                    </div>
+                                    </button>
                                   );
                                 })}
                               </div>
@@ -3705,7 +4042,7 @@ function AppContent() {
         <MobileDock
           active={(activeView === "favorites" || activeView === "explore" ? activeView : "library") as MobileDockItem}
           onHome={() => {
-            window.history.pushState({}, "", "/");
+            pushRoute("/");
             setActiveView("home");
             setActiveShowSlug(null);
           }}
@@ -3720,6 +4057,28 @@ function AppContent() {
           onExplore={() => {
             setActiveView("explore");
             handleCloseShow();
+          }}
+        />
+      ) : null}
+
+      {!isImmersivePage ? <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} /> : null}
+      <ImportActivityPopup activity={importActivity} />
+
+      {pendingRemoteImport && pendingRemotePlatform ? (
+        <RemoteImportPreview
+          title={pendingRemoteImport.title}
+          providerLabel={providerDisplayName(pendingRemotePlatform)}
+          mediaType={pendingRemoteImport.mediaType}
+          year={pendingRemoteImport.year}
+          posterUrl={pendingRemoteImport.posterUrl}
+          busy={importing}
+          alreadyImported={Boolean(pendingRemoteExisting)}
+          onClose={() => setPendingRemoteImport(null)}
+          onImport={() => {
+            const item = pendingRemoteImport;
+            setPendingRemoteImport(null);
+            setImportSlug(item.slug);
+            void handleImport(pendingRemotePlatform, item.slug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
           }}
         />
       ) : null}
@@ -3766,6 +4125,7 @@ function AppContent() {
           }}
         />
       ) : null}
+      <ToastHost />
     </div>
   );
 }
