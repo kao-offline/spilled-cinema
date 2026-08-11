@@ -30,14 +30,14 @@ The connection code locates a node; it is not a password. Authentication happens
 
 Management uses encrypted gateway RPC. The app does not need the PC's IP address, a LAN scan, or a public URL. Every edit requires an administrator session issued by the node.
 
-## Test beta.28 before installing it everywhere
+## Test beta.29 before installing it everywhere
 
 On the server PC:
 
-1. Install `Spilled-Server-Setup-0.2.0-beta.28-x64.exe` and let Spilled Server start.
+1. Install `Spilled-Server-Setup-0.2.0-beta.29-x64.exe` and let Spilled Server start.
    The current beta installer is not code-signed, so Windows SmartScreen may show **More info → Run anyway**. Verify the SHA-256 published with the release before continuing.
 2. Open the tray menu and select **Check server health**. The browser should show `{"status":"ok"}`.
-3. Select **Open setup and settings** and confirm the server shows its connection code.
+3. Select **Open setup and settings** and confirm the local console shows the permanent connection code. Test **Connect**, **Manage**, and **Diagnostics**; reinstalling must not change the code.
 4. In Windows PowerShell, run `Get-NetTCPConnection -LocalPort 8787 -State Listen`. The local address must be `127.0.0.1`, not `0.0.0.0`.
 
 On another device or browser:
@@ -45,8 +45,9 @@ On another device or browser:
 1. Open Spilled Cinema and choose **Private node** on Home.
 2. Enter the connection code and sign in as a watcher. Confirm Home changes to the connected state.
 3. Play a title or request a library refresh to confirm encrypted remote RPC works.
-4. Choose **Manage server**, enter the administrator password, create a disposable test watcher, refresh the page, and confirm it remains listed.
-5. Leave its public capability switches off unless you deliberately want public sharing.
+4. Choose **Manage server**, enter the administrator password, and switch through **Overview**, **People**, **Privacy**, and **Storage**.
+5. In **People**, create a disposable test watcher, refresh the page, and confirm it remains listed. In **Privacy**, change a capability, save it, refresh, and confirm the edit remains.
+6. Leave public capability switches off unless you deliberately want public sharing.
 
 Expected privacy checks:
 
@@ -62,6 +63,7 @@ Developer verification commands from the repository root:
 npm run test:private-node-connection -w @spilledcinema/dashboard
 npm run test:private-node-admin -w @spilledcinema/dashboard
 npm run test:private-node-admin -w @spilledcinema/dashboard -- --self-test-failure
+npm run test:setup-wizard -w @spilledcinema/server
 npm run test:privacy-defaults -w @spilledcinema/server-windows
 npm run build -w @spilledcinema/dashboard
 npm run dist:windows -w @spilledcinema/server-windows
