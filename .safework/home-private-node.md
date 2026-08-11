@@ -28,3 +28,6 @@
 - Beta.30 recovery point: beta.29 installer/release and commit `95ceffc`; rollback by reinstalling beta.29. Existing node data remains preserved.
 - Beta.30 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.30-x64.exe` (116,306,162 bytes), SHA-256 `64BB483F7D536AF7106FD47EE490ECA2E51F55201D153D196D740B8BD0CD7176`, unsigned.
 - Beta.30 verification: disposable fresh setup with every sharing switch off; local owner/viewing password recovery; both login endpoints returned `200`; all capabilities stayed private; desktop/mobile UI inspection; controlled-failure harnesses; dashboard/server builds and existing gateway/privacy scenarios.
+- Beta.30 production deployment: Vercel deployment `dpl_EFcoyE7NRvNJ6B8rvEFQu8WtogYd` reached `READY` and was aliased to `https://spilled.overload.studio`.
+- Beta.30 Windows deployment: remote installer hash matched, silent install exited `0`, the Accounts UI and loopback recovery route were present, `/api/status` returned `200`, existing configuration remained complete, and all capabilities remained private. The temporary upload and launch task were removed afterward.
+- Beta.30 release: tag `v0.2.0-beta.30` points to `9ab2d83`; GitHub prerelease contains the verified installer and blockmap. Beta.29 remains available for rollback.
