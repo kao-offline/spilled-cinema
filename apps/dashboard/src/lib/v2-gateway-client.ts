@@ -79,6 +79,13 @@ type GatewayCachedSession = {
   ticket: CapabilityTicketV2;
 };
 
+export class GatewayRemoteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayRemoteError";
+  }
+}
+
 const gatewaySessionCache = new Map<string, GatewayCachedSession>();
 const GATEWAY_TICKET_REUSE_MARGIN_MS = 10_000;
 
@@ -395,7 +402,7 @@ async function sendGatewayRpc(
     privateKey: encrypted.privateKey,
     nodeTransportPublicKey: candidate.identity.x25519PublicKey,
   })) as { ok?: boolean; result?: unknown; error?: string };
-  if (!payload.ok) throw new Error(payload.error || "Node rejected the gateway request.");
+  if (!payload.ok) throw new GatewayRemoteError(payload.error || "Node rejected the gateway request.");
   return payload.result;
 }
 
@@ -412,6 +419,7 @@ async function tryCachedGatewayRequest(
       data: await sendGatewayRpc(cached.candidate, cached.ticket, method, params),
     };
   } catch (error) {
+    if (error instanceof GatewayRemoteError) throw error;
     gatewaySessionCache.delete(cacheKey);
     console.warn(`[gateway] cached ${cached.candidate.nodeId} ${method} failed, requesting a fresh route:`, error);
     return null;
@@ -430,6 +438,7 @@ async function requestFreshGatewayCandidate(
   try {
     return await sendGatewayRpc(candidate, ticket, method, params);
   } catch (error) {
+    if (error instanceof GatewayRemoteError) throw error;
     gatewaySessionCache.delete(cacheKey);
     throw error;
   }
@@ -501,6 +510,7 @@ export async function requestPrivateGateway(
         params,
       );
     } catch (error) {
+      if (error instanceof GatewayRemoteError) throw error;
       lastError = error;
       if (attempt === 0) {
         console.warn(`[gateway] private ${candidate.nodeId} ${method} failed, retrying with a fresh ticket:`, error);

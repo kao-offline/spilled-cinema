@@ -72,7 +72,6 @@ function startServer() {
       PORT: SERVER_PORT,
       SPILLED_NODE_MODE: "local",
       SPILLED_DISABLE_AUTO_TUNNEL: "1",
-      SPILLED_PUBLIC_CAPABILITIES: "",
       SPILLED_NODE_DATABASE: paths.database,
       SPILLED_DPAPI_KEY_FILE: paths.dpapiKey,
       SPILLED_SECRET_RECORDS_FILE: paths.secrets,

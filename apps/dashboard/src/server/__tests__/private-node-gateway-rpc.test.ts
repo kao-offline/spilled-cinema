@@ -16,7 +16,15 @@ function executorFixture() {
     ticketId: "ticket-private",
     limits: { maxResponseBytes: 1024 * 1024, maxDurationMs: 30_000 },
   });
-  return { runtime, call };
+  const verifierCall = (method: string, capability: "provider.search" | "player.resolve") => execute({
+    method,
+    params: {},
+    capability,
+    principalKind: "verifier",
+    ticketId: "ticket-verifier",
+    limits: { maxResponseBytes: 1024 * 1024, maxDurationMs: 30_000 },
+  });
+  return { runtime, call, verifierCall, execute };
 }
 
 describe("private node gateway RPC surface", () => {
@@ -40,5 +48,25 @@ describe("private node gateway RPC surface", () => {
       password: "not-sent-to-control-plane",
       profileId: "main",
     });
+  });
+
+  it("answers capability-scoped verifier probes without contacting an upstream provider", async () => {
+    const { verifierCall, execute } = executorFixture();
+    await expect(verifierCall("verifier.provider.search", "provider.search")).resolves.toEqual({
+      ok: true,
+      capability: "provider.search",
+    });
+    await expect(verifierCall("verifier.player.resolve", "player.resolve")).resolves.toEqual({
+      ok: true,
+      capability: "player.resolve",
+    });
+    await expect(execute({
+      method: "verifier.player.resolve",
+      params: {},
+      capability: "player.resolve",
+      principalKind: "public",
+      ticketId: "ticket-public",
+      limits: { maxResponseBytes: 1024, maxDurationMs: 1_000 },
+    })).rejects.toThrow("not implemented");
   });
 });

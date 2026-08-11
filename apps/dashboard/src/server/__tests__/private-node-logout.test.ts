@@ -39,7 +39,7 @@ describe("private node logout", () => {
     await expect(logoutPrivateNode(connection())).resolves.toEqual({ ok: true });
     expect(gateway.requestPrivateGateway).toHaveBeenCalledWith(
       candidate,
-      "library.write",
+      "library.read",
       "logout",
       "auth.logout",
       { accessToken: "access-test" },

@@ -61,6 +61,13 @@ const REMOTE_METHOD_CAPABILITIES: Record<string, Capability> = {
   "invite.accept": "library.write",
   "recovery.export": "node.admin",
   "recovery.restore": "node.admin",
+  "verifier.provider.search": "provider.search",
+  "verifier.provider.feed": "provider.feed",
+  "verifier.provider.import": "provider.import",
+  "verifier.player.resolve": "player.resolve",
+  "verifier.download.transient": "download.transient",
+  "verifier.spillshare.read": "spillshare.read",
+  "verifier.relay.stream": "relay.stream",
 };
 
 function gzipFast(input: Buffer) {

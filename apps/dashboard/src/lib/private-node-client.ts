@@ -259,7 +259,7 @@ export async function logoutPrivateNode(connection: PrivateNodeConnection) {
   if (!connection.token) return { ok: true };
   if (connection.connectionCode) {
     const candidate = await resolveSavedPrivateNode(connection);
-    return await requestPrivateGateway(candidate, "library.write", "logout", "auth.logout", {
+    return await requestPrivateGateway(candidate, "library.read", "logout", "auth.logout", {
       accessToken: connection.token,
     }) as { ok: boolean };
   }

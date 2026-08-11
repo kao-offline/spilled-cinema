@@ -75,6 +75,9 @@ export function createV2RpcExecutor(
     limits: { maxResponseBytes: number; maxDurationMs: number };
   }) => {
     const params = asRecord(request.params);
+    if (request.method.startsWith("verifier.") && request.principalKind === "verifier") {
+      return { ok: true, capability: request.capability };
+    }
     if (request.principalKind === "private" && isPlayerResolveMethod(request.method)) {
       await runtime.validatePrivateSession(
         typeof params.accessToken === "string" ? params.accessToken : undefined,

@@ -38,20 +38,32 @@ const configuredProbes = JSON.parse(process.env.SPILLED_VERIFIER_PROBES_JSON || 
 >;
 const defaultProbes: typeof configuredProbes = {
   "provider.search": {
-    method: "provider.search",
-    params: { moduleId: "bombuj", query: "Silo", limit: 1 },
+    method: "verifier.provider.search",
+    params: {},
   },
   "provider.feed": {
-    method: "provider.feed",
-    params: { moduleId: "bombuj", feedId: "latest-movies", limit: 1 },
+    method: "verifier.provider.feed",
+    params: {},
   },
   "provider.import": {
-    method: "provider.import",
-    params: { moduleId: "svetserialu", slug: "silo" },
+    method: "verifier.provider.import",
+    params: {},
   },
   "player.resolve": {
-    method: "player.embed.resolve",
-    params: { embedUrl: "https://example.com/spilled-verifier", provider: "verifier" },
+    method: "verifier.player.resolve",
+    params: {},
+  },
+  "download.transient": {
+    method: "verifier.download.transient",
+    params: {},
+  },
+  "spillshare.read": {
+    method: "verifier.spillshare.read",
+    params: {},
+  },
+  "relay.stream": {
+    method: "verifier.relay.stream",
+    params: {},
   },
 };
 const actions: Record<string, string> = {

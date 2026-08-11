@@ -18,6 +18,41 @@ import { SpilledCinemaNodeRuntime } from "../../../../node/src/runtime";
 import type { NodeStateFile, NodeStorage } from "../../../../../packages/storage/src";
 
 describe("node v2 transport security", () => {
+  it("derives advertised V2 capabilities from private configuration when no environment override is set", async () => {
+    const runtime = new SpilledCinemaNodeRuntime({
+      storage: {
+        read: async () => ({
+          pendingPairings: [], pairedDevices: [], sessions: [], importedShows: [],
+          downloads: { updatedAt: 0, episodeIds: [], files: [] }, spillshareSources: [], passkeys: [],
+          adminAccounts: [], watcherAccounts: [], watcherProfiles: [], privateAccounts: [], privateProfiles: [],
+          privateDownloads: [], privateAuthChallenges: [], refreshSessions: [], watcherInvitations: [],
+          recoveryStates: [], securityEvents: [],
+        }),
+        write: async () => undefined,
+      } as NodeStorage,
+      mode: "full",
+      privateConfig: {
+        privateNode: { enabled: true, allowPublicFetch: true },
+        publicCapabilities: {
+          fetch: true, stream: true, download: true, spillshare: true, relay: true,
+        },
+        configPath: "test-private-config.json",
+        storageRoot: "test-vault",
+      },
+    });
+    await expect(runtime.createGatewayEnrollmentApplication()).resolves.toMatchObject({
+      advertisedCapabilities: [
+        "download.transient",
+        "player.resolve",
+        "provider.feed",
+        "provider.import",
+        "provider.search",
+        "relay.stream",
+        "spillshare.read",
+      ],
+    });
+  });
+
   it("encrypts for the node and rejects modified ciphertext", () => {
     const identity = generateNodeIdentity();
     const transport = generateNodeTransportIdentity(identity);

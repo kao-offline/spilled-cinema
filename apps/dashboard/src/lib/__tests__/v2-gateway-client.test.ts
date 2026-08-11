@@ -179,4 +179,68 @@ describe("private gateway node resolution", () => {
     expect(socketAttempt).toBe(2);
     expect(ticketAttempt).toBe(2);
   });
+
+  it("does not retry deterministic resolver failures as gateway failures", async () => {
+    const identity = generateNodeIdentity();
+    const transport = generateNodeTransportIdentity(identity);
+    let socketAttempt = 0;
+    let ticketAttempt = 0;
+
+    class ResolverFailureSocket extends EventTarget {
+      constructor(_url: string, _protocols: string[]) {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(frame: string) {
+        socketAttempt += 1;
+        const opaque = JSON.parse(frame) as { body: string };
+        const request = JSON.parse(opaque.body);
+        const response = encryptNodeResponse({
+          request,
+          nodeTransportPrivateKey: transport.privateKey,
+          plaintext: JSON.stringify({
+            ok: false,
+            error: "No validated MP4/HLS/DASH source found after following provider wrappers.",
+          }),
+        });
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: JSON.stringify({ body: JSON.stringify(response) }),
+        })));
+      }
+
+      close() {}
+    }
+
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    vi.stubGlobal("WebSocket", ResolverFailureSocket);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      ticketAttempt += 1;
+      return new Response(JSON.stringify({
+        version: 2,
+        ticketId: `resolver-failure-ticket-${ticketAttempt}`,
+        nodeId: "node-resolver-failure",
+        principalKind: "private",
+        capability: "player.resolve",
+        action: "playback.failure-test",
+        maxRequestBytes: 1024 * 1024,
+        maxResponseBytes: 1024 * 1024,
+        maxDurationMs: 5_000,
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        nonce: `nonce-${ticketAttempt}`,
+        keyId: "test-key",
+        signature: "test-signature",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+
+    await expect(requestPrivateGateway({
+      nodeId: "node-resolver-failure",
+      connectionCode: "7A3F-19C2-88B4-D0E1",
+      identity: { x25519PublicKey: transport.publicKey },
+    }, "player.resolve", "playback.failure-test", "player.playback.resolve", {}))
+      .rejects.toThrow("No validated MP4/HLS/DASH source");
+    expect(socketAttempt).toBe(1);
+    expect(ticketAttempt).toBe(1);
+  });
 });
