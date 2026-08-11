@@ -8,12 +8,16 @@ import {
 } from "../../../../../packages/security/src";
 import {
   createBrowserEncryptedNodeRequest,
+  clearV2GatewaySessionCache,
   decodeBrowserNodeResponse,
   decryptBrowserNodeResponse,
   resolvePrivateGatewayCandidate,
 } from "../v2-gateway-client";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  clearV2GatewaySessionCache();
+  vi.unstubAllGlobals();
+});
 
 describe("browser v2 gateway crypto", () => {
   it("is compatible with the node X25519 and ChaCha20-Poly1305 envelopes", () => {
@@ -104,6 +108,21 @@ describe("private gateway node resolution", () => {
       "/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=7A3F-19C2-88B4-D0E1",
       { headers: { Accept: "application/json" } },
     );
+  });
+
+  it("reuses a recently resolved private candidate across mobile requests", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      candidate: {
+        nodeId: "node_cached",
+        connectionCode: "1111-2222-3333-4444",
+        online: true,
+        identity: { x25519PublicKey: "public-key" },
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await resolvePrivateGatewayCandidate("1111-2222-3333-4444");
+    await resolvePrivateGatewayCandidate("1111-2222-3333-4444");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not leak control-plane configuration failures", async () => {

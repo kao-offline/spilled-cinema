@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, BookOpen, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, Server, WifiOff, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, LogOut, Server, WifiOff, X } from "lucide-react";
 import {
   connectPrivateNodeWithCode,
   fetchPrivateNodeAccountsViaGateway,
@@ -7,6 +7,7 @@ import {
   findPrivateNodeCandidates,
   loginPasskeyViaGateway,
   loginWatcherViaGateway,
+  logoutPrivateNodeViaGateway,
   readPrivateNodeConnection,
   writePrivateNodeConnection,
   type PrivateNodeAccount,
@@ -119,6 +120,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
 
   function persistLogin(result: {
     token: string;
+    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -128,6 +130,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     const next = writePrivateNodeConnection({
       ...connection,
       token: result.token,
+      refreshToken: result.refreshToken,
       accountId: result.account.accountId,
       accountName: result.account.displayName,
       profileId: nextProfileId,
@@ -137,6 +140,28 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     onConnected?.(next);
     setPassword("");
     setStep("connected");
+  }
+
+  async function logout() {
+    setBusy(true);
+    setMessage(null);
+    const previousCode = connection.connectionCode;
+    try {
+      const result = await logoutPrivateNodeViaGateway(connection);
+      setConnection(result.connection);
+      onConnected?.(result.connection);
+      setPassword("");
+      setAccounts([]);
+      setStep("locate");
+      if (previousCode) {
+        setCode(previousCode);
+        await connect(previousCode);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "This device could not be signed out.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function passwordLogin() {
@@ -178,16 +203,16 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
   }
 
   return (
-    <main className={`relative overflow-auto bg-[#08090b] text-[#f4efe6] ${embedded ? "fixed inset-0 z-[100] min-h-[100dvh] bg-black/88 backdrop-blur-2xl" : "min-h-screen"}`} role={embedded ? "dialog" : undefined} aria-modal={embedded ? true : undefined} aria-label={embedded ? "Connect a private node" : undefined}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(232,91,30,0.18),transparent_28%),radial-gradient(circle_at_82%_76%,rgba(255,255,255,0.06),transparent_30%)]" />
-      <div className="pointer-events-none absolute inset-y-0 left-[11%] w-px bg-gradient-to-b from-transparent via-orange-400/35 to-transparent" />
+    <main className={`relative overflow-y-auto bg-[#08090b] text-[#f4efe6] ${embedded ? "fixed inset-0 z-[100] min-h-[100dvh] lg:bg-black/88 lg:backdrop-blur-xl" : "min-h-[100dvh]"}`} role={embedded ? "dialog" : undefined} aria-modal={embedded ? true : undefined} aria-label={embedded ? "Connect a private node" : undefined}>
+      <div className="pointer-events-none absolute inset-0 hidden bg-[radial-gradient(circle_at_18%_12%,rgba(232,91,30,0.18),transparent_28%),radial-gradient(circle_at_82%_76%,rgba(255,255,255,0.06),transparent_30%)] lg:block" />
+      <div className="pointer-events-none absolute inset-y-0 left-[11%] hidden w-px bg-gradient-to-b from-transparent via-orange-400/35 to-transparent lg:block" />
       {embedded ? <button type="button" onClick={onClose} className="fixed right-4 top-4 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-black/45 text-white/65 backdrop-blur-xl transition hover:bg-white/10 hover:text-white sm:right-7 sm:top-7" aria-label="Close private node connection"><X size={20} /></button> : null}
-      <div className="relative mx-auto grid min-h-screen max-w-7xl lg:grid-cols-[0.82fr_1.18fr]">
-        <aside className="flex flex-col justify-between border-b border-white/10 px-5 py-5 sm:px-6 sm:py-7 lg:border-b-0 lg:border-r lg:px-10 lg:py-10">
+      <div className="relative mx-auto grid min-h-[100dvh] max-w-7xl content-start lg:grid-cols-[0.82fr_1.18fr] lg:content-stretch">
+        <aside className="border-b border-white/8 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] lg:flex lg:flex-col lg:justify-between lg:border-b-0 lg:border-r lg:px-10 lg:py-10">
           <a href="/" className="inline-flex w-fit items-center gap-2 text-xs font-black uppercase tracking-[0.26em] text-white/55 transition hover:text-white">
             <ArrowLeft size={15} /> Spilled Cinema
           </a>
-          <div className="py-7 sm:py-10 lg:py-0">
+          <div className="hidden lg:block">
             <div className="mb-5 hidden h-12 w-12 items-center justify-center rounded-full border border-orange-300/35 bg-orange-400/10 text-orange-300 sm:inline-flex">
               <LockKeyhole size={21} />
             </div>
@@ -205,24 +230,23 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
           </div>
         </aside>
 
-        <section className="flex items-center px-5 py-7 sm:px-10 sm:py-10 lg:px-16">
+        <section className="flex items-start px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-4 sm:px-8 lg:items-center lg:px-16 lg:py-10">
           <div className="w-full max-w-2xl">
             {step === "locate" ? (
               <div>
-                <p className="text-xs font-black uppercase tracking-[0.28em] text-white/35">Step 01 / Locate</p>
-                <h2 className="mt-3 text-2xl font-black tracking-[-0.035em] sm:text-5xl">Connect to your node</h2>
-                <p className="mt-3 text-sm leading-6 text-white/48">Copy the connection code shown by Spilled Server. Dashes and letter case do not matter.</p>
-                <label className="mt-9 block">
+                <p className="text-[10px] font-black uppercase tracking-[0.28em] text-orange-300 lg:text-xs lg:text-white/35">Private node / Locate</p>
+                <h1 className="mt-2 text-2xl font-black tracking-[-0.035em] sm:text-5xl">Connect to your node</h1>
+                <p className="mt-2 text-sm leading-5 text-white/48 sm:mt-3 sm:leading-6">Enter the connection code shown by Spilled Server. No URL needed.</p>
+                <label className="mt-5 block sm:mt-9">
                   <span className="sr-only">Server connection code</span>
                   <input
-                    autoFocus
                     autoComplete="off"
                     inputMode="text"
                     value={displayCode(code)}
                     onChange={(event) => setCode(displayCode(event.target.value))}
                     onKeyDown={(event) => { if (event.key === "Enter") void connect(); }}
                     placeholder="7A3F-19C2-88B4-D0E1"
-                    className="w-full border-b border-white/18 bg-transparent py-5 font-mono text-2xl font-bold uppercase tracking-[0.12em] text-white outline-none transition placeholder:text-white/16 focus:border-orange-300 sm:text-4xl"
+                    className="w-full border-b border-white/18 bg-transparent py-4 font-mono text-xl font-bold uppercase tracking-[0.1em] text-white outline-none transition placeholder:text-white/16 focus:border-orange-300 sm:text-4xl"
                   />
                 </label>
                 <div className="mt-7 flex flex-col gap-3 sm:flex-row">
@@ -272,7 +296,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
             ) : null}
 
             {step === "connected" ? (
-              <div className="rounded-[2rem] border border-emerald-300/20 bg-emerald-300/[0.055] p-7 sm:p-10">
+              <div className="rounded-[1.5rem] border border-emerald-300/20 bg-emerald-300/[0.055] p-5 sm:rounded-[2rem] sm:p-10">
                 <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-300 text-black"><Check size={27} strokeWidth={3} /></div>
                 <p className="mt-7 text-xs font-black uppercase tracking-[0.28em] text-emerald-200">Connection ready</p>
                 <h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">Welcome, {connection.profileName ?? connection.accountName ?? "home"}.</h2>
@@ -280,6 +304,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                   {embedded ? <button type="button" onClick={onClose} className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
                   {connection.connectionCode ? <a href={`/node/admin?code=${encodeURIComponent(connection.connectionCode)}`} className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/12 bg-white/[.045] px-7 text-sm font-black text-white/75">Manage server</a> : null}
+                  <button type="button" onClick={() => void logout()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-red-200/15 bg-red-200/[0.045] px-6 text-sm font-black text-red-100/75 transition hover:border-red-200/30 hover:text-red-50 disabled:opacity-40"><LogOut size={17} /> Log out</button>
                 </div>
               </div>
             ) : null}

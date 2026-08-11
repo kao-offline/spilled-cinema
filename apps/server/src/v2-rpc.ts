@@ -70,10 +70,18 @@ export function createV2RpcExecutor(
     method: string;
     params: unknown;
     capability: Capability;
+    principalKind: "public" | "private" | "verifier";
     ticketId: string;
     limits: { maxResponseBytes: number; maxDurationMs: number };
   }) => {
     const params = asRecord(request.params);
+    const privateSessionScope = privateSessionScopeForRemoteMethod(request.method);
+    if (request.principalKind === "private" && privateSessionScope) {
+      await runtime.validatePrivateSession(
+        typeof params.accessToken === "string" ? params.accessToken : undefined,
+        privateSessionScope,
+      );
+    }
     switch (request.method) {
       case "provider.search":
         return await invokeJsonHandler(
@@ -324,4 +332,18 @@ export function createV2RpcExecutor(
         throw new Error(`Remote RPC method "${request.method}" is not implemented.`);
     }
   };
+}
+
+export function privateSessionScopeForRemoteMethod(method: string): "library" | "download" | null {
+  if (
+    method === "provider.search" ||
+    method === "provider.feed" ||
+    method === "provider.import" ||
+    method === "player.embed.resolve" ||
+    method === "player.clean.resolve" ||
+    method === "player.playback.resolve" ||
+    method === "player.resolve"
+  ) return "library";
+  if (method.startsWith("download.transient.")) return "download";
+  return null;
 }

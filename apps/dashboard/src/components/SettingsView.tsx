@@ -685,6 +685,7 @@ export function SettingsView({
   function persistPrivateLogin(input: {
     nodeUrl: string;
     token: string;
+    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -694,6 +695,7 @@ export function SettingsView({
     const next = writePrivateNodeConnection({
       nodeUrl: input.nodeUrl,
       token: input.token,
+      refreshToken: input.refreshToken,
       accountId: input.account.accountId,
       profileId,
       accountName: input.account.displayName,
