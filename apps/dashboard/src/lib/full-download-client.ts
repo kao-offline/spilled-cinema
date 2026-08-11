@@ -528,13 +528,39 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     }
     return {
       playerAlias: data.playerAlias,
-      playbackUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(data.playbackUrl, origin)),
+      playbackUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(data.playbackUrl, origin), origin),
       resolvedUrl: data.resolvedUrl,
       refererUrl: data.refererUrl,
       streamType: data.streamType ?? "unknown",
       subtitlesUrl: data.subtitlesUrl,
       failures: data.failures,
     } satisfies PlaybackResolveResult;
+  };
+
+  const repairHostedPlaybackOrigin = async (result: PlaybackResolveResult) => {
+    try {
+      const parsed = new URL(result.playbackUrl, window.location.origin);
+      if (
+        parsed.origin !== window.location.origin ||
+        parsed.pathname !== "/api/download-full/browser-file"
+      ) {
+        return result;
+      }
+      const discovery = await fetch(
+        "/api/server?path=v2%2Fdiscovery%2Fnodes&capability=player.resolve&limit=8",
+        { headers: { Accept: "application/json" } },
+      );
+      if (!discovery.ok) return result;
+      const payload = await discovery.json() as { candidates?: Array<{ endpointUrl?: string }> };
+      const endpointUrl = payload.candidates?.find((candidate) => /^https?:\/\//i.test(candidate.endpointUrl ?? ""))?.endpointUrl;
+      if (!endpointUrl) return result;
+      return {
+        ...result,
+        playbackUrl: normalizePlaybackUrlForClient(result.playbackUrl, endpointUrl),
+      };
+    } catch {
+      return result;
+    }
   };
 
   if (["localhost", "127.0.0.1", "::1"].includes(window.location.hostname) && !window.spilledNative?.serverUrl) {
@@ -567,5 +593,7 @@ export async function resolveUniversalPlayback(episode: LibraryEpisode): Promise
     throw error;
   }
 
-  return handlePayload(response.data ?? null, mediaOriginFromRuntime(response.origin, response.transport));
+  return await repairHostedPlaybackOrigin(
+    handlePayload(response.data ?? null, mediaOriginFromRuntime(response.origin, response.transport)),
+  );
 }

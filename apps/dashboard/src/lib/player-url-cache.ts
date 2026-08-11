@@ -26,7 +26,7 @@ function findBrowserFileSegment(url: string) {
   };
 }
 
-export function normalizePlaybackUrlForClient(url: string) {
+export function normalizePlaybackUrlForClient(url: string, runtimeOrigin?: string) {
   if (typeof window === "undefined") {
     return url;
   }
@@ -45,6 +45,19 @@ export function normalizePlaybackUrlForClient(url: string) {
 
   const isCanonicalPath = parsed.pathname === BROWSER_FILE_PATH;
   if (isCanonicalPath && parsed.origin === window.location.origin) {
+    try {
+      const runtime = runtimeOrigin ? new URL(runtimeOrigin) : null;
+      if (
+        runtime &&
+        /^https?:$/.test(runtime.protocol) &&
+        runtime.origin !== window.location.origin &&
+        !["127.0.0.1", "localhost", "::1"].includes(runtime.hostname)
+      ) {
+        return `${runtime.origin}${BROWSER_FILE_PATH}${parsed.search}`;
+      }
+    } catch {
+      // Keep the original URL when the runtime origin is not a usable URL.
+    }
     return url;
   }
 

@@ -571,28 +571,33 @@ async function startLocalTunnel() {
   };
 }
 
-function resolveCloudflaredCliPath() {
+function resolveCloudflaredBinaryPath() {
   try {
-    const resolved = createRequire(import.meta.url).resolve("cloudflared/lib/cloudflared.js");
+    const libraryPath = createRequire(import.meta.url).resolve("cloudflared/lib/lib.js");
+    const binaryName = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
+    const resolved = resolve(dirname(libraryPath), "..", "bin", binaryName);
     // Inside an Electron asar archive the native binary cannot be spawned
     // directly; point at the unpacked copy electron-builder provides.
     return resolved.replace(/\.asar([\\/]|$)/, ".asar.unpacked$1");
   } catch {
     // Fall back to the workspace layout used by the legacy dev scripts.
-    return resolve(process.cwd(), "..", "..", "node_modules", "cloudflared", "lib", "cloudflared.js");
+    const binaryName = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
+    return resolve(process.cwd(), "..", "..", "node_modules", "cloudflared", "bin", binaryName);
   }
 }
 
 async function startCloudflaredTunnel() {
-  const cloudflaredCliPath = resolveCloudflaredCliPath();
-  const child = spawn(process.execPath, [cloudflaredCliPath, "tunnel", "--url", `http://127.0.0.1:${port}`, "--no-autoupdate"], {
+  const cloudflaredBinaryPath = resolveCloudflaredBinaryPath();
+  const child = spawn(cloudflaredBinaryPath, ["tunnel", "--url", `http://127.0.0.1:${port}`, "--no-autoupdate"], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
   let resolved = false;
   let stderrBuffer = "";
 
-  const tunnel = await withStartTimeout(new Promise<{ url: string; child: ChildProcess }>((resolvePromise, rejectPromise) => {
+  let tunnel: { url: string; child: ChildProcess };
+  try {
+    tunnel = await withStartTimeout(new Promise<{ url: string; child: ChildProcess }>((resolvePromise, rejectPromise) => {
     child.once("error", rejectPromise);
     child.once("exit", (code, signal) => {
       if (!resolved) {
@@ -613,7 +618,11 @@ async function startCloudflaredTunnel() {
 
     child.stdout?.on("data", inspectOutput);
     child.stderr?.on("data", inspectOutput);
-  }), "cloudflared");
+    }), "cloudflared");
+  } catch (error) {
+    if (!child.killed) child.kill();
+    throw error;
+  }
 
   child.on("exit", (code, signal) => {
     console.warn(`[spilledcinema-server] public fetch tunnel closed (${signal ?? code ?? "unknown"})`);

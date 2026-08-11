@@ -6,8 +6,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(resolve(root, "main.js"), "utf8");
 const scenarios = [
   ["loopback bind", /HOST:\s*"127\.0\.0\.1"/, true],
-  ["local node mode", /SPILLED_NODE_MODE:\s*"local"/, true],
-  ["automatic tunnels disabled", /SPILLED_DISABLE_AUTO_TUNNEL:\s*"1"/, true],
+  ["node mode is derived from private config", /SPILLED_NODE_MODE\s*:/, false],
+  ["playback tunnel is not disabled by the Windows host", /SPILLED_DISABLE_AUTO_TUNNEL\s*:/, false],
   ["public capabilities are not overridden outside private config", /SPILLED_PUBLIC_CAPABILITIES\s*:/, false],
 ];
 

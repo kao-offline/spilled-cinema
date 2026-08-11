@@ -70,8 +70,14 @@ try {
 const root = resolve(import.meta.dirname, "../../..");
 const convexHttp = await readFile(resolve(root, "convex/http.ts"), "utf8");
 const rpc = await readFile(resolve(root, "apps/server/src/v2-rpc.ts"), "utf8");
+const resolver = await readFile(resolve(root, "apps/dashboard/src/server/full-download.ts"), "utf8");
+const standalone = await readFile(resolve(root, "apps/server/src/standalone.ts"), "utf8");
 check("private ticket whitelist", /privateCapabilities[^;]+player\.resolve/s.test(convexHttp), "player.resolve private ticket is missing");
 check("private ticket duration", /body\.capability === "player\.resolve" \? 90_000 : 30_000/.test(convexHttp), "private player ticket is not 90 seconds");
+check("public ticket duration", /isPlaybackResolve \? 90_000 : 30_000/.test(convexHttp), "public player ticket is not 90 seconds");
+check("resolver has no short global deadline", !/PLAYBACK_DEADLINE_MS|Playback resolution exceeded/.test(resolver), "resolver still contains the 9.5-second global cutoff");
+check("cloudflared uses native binary", /spawn\(cloudflaredBinaryPath, \["tunnel"/.test(standalone), "cloudflared still launches through the output-swallowing JavaScript wrapper");
+check("cloudflared timeout cleanup", /if \(!child\.killed\) child\.kill\(\)/.test(standalone), "timed-out cloudflared children are not stopped");
 check("watcher session validation", /validatePrivateSession[\s\S]+"library"/.test(rpc), "private player RPC does not validate the watcher session");
 
 if (controlledFailure) {

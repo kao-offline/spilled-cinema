@@ -22,6 +22,35 @@ type JsonRequestInit = {
   headers?: Record<string, string>;
 };
 
+export function rebaseGatewayMediaUrls<T>(data: T, endpointUrl?: string | null): T {
+  if (!endpointUrl || !data || typeof data !== "object") return data;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(endpointUrl);
+  } catch {
+    return data;
+  }
+  if (!/^https?:$/.test(endpoint.protocol)) return data;
+
+  const record = data as Record<string, unknown>;
+  let changed = false;
+  const next = { ...record };
+  for (const key of ["playbackUrl", "downloadUrl"] as const) {
+    const value = record[key];
+    if (typeof value !== "string") continue;
+    try {
+      const pageOrigin = typeof window === "undefined" ? "https://spilled.invalid" : window.location.origin;
+      const parsed = new URL(value, pageOrigin);
+      if (parsed.pathname !== "/api/download-full/browser-file") continue;
+      next[key] = `${endpoint.origin}${parsed.pathname}${parsed.search}`;
+      changed = true;
+    } catch {
+      // Leave malformed media URLs for the normal response validation path.
+    }
+  }
+  return (changed ? next : data) as T;
+}
+
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
 const DIRECT_LOCAL_TIMEOUT_MS = 3000;
 const LONG_RUNTIME_TIMEOUT_MS = 60000;
@@ -418,7 +447,10 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
         ok: response.ok,
         status: response.status,
         data,
-        origin: proxied ? window.location.origin : origin,
+        // The JSON request may need the hosted node-proxy, but playback media
+        // must still use the node's reachable tunnel. Returning the dashboard
+        // origin here turns a valid browser-file URL into a Vercel request.
+        origin,
         transport: "fetch-server",
       };
     } catch {
@@ -457,7 +489,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
         return {
           ok: true,
           status: 200,
-          data: response.data as T,
+          data: rebaseGatewayMediaUrls(response.data as T, response.candidate.endpointUrl),
           origin: response.candidate.endpointUrl ?? response.candidate.nodeId,
           transport: "gateway",
         };
@@ -469,7 +501,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
         return {
           ok: true,
           status: 200,
-          data: response.data as T,
+          data: rebaseGatewayMediaUrls(response.data as T, response.candidate.endpointUrl),
           origin: response.candidate.endpointUrl ?? response.candidate.nodeId,
           transport: "gateway",
         };
@@ -488,7 +520,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     return {
       ok: true,
       status: 200,
-      data: response.data as T,
+      data: rebaseGatewayMediaUrls(response.data as T, response.endpointUrl),
       origin: response.endpointUrl ?? response.nodeId,
       transport: "gateway",
     };
@@ -536,7 +568,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
   return {
     ok: true,
     status: 200,
-    data: response.data as T,
+    data: rebaseGatewayMediaUrls(response.data as T, response.endpointUrl),
     origin: response.endpointUrl ?? response.nodeId,
     transport: "gateway",
   };

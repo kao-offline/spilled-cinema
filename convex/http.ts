@@ -718,6 +718,7 @@ http.route({
     }
     const issuedAt = Date.now();
     const isBulk = capability === "download.transient" || capability === "spillshare.read" || capability === "relay.stream";
+    const isPlaybackResolve = capability === "player.resolve";
     const unsignedTicket = {
       version: 2 as const,
       ticketId: crypto.randomUUID(),
@@ -728,7 +729,7 @@ http.route({
       ...(typeof body.contentId === "string" ? { contentId: body.contentId } : {}),
       maxRequestBytes: 256 * 1024,
       maxResponseBytes: isBulk ? 10 * 1024 * 1024 * 1024 : 4 * 1024 * 1024,
-      maxDurationMs: isBulk ? 90 * 60 * 1_000 : 30_000,
+      maxDurationMs: isBulk ? 90 * 60 * 1_000 : isPlaybackResolve ? 90_000 : 30_000,
       issuedAt,
       expiresAt: issuedAt + 60_000,
       nonce: randomBase64Url(24),

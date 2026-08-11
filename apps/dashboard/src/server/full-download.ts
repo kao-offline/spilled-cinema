@@ -3356,11 +3356,6 @@ const PLAYBACK_PREFERRED_BUDGET_MS = Math.max(
   250,
   Number.parseInt(process.env.SPILLED_PLAYBACK_PREFERRED_BUDGET_MS ?? "2500", 10) || 2500,
 );
-const PLAYBACK_DEADLINE_MS = Math.max(
-  1_000,
-  Number.parseInt(process.env.SPILLED_PLAYBACK_DEADLINE_MS ?? "9500", 10) || 9500,
-);
-
 function playbackInflightKey(input: PlaybackResolveInput) {
   return JSON.stringify([
     input.episodeId,
@@ -3528,21 +3523,7 @@ async function resolvePlaybackStreamUncoalesced(input: PlaybackResolveInput): Pr
     throw new Error("All player resolution attempts failed.");
   };
 
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      resolveAll(),
-      new Promise<never>((_resolve, reject) => {
-        deadline = setTimeout(
-          () => reject(new Error(`Playback resolution exceeded ${PLAYBACK_DEADLINE_MS}ms.`)),
-          PLAYBACK_DEADLINE_MS,
-        );
-        deadline.unref?.();
-      }),
-    ]);
-  } finally {
-    if (deadline) clearTimeout(deadline);
-  }
+  return resolveAll();
 }
 
 export async function resolvePlaybackStream(input: PlaybackResolveInput): Promise<PlaybackResolveResult> {

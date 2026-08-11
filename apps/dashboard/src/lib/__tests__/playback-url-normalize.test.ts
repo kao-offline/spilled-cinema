@@ -38,6 +38,13 @@ describe("normalizePlaybackUrlForClient", () => {
     expect(normalizePlaybackUrlForClient(url)).toBe(url);
   });
 
+  it("rebases same-origin playback onto a reachable gateway node endpoint", () => {
+    const url = `${DASHBOARD_ORIGIN}/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1`;
+    expect(normalizePlaybackUrlForClient(url, "https://node-abc.loca.lt")).toBe(
+      "https://node-abc.loca.lt/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1",
+    );
+  });
+
   it("routes local-runtime playback URLs through the dashboard proxy on any device", () => {
     expect(normalizePlaybackUrlForClient(
       "http://127.0.0.1:8787/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1",
