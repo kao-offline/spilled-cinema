@@ -16,6 +16,7 @@ import { SettingsView } from "./components/SettingsView";
 import { NodeSetupView } from "./components/NodeSetupView";
 import { NodeAdminView } from "./components/NodeAdminView";
 import { PrivateNodeConnectView } from "./components/PrivateNodeConnectView";
+import { PrivateNodeGuideView } from "./components/PrivateNodeGuideView";
 import { SupportView } from "./components/SupportView";
 import { DownloadedView } from "./components/DownloadedView";
 import { ExploreView } from "./components/ExploreView";
@@ -433,6 +434,9 @@ function App() {
   }
   if (routePath === "/connect") {
     return <PrivateNodeConnectView />;
+  }
+  if (routePath === "/private-node-guide") {
+    return <PrivateNodeGuideView />;
   }
   return <AppContent />;
 }

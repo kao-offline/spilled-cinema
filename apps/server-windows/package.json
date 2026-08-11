@@ -6,6 +6,7 @@
   "author": "Overload Studio",
   "main": "main.js",
   "scripts": {
+    "test:privacy-defaults": "node scripts/check-private-defaults.mjs",
     "prepare:payload": "npm run build -w @spilledcinema/server && node ../../scripts/prepare-server-windows-payload.mjs",
     "dist:windows": "npm run prepare:payload && electron-builder --win nsis",
     "pack:windows": "npm run prepare:payload && electron-builder --win --dir"

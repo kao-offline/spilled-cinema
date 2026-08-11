@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, Server, WifiOff } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, Server, WifiOff, X } from "lucide-react";
 import {
   connectPrivateNodeWithCode,
   fetchPrivateNodeAccountsViaGateway,
@@ -21,7 +21,13 @@ function displayCode(value: string) {
   return compact.match(/.{1,4}/g)?.join("-") ?? compact;
 }
 
-export function PrivateNodeConnectView() {
+type PrivateNodeConnectViewProps = {
+  embedded?: boolean;
+  onClose?: () => void;
+  onConnected?: (connection: PrivateNodeConnection) => void;
+};
+
+export function PrivateNodeConnectView({ embedded = false, onClose, onConnected }: PrivateNodeConnectViewProps = {}) {
   const saved = useMemo(() => readPrivateNodeConnection(), []);
   const queryCode = useMemo(() => new URLSearchParams(window.location.search).get("code") ?? "", []);
   const [step, setStep] = useState<ConnectStep>(saved.nodeId && saved.token ? "connected" : "locate");
@@ -39,8 +45,26 @@ export function PrivateNodeConnectView() {
   const selectedAccount = accounts.find((account) => account.accountId === accountId);
 
   useEffect(() => {
+    if (!embedded) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [embedded, onClose]);
+
+  useEffect(() => {
     if (queryCode && normalizeNodeConnectionCode(queryCode)) void connect(queryCode);
   }, [queryCode]);
+
+  useEffect(() => {
+    if (!queryCode && saved.connectionCode && !saved.token) void connect(saved.connectionCode);
+  }, []);
 
   async function connect(value = code) {
     setBusy(true);
@@ -108,6 +132,7 @@ export function PrivateNodeConnectView() {
       profileName: nextProfile?.displayName ?? null,
     });
     setConnection(next);
+    onConnected?.(next);
     setPassword("");
     setStep("connected");
   }
@@ -148,9 +173,10 @@ export function PrivateNodeConnectView() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#08090b] text-[#f4efe6]">
+    <main className={`relative overflow-auto bg-[#08090b] text-[#f4efe6] ${embedded ? "fixed inset-0 z-[100] min-h-[100dvh] bg-black/88 backdrop-blur-2xl" : "min-h-screen"}`} role={embedded ? "dialog" : undefined} aria-modal={embedded ? true : undefined} aria-label={embedded ? "Connect a private node" : undefined}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(232,91,30,0.18),transparent_28%),radial-gradient(circle_at_82%_76%,rgba(255,255,255,0.06),transparent_30%)]" />
       <div className="pointer-events-none absolute inset-y-0 left-[11%] w-px bg-gradient-to-b from-transparent via-orange-400/35 to-transparent" />
+      {embedded ? <button type="button" onClick={onClose} className="fixed right-4 top-4 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-black/45 text-white/65 backdrop-blur-xl transition hover:bg-white/10 hover:text-white sm:right-7 sm:top-7" aria-label="Close private node connection"><X size={20} /></button> : null}
       <div className="relative mx-auto grid min-h-screen max-w-7xl lg:grid-cols-[0.82fr_1.18fr]">
         <aside className="flex flex-col justify-between border-b border-white/10 px-5 py-5 sm:px-6 sm:py-7 lg:border-b-0 lg:border-r lg:px-10 lg:py-10">
           <a href="/" className="inline-flex w-fit items-center gap-2 text-xs font-black uppercase tracking-[0.26em] text-white/55 transition hover:text-white">
@@ -239,7 +265,7 @@ export function PrivateNodeConnectView() {
                 <p className="mt-7 text-xs font-black uppercase tracking-[0.28em] text-emerald-200">Connection ready</p>
                 <h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">Welcome, {connection.profileName ?? connection.accountName ?? "home"}.</h2>
                 <p className="mt-4 max-w-lg text-sm leading-6 text-white/50">This browser now knows your node by identity, not by a tunnel address. You can change profiles or disconnect in Settings.</p>
-                <a href="/" className="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>
+                {embedded ? <button type="button" onClick={onClose} className="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
               </div>
             ) : null}
 
@@ -248,7 +274,7 @@ export function PrivateNodeConnectView() {
                 <WifiOff className="mt-0.5 shrink-0" size={17} /> {message}
               </div>
             ) : null}
-            <p className="mt-8 text-xs font-semibold text-white/27">Setting up a brand-new server? <a href="/node/setup" className="text-white/55 underline decoration-white/20 underline-offset-4 hover:text-white">Open local setup</a>. Manual URL entry remains in Advanced Settings for older nodes.</p>
+            <p className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-white/27"><span>Setting up a brand-new server? <a href="/node/setup" className="text-white/55 underline decoration-white/20 underline-offset-4 hover:text-white">Open local setup</a>.</span><a href="/private-node-guide" className="inline-flex items-center gap-1.5 text-white/55 underline decoration-white/20 underline-offset-4 hover:text-white"><BookOpen size={13} /> Private setup guide</a></p>
           </div>
         </section>
       </div>

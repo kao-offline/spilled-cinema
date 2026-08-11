@@ -19,6 +19,8 @@ import { HomeTopChrome } from "./HomeTopChrome";
 import { MobileHomePage } from "./MobileHomePage";
 import { ProviderHomeSurface } from "./ProviderHomeSurface";
 import type { ImportActivity } from "./ImportActivityPopup";
+import { PRIVATE_NODE_CONNECTION_EVENT, readPrivateNodeConnection, type PrivateNodeConnection } from "../lib/private-node-client";
+import { PrivateNodeConnectView } from "./PrivateNodeConnectView";
 
 type CinematicHomePageProps = {
   state: LibraryState;
@@ -89,6 +91,19 @@ export function CinematicHomePage({
   onEnsureHomepageTextArtwork,
   importActivity,
 }: CinematicHomePageProps) {
+  const [privateNodeOpen, setPrivateNodeOpen] = useState(false);
+  const [privateNodeConnection, setPrivateNodeConnection] = useState<PrivateNodeConnection>(() => readPrivateNodeConnection());
+  const privateNodeConnected = Boolean(privateNodeConnection.nodeId && privateNodeConnection.token);
+
+  useEffect(() => {
+    const refresh = () => setPrivateNodeConnection(readPrivateNodeConnection());
+    window.addEventListener(PRIVATE_NODE_CONNECTION_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(PRIVATE_NODE_CONNECTION_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
   const [commandOpen, setCommandOpen] = useState(false);
   const [mobileSearchActive, setMobileSearchActive] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
@@ -395,6 +410,9 @@ export function CinematicHomePage({
         onOpenFavorites={onOpenFavorites}
         onOpenExplore={onOpenExplore}
         onOpenSettings={onOpenSettings}
+        onOpenPrivateNode={() => setPrivateNodeOpen(true)}
+        privateNodeConnected={privateNodeConnected}
+        privateNodeName={privateNodeConnection.profileName ?? privateNodeConnection.accountName}
         onOpenLocal={handleOpenRailLocal}
         onImportRemote={handleImportRailRemote}
         onPlayFeatured={() => {
@@ -407,7 +425,7 @@ export function CinematicHomePage({
       />
 
       <div className="hidden lg:block">
-        <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} activeTab={homeTab} onTabChange={setHomeTab} />
+        <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenPrivateNode={() => setPrivateNodeOpen(true)} privateNodeConnected={privateNodeConnected} privateNodeName={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 
         {homeTab === "home" ? <><HomeHero
           featuredShow={featuredShow}
@@ -458,6 +476,7 @@ export function CinematicHomePage({
         }}
         onMore={handleMoreResult}
       />
+      {privateNodeOpen ? <PrivateNodeConnectView embedded onClose={() => setPrivateNodeOpen(false)} onConnected={(connection) => setPrivateNodeConnection(connection)} /> : null}
     </div>
   );
 }

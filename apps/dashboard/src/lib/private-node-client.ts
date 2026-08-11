@@ -52,6 +52,13 @@ export type PrivateNodeStorageSummary = {
 };
 
 const PRIVATE_NODE_KEY = "spilled.private-node.connection.v1";
+export const PRIVATE_NODE_CONNECTION_EVENT = "spilled-private-node-connection-changed";
+
+function announcePrivateNodeConnection(connection: PrivateNodeConnection) {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(PRIVATE_NODE_CONNECTION_EVENT, { detail: connection }));
+  }
+}
 
 function normalizeNodeUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -117,6 +124,7 @@ export function writePrivateNodeConnection(connection: PrivateNodeConnection) {
     return connection;
   }
   window.localStorage.setItem(PRIVATE_NODE_KEY, JSON.stringify(connection));
+  announcePrivateNodeConnection(connection);
   return connection;
 }
 
@@ -133,6 +141,7 @@ export function clearPrivateNodeConnection() {
   };
   if (typeof window !== "undefined") {
     window.localStorage.removeItem(PRIVATE_NODE_KEY);
+    announcePrivateNodeConnection(next);
   }
   return next;
 }

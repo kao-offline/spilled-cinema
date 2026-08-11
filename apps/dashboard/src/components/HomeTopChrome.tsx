@@ -1,15 +1,18 @@
-import { Library, Search, Settings } from "lucide-react";
+import { Library, Search, Server, Settings } from "lucide-react";
 import { HomeSourceTabs } from "./HomeSourceTabs";
 
 type HomeTopChromeProps = {
   onOpenSearch: () => void;
   onOpenLibrary: () => void;
   onOpenSettings: () => void;
+  onOpenPrivateNode: () => void;
+  privateNodeConnected?: boolean;
+  privateNodeName?: string | null;
   activeTab?: "home" | "svetserialu" | "bombuj";
   onTabChange?: (tab: "home" | "svetserialu" | "bombuj") => void;
 };
 
-export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, activeTab = "home", onTabChange }: HomeTopChromeProps) {
+export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, onOpenPrivateNode, privateNodeConnected = false, privateNodeName, activeTab = "home", onTabChange }: HomeTopChromeProps) {
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50 flex h-20 items-center justify-center px-4 sm:h-24 sm:px-8">
       <HomeSourceTabs activeTab={activeTab} onTabChange={(tab) => onTabChange?.(tab)} className="pointer-events-auto absolute left-4 top-4 sm:left-8 sm:top-6" />
@@ -19,6 +22,15 @@ export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, act
       </button>
 
       <div className="pointer-events-auto absolute right-4 top-4 flex items-center gap-2 sm:right-8 sm:top-6">
+        <button
+          type="button"
+          onClick={onOpenPrivateNode}
+          className="group flex h-10 items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.045] px-3.5 text-white shadow-[0_12px_30px_rgba(0,0,0,0.25)] backdrop-blur-md transition hover:border-orange-300/30 hover:bg-white/[0.08]"
+          aria-label={privateNodeConnected ? `Connected to ${privateNodeName ?? "private node"}` : "Connect a private node"}
+        >
+          <span className="relative"><Server className="h-4 w-4 text-white/55" /><span className={`absolute -right-1 -top-1 h-2 w-2 rounded-full ring-2 ring-[#111217] ${privateNodeConnected ? "bg-emerald-400" : "bg-orange-300"}`} /></span>
+          <span className="hidden max-w-28 truncate text-xs font-black sm:inline">{privateNodeConnected ? privateNodeName ?? "Connected" : "Connect node"}</span>
+        </button>
         <button
           type="button"
           onClick={onOpenSearch}
