@@ -46,3 +46,22 @@
 - Wrong Convex deployment, Vercel project, Windows identity, executable path, or installer hash.
 - Failed build/tests, destructive schema requirement, loss of `/api/status`, node identity change, missing private auth, or gateway link failing to recover.
 - Any operation would expose credentials or overwrite `%APPDATA%/Spilled Server`.
+
+## Deployment record
+
+- Release source: `01740cb` before this record update; remote branch `origin/release/private-node-beta27`.
+- Installer: `Spilled-Server-Setup-0.2.0-beta.27-x64.exe`, 116303617 bytes, SHA-256 `0D991CA182E49362C615E8B5A1CBA1839CE5C65CAEB2E22BF079A548361865C6`.
+- Signature posture: unsigned, matching the retained beta.26 installer and installed executable.
+- Convex: production deployment `cheerful-lynx-4` completed successfully; schema validation passed and only `nodeRegistrations.by_connection_code` was added.
+- Windows canary: installer exit 0; executable version beta.27; scheduled task `Spilled Server Runtime` running; `/api/status` HTTP 200; original node identity preserved; private auth and connection code present.
+- Production routing: connection-code resolver returned HTTP 200, the same node identity, and `online: true` without displaying the code.
+- Vercel: production deployment `dpl_6eS8Jzra9TQZh883hoJRPnj9BQdF` READY and aliased to `https://spilled.overload.studio`.
+- Browser acceptance: production `/connect` rendered and the real beta.27 node advanced to the watcher password/passkey login screen. The connection code was moved through local clipboard without being printed and the clipboard was cleared afterward.
+- Verification: 17/17 focused tests, 5/5 deterministic scenarios plus controlled-failure proof, dashboard/server builds, Convex types, and isolated 350-episode import tests passed. Full-suite baseline still contains one unrelated unchanged search-ranking assertion failure.
+
+## Incident record
+
+- The first Vercel CLI attempt ran from `apps/dashboard` without ignored project-link metadata. It created project `dashboard` (`prj_88d1qRzvhxSkWQ9eYwBUIa0vkqGn`) and deployment `5MEdjzUUcL4WfYuWZHrWWEypBj8B`, which failed because monorepo parent packages were not uploaded.
+- The existing `spilled-cinema` production project and alias were not changed by that failure.
+- Corrective action: explicitly linked the release repository root to `spilled-cinema`, preserving its configured `apps/dashboard` root, then deployed successfully.
+- Cleanup: remove only the newly created empty `dashboard` project after this incident is committed; retain this record and provider logs as evidence.
