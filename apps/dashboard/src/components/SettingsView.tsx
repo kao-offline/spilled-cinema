@@ -800,14 +800,8 @@ export function SettingsView({
     }
   }
 
-  async function handleLogoutPrivateNode() {
-    setPrivateNodeBusy(true);
-    let warning: string | null = null;
-    try {
-      await logoutPrivateNode(privateNode);
-    } catch {
-      warning = "Logged out here. The node was offline, so its old session could not be revoked remotely.";
-    }
+  function handleLogoutPrivateNode() {
+    const previousConnection = privateNode;
     const next = clearPrivateNodeConnection();
     setPrivateNode(next);
     setPrivateNodeInput("");
@@ -815,8 +809,8 @@ export function SettingsView({
     setPrivateAccounts([]);
     setPrivateAccountId("");
     setPrivateStorage(null);
-    setPrivateNodeBusy(false);
-    setPrivateNodeMessage(warning ?? "Logged out of the private node.");
+    setPrivateNodeMessage("Logged out of the private node.");
+    void logoutPrivateNode(previousConnection).catch(() => undefined);
   }
 
   async function handleCompletePrivateSetup() {
@@ -1425,7 +1419,7 @@ export function SettingsView({
                 <PreferenceRow title={privateNode.accountName ?? "Private account"} hint="This session is signed by your private node.">
                   <div className="flex flex-wrap justify-end gap-2">
                     <StatusPill tone="good">Signed in</StatusPill>
-                    <ActionButton disabled={privateNodeBusy} onClick={() => void handleLogoutPrivateNode()}>{privateNodeBusy ? "Logging out" : "Log out"}</ActionButton>
+                    <ActionButton onClick={handleLogoutPrivateNode}>Log out</ActionButton>
                   </div>
                 </PreferenceRow>
                 <PreferenceRow title="Profile" hint="Profiles are separate library views under the same account quota.">

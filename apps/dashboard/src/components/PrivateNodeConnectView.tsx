@@ -181,15 +181,9 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     setProfileId(account?.profiles[0]?.profileId ?? "");
   }
 
-  async function handleLogout() {
-    setBusy(true);
+  function handleLogout() {
     setMessage(null);
-    let warning: string | null = null;
-    try {
-      await logoutPrivateNode(connection);
-    } catch {
-      warning = "Signed out on this device. The node could not be reached to revoke the old session.";
-    }
+    const previousConnection = connection;
     const next = clearPrivateNodeConnection();
     setConnection(next);
     setAccounts([]);
@@ -198,9 +192,9 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     setPassword("");
     setNodeOnline(false);
     setStep("locate");
-    setBusy(false);
-    setMessage(warning ?? "Logged out.");
+    setMessage("Logged out.");
     onConnected?.(next);
+    void logoutPrivateNode(previousConnection).catch(() => undefined);
   }
 
   return (
@@ -312,7 +306,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                   {embedded ? <button type="button" onClick={onClose} className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
                   {connection.connectionCode ? <a href={`/node/admin?code=${encodeURIComponent(connection.connectionCode)}`} className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/12 bg-white/[.045] px-7 text-sm font-black text-white/75">Manage server</a> : null}
-                  <button type="button" onClick={() => void handleLogout()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-red-300/20 bg-red-300/[.055] px-7 text-sm font-black text-red-100/80 transition hover:border-red-300/35 hover:bg-red-300/10 hover:text-red-50 disabled:opacity-40"><LogOut size={17} /> Log out</button>
+                  <button type="button" onClick={handleLogout} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-red-300/20 bg-red-300/[.055] px-7 text-sm font-black text-red-100/80 transition hover:border-red-300/35 hover:bg-red-300/10 hover:text-red-50"><LogOut size={17} /> Log out</button>
                 </div>
               </div>
             ) : null}

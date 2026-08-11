@@ -10,6 +10,7 @@ import {
   createBrowserEncryptedNodeRequest,
   decodeBrowserNodeResponse,
   decryptBrowserNodeResponse,
+  requestPrivateGateway,
   resolvePrivateGatewayCandidate,
 } from "../v2-gateway-client";
 
@@ -113,5 +114,69 @@ describe("private gateway node resolution", () => {
 
     await expect(resolvePrivateGatewayCandidate("7A3F-19C2-88B4-D0E1"))
       .rejects.toThrow("connection service is temporarily unavailable");
+  });
+
+  it("retries the private node with a fresh ticket after a transient gateway failure", async () => {
+    const identity = generateNodeIdentity();
+    const transport = generateNodeTransportIdentity(identity);
+    let socketAttempt = 0;
+    let ticketAttempt = 0;
+
+    class GatewaySocket extends EventTarget {
+      constructor(_url: string, _protocols: string[]) {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(frame: string) {
+        socketAttempt += 1;
+        if (socketAttempt === 1) {
+          queueMicrotask(() => this.dispatchEvent(new Event("error")));
+          return;
+        }
+        const opaque = JSON.parse(frame) as { body: string };
+        const request = JSON.parse(opaque.body);
+        const response = encryptNodeResponse({
+          request,
+          nodeTransportPrivateKey: transport.privateKey,
+          plaintext: JSON.stringify({ ok: true, result: { status: "ok" } }),
+        });
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: JSON.stringify({ body: JSON.stringify(response) }),
+        })));
+      }
+
+      close() {}
+    }
+
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    vi.stubGlobal("WebSocket", GatewaySocket);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      ticketAttempt += 1;
+      return new Response(JSON.stringify({
+        version: 2,
+        ticketId: `private-ticket-${ticketAttempt}`,
+        nodeId: "node-private-retry",
+        principalKind: "private",
+        capability: "library.read",
+        action: "status.retry-test",
+        maxRequestBytes: 1024 * 1024,
+        maxResponseBytes: 1024 * 1024,
+        maxDurationMs: 5_000,
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        nonce: `nonce-${ticketAttempt}`,
+        keyId: "test-key",
+        signature: "test-signature",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+
+    await expect(requestPrivateGateway({
+      nodeId: "node-private-retry",
+      connectionCode: "7A3F-19C2-88B4-D0E1",
+      identity: { x25519PublicKey: transport.publicKey },
+    }, "library.read", "status.retry-test", "node.status", {})).resolves.toEqual({ status: "ok" });
+    expect(socketAttempt).toBe(2);
+    expect(ticketAttempt).toBe(2);
   });
 });

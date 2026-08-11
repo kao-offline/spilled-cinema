@@ -399,6 +399,42 @@ async function sendGatewayRpc(
   return payload.result;
 }
 
+async function tryCachedGatewayRequest(
+  cacheKey: string,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const cached = gatewaySessionCache.get(cacheKey);
+  if (!cached || !isGatewayTicketUsable(cached.ticket)) return null;
+  try {
+    return {
+      candidate: cached.candidate,
+      data: await sendGatewayRpc(cached.candidate, cached.ticket, method, params),
+    };
+  } catch (error) {
+    gatewaySessionCache.delete(cacheKey);
+    console.warn(`[gateway] cached ${cached.candidate.nodeId} ${method} failed, requesting a fresh route:`, error);
+    return null;
+  }
+}
+
+async function requestFreshGatewayCandidate(
+  cacheKey: string,
+  candidate: V2Candidate,
+  issue: () => Promise<CapabilityTicketV2>,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const ticket = await issue();
+  gatewaySessionCache.set(cacheKey, { candidate, ticket });
+  try {
+    return await sendGatewayRpc(candidate, ticket, method, params);
+  } catch (error) {
+    gatewaySessionCache.delete(cacheKey);
+    throw error;
+  }
+}
+
 
 export async function requestPublicGateway(
   capability: PublicCapability,
@@ -407,30 +443,29 @@ export async function requestPublicGateway(
   params: Record<string, unknown>,
 ) {
   const cacheKey = gatewaySessionCacheKey(capability, action);
-  const cached = gatewaySessionCache.get(cacheKey);
-  if (cached && isGatewayTicketUsable(cached.ticket)) {
-    try {
-      return {
-        nodeId: cached.candidate.nodeId,
-        endpointUrl: cached.candidate.endpointUrl ?? null,
-        data: await sendGatewayRpc(cached.candidate, cached.ticket, method, params),
-      };
-    } catch (error) {
-      console.warn(`[gateway] cached ${cached.candidate.nodeId} ${method} failed, re-discovering:`, error);
-      gatewaySessionCache.delete(cacheKey);
-    }
+  const cached = await tryCachedGatewayRequest(cacheKey, method, params);
+  if (cached) {
+    return {
+      nodeId: cached.candidate.nodeId,
+      endpointUrl: cached.candidate.endpointUrl ?? null,
+      data: cached.data,
+    };
   }
 
   const candidates = await discoverCandidates(capability);
   let lastError: unknown = null;
   for (const candidate of candidates) {
     try {
-      const ticket = await issueTicket(candidate, capability, action);
-      gatewaySessionCache.set(cacheKey, { candidate, ticket });
       return {
         nodeId: candidate.nodeId,
         endpointUrl: candidate.endpointUrl ?? null,
-        data: await sendGatewayRpc(candidate, ticket, method, params),
+        data: await requestFreshGatewayCandidate(
+          cacheKey,
+          candidate,
+          () => issueTicket(candidate, capability, action),
+          method,
+          params,
+        ),
       };
     } catch (error) {
       lastError = error;
@@ -449,15 +484,28 @@ export async function requestPrivateGateway(
   params: Record<string, unknown>,
 ) {
   const cacheKey = gatewaySessionCacheKey(capability, action, candidate.nodeId);
-  let ticket = gatewaySessionCache.get(cacheKey)?.ticket;
-  if (!ticket || !isGatewayTicketUsable(ticket)) {
-    ticket = await issuePrivateTicket(candidate, capability, action);
-    gatewaySessionCache.set(cacheKey, { candidate, ticket });
+  const cached = await tryCachedGatewayRequest(cacheKey, method, params);
+  if (cached) return cached.data;
+
+  let lastError: unknown = null;
+  // Public requests can fall through to another verified node. A private code
+  // intentionally resolves to one node, so give that same route one fresh
+  // retry instead of making the user repeat the action manually.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await requestFreshGatewayCandidate(
+        cacheKey,
+        candidate,
+        () => issuePrivateTicket(candidate, capability, action),
+        method,
+        params,
+      );
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        console.warn(`[gateway] private ${candidate.nodeId} ${method} failed, retrying with a fresh ticket:`, error);
+      }
+    }
   }
-  try {
-    return await sendGatewayRpc(candidate, ticket, method, params);
-  } catch (error) {
-    gatewaySessionCache.delete(cacheKey);
-    throw error;
-  }
+  throw lastError;
 }
