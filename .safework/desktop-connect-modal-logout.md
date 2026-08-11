@@ -22,5 +22,8 @@
 - Mobile browser check at 430x932: no horizontal overflow, connection field remained within the viewport, body scrolling was contained, and backdrop filtering was `none`.
 - Direct `/connect` check: modal opens over Home without also opening the welcome modal; closing replaces the route with `/`.
 - Authenticated-state simulation: the connected view exposes a visible `Log out` action.
+- Production deployment: `dpl_GA3oa4PJcu48UVTBjdgywN3jBwfa`, aliased to `https://spilled.overload.studio`.
+- Live desktop check: the Home connection action opened the modal without navigation and with `backdrop-filter: none`.
+- Live mobile check at 430x932: the card measured 406px wide with no horizontal overflow.
 
 Chrome DevTools MCP was unavailable in this environment, so interaction timing and layout checks used the shared T3 browser preview rather than a DevTools performance trace.
