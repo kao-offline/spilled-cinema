@@ -112,6 +112,7 @@ function startVerifier() {
       SPILLED_CONTROL_PLANE_SECRET: config.controlPlaneSecret,
       SPILLED_VERIFIER_PROBES_JSON: config.probesJson || "{}",
       SPILLED_VERIFIER_STATUS_FILE: paths.status,
+      SPILLED_VERIFIER_INTERVAL_MS: String(VERIFIER_INTERVAL_MS),
       ...(config.once ? { SPILLED_VERIFIER_ONCE: "1" } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
