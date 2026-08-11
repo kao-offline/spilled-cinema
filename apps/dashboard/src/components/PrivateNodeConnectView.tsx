@@ -265,7 +265,10 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
                 <p className="mt-7 text-xs font-black uppercase tracking-[0.28em] text-emerald-200">Connection ready</p>
                 <h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">Welcome, {connection.profileName ?? connection.accountName ?? "home"}.</h2>
                 <p className="mt-4 max-w-lg text-sm leading-6 text-white/50">This browser now knows your node by identity, not by a tunnel address. You can change profiles or disconnect in Settings.</p>
-                {embedded ? <button type="button" onClick={onClose} className="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
+                <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                  {embedded ? <button type="button" onClick={onClose} className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
+                  {connection.connectionCode ? <a href={`/node/admin?code=${encodeURIComponent(connection.connectionCode)}`} className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/12 bg-white/[.045] px-7 text-sm font-black text-white/75">Manage server</a> : null}
+                </div>
               </div>
             ) : null}
 

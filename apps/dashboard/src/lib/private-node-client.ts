@@ -5,6 +5,11 @@ import {
   resolvePrivateGatewayCandidate,
   type V2Candidate,
 } from "./v2-gateway-client";
+import { adminCapabilitiesRpc, adminLoginRpc, adminStatusRpc, adminWatcherCreateRpc, type AdminGatewayRpc } from "./private-node-admin-rpc";
+
+async function requestAdminGateway(candidate: V2Candidate, rpc: AdminGatewayRpc) {
+  return await requestPrivateGateway(candidate, rpc.capability, rpc.action, rpc.method, rpc.params);
+}
 
 export type PrivateNodeAccount = {
   accountId: string;
@@ -372,18 +377,20 @@ export async function fetchPrivateNodeAccounts(nodeUrl: string) {
 
 export function readAdminNodeConnection(): AdminNodeConnection {
   if (typeof window === "undefined") {
-    return { nodeUrl: "", token: null, adminId: null, adminName: null };
+    return { nodeUrl: "", nodeId: null, connectionCode: null, token: null, adminId: null, adminName: null };
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(ADMIN_NODE_KEY) || "{}") as Partial<AdminNodeConnection>;
     return {
       nodeUrl: typeof parsed.nodeUrl === "string" ? parsed.nodeUrl : "",
+      nodeId: typeof parsed.nodeId === "string" ? parsed.nodeId : null,
+      connectionCode: typeof parsed.connectionCode === "string" ? parsed.connectionCode : null,
       token: typeof parsed.token === "string" ? parsed.token : null,
       adminId: typeof parsed.adminId === "string" ? parsed.adminId : null,
       adminName: typeof parsed.adminName === "string" ? parsed.adminName : null,
     };
   } catch {
-    return { nodeUrl: "", token: null, adminId: null, adminName: null };
+    return { nodeUrl: "", nodeId: null, connectionCode: null, token: null, adminId: null, adminName: null };
   }
 }
 
@@ -395,11 +402,44 @@ export function writeAdminNodeConnection(connection: AdminNodeConnection) {
 }
 
 export function clearAdminNodeConnection() {
-  const next = { nodeUrl: "", token: null, adminId: null, adminName: null };
+  const next: AdminNodeConnection = { nodeUrl: "", nodeId: null, connectionCode: null, token: null, adminId: null, adminName: null };
   if (typeof window !== "undefined") {
     window.localStorage.removeItem(ADMIN_NODE_KEY);
   }
   return next;
+}
+
+async function resolveSavedAdminNode(connection: Pick<AdminNodeConnection, "nodeId" | "connectionCode">) {
+  if (!connection.connectionCode) throw new Error("Enter the private node connection code.");
+  const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode);
+  if (connection.nodeId && candidate.nodeId !== connection.nodeId) {
+    throw new Error("Connection code resolved to a different node identity.");
+  }
+  return candidate;
+}
+
+export async function loginAdminViaGateway(input: { connection: AdminNodeConnection; adminId: string; password: string }) {
+  const candidate = await resolveSavedAdminNode(input.connection);
+  const result = await requestAdminGateway(candidate, adminLoginRpc(input.adminId, input.password)) as Awaited<ReturnType<typeof loginAdminNodePassword>>;
+  return { ...result, nodeId: candidate.nodeId, connectionCode: candidate.connectionCode };
+}
+
+export async function fetchAdminNodeStatusViaGateway(connection: AdminNodeConnection) {
+  if (!connection.token) throw new Error("Admin sign-in is required.");
+  const candidate = await resolveSavedAdminNode(connection);
+  return await requestAdminGateway(candidate, adminStatusRpc(connection.token)) as Awaited<ReturnType<typeof fetchAdminNodeStatus>>;
+}
+
+export async function saveAdminNodeCapabilitiesViaGateway(connection: AdminNodeConnection, capabilities: Record<string, boolean>) {
+  if (!connection.token) throw new Error("Admin sign-in is required.");
+  const candidate = await resolveSavedAdminNode(connection);
+  return await requestAdminGateway(candidate, adminCapabilitiesRpc(connection.token, capabilities)) as Awaited<ReturnType<typeof saveAdminNodeCapabilities>>;
+}
+
+export async function createAdminWatcherViaGateway(connection: AdminNodeConnection, input: Omit<Parameters<typeof createAdminWatcher>[0], "nodeUrl" | "token">) {
+  if (!connection.token) throw new Error("Admin sign-in is required.");
+  const candidate = await resolveSavedAdminNode(connection);
+  return await requestAdminGateway(candidate, adminWatcherCreateRpc(connection.token, input)) as Awaited<ReturnType<typeof createAdminWatcher>>;
 }
 
 export async function loginAdminNodePassword(input: { nodeUrl: string; adminId: string; password: string }) {

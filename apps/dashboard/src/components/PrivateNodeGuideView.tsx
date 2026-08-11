@@ -4,7 +4,7 @@ const steps = [
   { icon: Server, title: "Install Spilled Server", body: "Run the Windows installer on the PC that holds your media. The new build listens only on that computer and does not create a public tunnel." },
   { icon: LockKeyhole, title: "Finish local setup", body: "Open Spilled Server from the tray, create the administrator, then add a watcher account with a password or passkey." },
   { icon: Wifi, title: "Connect from Home", body: "On any device, open Spilled Cinema, choose Private node on Home, and enter the 16-character connection code shown by your server." },
-  { icon: KeyRound, title: "Sign in", body: "Pick a watcher and profile, then use its password or passkey. The secret is verified by your own node—not stored in the connection code." },
+  { icon: KeyRound, title: "Sign in or manage", body: "Use a watcher password to stream, or choose Manage server and enter the local administrator password to edit the node from the app." },
 ];
 
 export function PrivateNodeGuideView() {

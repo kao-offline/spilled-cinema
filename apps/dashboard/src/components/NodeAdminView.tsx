@@ -3,13 +3,24 @@ import { Database, LockKeyhole, Plus, RefreshCw, ServerCog, SlidersHorizontal, U
 import {
   clearAdminNodeConnection,
   createAdminWatcher,
+  createAdminWatcherViaGateway,
   fetchAdminNodeStatus,
+  fetchAdminNodeStatusViaGateway,
   loginAdminNodePassword,
+  loginAdminViaGateway,
   readAdminNodeConnection,
+  readPrivateNodeConnection,
   saveAdminNodeCapabilities,
+  saveAdminNodeCapabilitiesViaGateway,
   writeAdminNodeConnection,
   type PrivateNodeAccount,
 } from "../lib/private-node-client";
+import { normalizeNodeConnectionCode } from "../../../../packages/node-protocol/src";
+
+function displayCode(value: string) {
+  const compact = value.toUpperCase().replace(/[^A-F0-9]/g, "").slice(0, 16);
+  return compact.match(/.{1,4}/g)?.join("-") ?? compact;
+}
 
 function formatBytes(value: number) {
   if (value < 1024 * 1024 * 1024) return `${Math.round(value / (1024 * 1024))} MB`;
@@ -25,11 +36,19 @@ export function NodeAdminView() {
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("node")?.replace(/\/+$/, "") ?? "";
   }, []);
+  const queryCode = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("code") ?? "";
+  }, []);
   const [connection, setConnection] = useState(() => {
     const saved = readAdminNodeConnection();
-    return queryNode ? { ...saved, nodeUrl: queryNode } : saved;
+    const viewer = readPrivateNodeConnection();
+    if (queryCode) return { ...saved, nodeUrl: "", connectionCode: normalizeNodeConnectionCode(queryCode) ?? queryCode };
+    if (queryNode) return { ...saved, nodeUrl: queryNode, connectionCode: null };
+    if (saved.connectionCode) return saved;
+    return { ...saved, nodeId: viewer.nodeId, connectionCode: viewer.connectionCode };
   });
-  const [adminId, setAdminId] = useState(connection.adminId ?? "admin");
+  const [adminId, setAdminId] = useState(connection.adminId ?? "owner");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState<Awaited<ReturnType<typeof fetchAdminNodeStatus>> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,11 +68,13 @@ export function NodeAdminView() {
   const [quotaGb, setQuotaGb] = useState(200);
 
   async function refresh(nextConnection = connection) {
-    if (!nextConnection.nodeUrl || !nextConnection.token) return;
+    if (!(nextConnection.connectionCode || nextConnection.nodeUrl) || !nextConnection.token) return;
     setBusy(true);
     setMessage(null);
     try {
-      const nextStatus = await fetchAdminNodeStatus(nextConnection.nodeUrl, nextConnection.token);
+      const nextStatus = nextConnection.connectionCode
+        ? await fetchAdminNodeStatusViaGateway(nextConnection)
+        : await fetchAdminNodeStatus(nextConnection.nodeUrl, nextConnection.token);
       setStatus(nextStatus);
       const nodeCapabilities = nextStatus.status.node?.capabilities;
       if (nodeCapabilities) {
@@ -79,16 +100,21 @@ export function NodeAdminView() {
   }, []);
 
   async function login() {
-    if (!connection.nodeUrl || !adminId || !password) {
-      setMessage("Enter node URL, admin username, and password.");
+    if (!(connection.connectionCode || connection.nodeUrl) || !adminId || !password) {
+      setMessage("Enter the node connection code, admin username, and password.");
       return;
     }
     setBusy(true);
     setMessage(null);
     try {
-      const result = await loginAdminNodePassword({ nodeUrl: connection.nodeUrl, adminId, password });
+      const gatewayResult = connection.connectionCode
+        ? await loginAdminViaGateway({ connection, adminId, password })
+        : null;
+      const result = gatewayResult ?? await loginAdminNodePassword({ nodeUrl: connection.nodeUrl, adminId, password });
       const next = writeAdminNodeConnection({
         nodeUrl: connection.nodeUrl,
+        nodeId: gatewayResult?.nodeId ?? connection.nodeId,
+        connectionCode: gatewayResult?.connectionCode ?? connection.connectionCode,
         token: result.token,
         adminId: result.admin.adminId,
         adminName: result.admin.displayName,
@@ -104,11 +130,12 @@ export function NodeAdminView() {
   }
 
   async function saveCapabilities() {
-    if (!connection.nodeUrl || !connection.token) return;
+    if (!(connection.connectionCode || connection.nodeUrl) || !connection.token) return;
     setBusy(true);
     setMessage(null);
     try {
-      await saveAdminNodeCapabilities(connection.nodeUrl, connection.token, capabilities);
+      if (connection.connectionCode) await saveAdminNodeCapabilitiesViaGateway(connection, capabilities);
+      else await saveAdminNodeCapabilities(connection.nodeUrl, connection.token, capabilities);
       await refresh();
       setMessage("Server capabilities saved.");
     } catch (error) {
@@ -119,13 +146,11 @@ export function NodeAdminView() {
   }
 
   async function addWatcher() {
-    if (!connection.nodeUrl || !connection.token || !watcherName.trim()) return;
+    if (!(connection.connectionCode || connection.nodeUrl) || !connection.token || !watcherName.trim()) return;
     setBusy(true);
     setMessage(null);
     try {
-      await createAdminWatcher({
-        nodeUrl: connection.nodeUrl,
-        token: connection.token,
+      const watcherInput = {
         watcherId: cleanId(`watcher_${watcherName}`, "watcher"),
         displayName: watcherName,
         password: watcherPassword || undefined,
@@ -135,7 +160,9 @@ export function NodeAdminView() {
           displayName: name.trim(),
           avatar: "default",
         })),
-      });
+      };
+      if (connection.connectionCode) await createAdminWatcherViaGateway(connection, watcherInput);
+      else await createAdminWatcher({ nodeUrl: connection.nodeUrl, token: connection.token, ...watcherInput });
       setWatcherName("");
       setWatcherPassword("");
       setProfiles("");
@@ -162,7 +189,7 @@ export function NodeAdminView() {
           <div>
             <span className="text-xs font-bold uppercase tracking-[0.32em] text-orange-300">Node admin</span>
             <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-5xl">Server management</h1>
-            <p className="mt-2 max-w-2xl text-sm font-medium text-white/55">Admin accounts manage capabilities and watchers. Watcher accounts own profiles, libraries, and downloads.</p>
+            <p className="mt-2 max-w-2xl text-sm font-medium text-white/55">Find your node with the same connection code, then securely manage capabilities, watchers, profiles, and storage from this app.</p>
           </div>
           {signedIn ? <button onClick={disconnect} className="rounded-full bg-white/10 px-4 py-2 text-sm font-black">Disconnect</button> : null}
         </header>
@@ -179,11 +206,12 @@ export function NodeAdminView() {
               </div>
             </div>
             <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr_0.8fr_auto]">
-              <input value={connection.nodeUrl} onChange={(event) => setConnection((current) => ({ ...current, nodeUrl: event.target.value.trim() }))} placeholder="Node URL" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
+              <input value={displayCode(connection.connectionCode ?? "")} onChange={(event) => setConnection((current) => ({ ...current, nodeUrl: "", nodeId: null, connectionCode: displayCode(event.target.value) }))} placeholder="7A3F-19C2-88B4-D0E1" aria-label="Private node connection code" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 font-mono text-sm font-bold uppercase tracking-[.08em] outline-none focus:border-orange-300" />
               <input value={adminId} onChange={(event) => setAdminId(event.target.value)} placeholder="admin" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
               <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Password" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
               <button onClick={() => void login()} disabled={busy} className="rounded-full bg-white px-5 py-3 text-sm font-black text-black disabled:opacity-60">Sign in</button>
             </div>
+            <p className="mt-3 text-xs font-semibold text-white/32">No IP address or server URL needed. The code locates the node; your admin password authorizes every change on the node itself.</p>
           </section>
         ) : (
           <div className="grid gap-5">

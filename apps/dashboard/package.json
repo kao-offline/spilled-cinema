@@ -12,6 +12,7 @@
     "audit:resolver": "node scripts/audit-resolver-stack.mjs",
     "audit:search": "tsx scripts/evaluate-search.ts",
     "test:private-node-connection": "tsx scripts/private-node-connection-scenarios.ts",
+    "test:private-node-admin": "tsx scripts/private-node-admin-scenarios.ts",
     "preview": "vite preview"
   },
   "dependencies": {
