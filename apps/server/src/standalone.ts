@@ -692,6 +692,7 @@ async function restartPublicTunnel() {
     const previous = publicTunnel;
     publicTunnel = null;
     handlers.runtime.setEndpointUrl(undefined);
+    setNodeEndpointUrl(undefined);
     try {
       previous?.close();
     } catch {
@@ -739,6 +740,7 @@ async function startServerServices() {
     });
   } else if (process.env.SPILLED_NODE_ENDPOINT_URL) {
     handlers.runtime.setEndpointUrl(process.env.SPILLED_NODE_ENDPOINT_URL);
+    setNodeEndpointUrl(process.env.SPILLED_NODE_ENDPOINT_URL);
     console.log(`[spilledcinema-server] public fetch server ${process.env.SPILLED_NODE_ENDPOINT_URL}`);
   } else {
     console.warn("[spilledcinema-server] no public fetch tunnel available; this node is local-only");

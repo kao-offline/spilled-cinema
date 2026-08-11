@@ -34,7 +34,7 @@ Management uses encrypted gateway RPC. The app does not need the PC's IP address
 
 On the server PC:
 
-1. Install `Spilled-Server-Setup-0.2.0-beta.30-x64.exe` and let Spilled Server start.
+1. Install `Spilled-Server-Setup-0.2.0-beta.33-x64.exe` and let Spilled Server start.
    The current beta installer is not code-signed, so Windows SmartScreen may show **More info → Run anyway**. Verify the SHA-256 published with the release before continuing.
 2. Open the tray menu and select **Check server health**. The browser should show `{"status":"ok"}`.
 3. Select **Open setup and settings** and confirm the local console shows the permanent connection code. Test **Connect**, **Accounts**, **Manage**, and **Diagnostics**; reinstalling must not change the code.

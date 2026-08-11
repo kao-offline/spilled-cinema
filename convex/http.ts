@@ -779,7 +779,7 @@ http.route({
     const connectionCode = typeof body.connectionCode === "string"
       ? normalizeConnectionCode(body.connectionCode)
       : null;
-    const privateCapabilities = ["library.read", "library.write", "node.admin"];
+    const privateCapabilities = ["library.read", "library.write", "node.admin", "player.resolve"];
     if (
       typeof body.nodeId !== "string" ||
       !connectionCode ||
@@ -813,7 +813,7 @@ http.route({
       action: body.action,
       maxRequestBytes: 256 * 1024,
       maxResponseBytes: 4 * 1024 * 1024,
-      maxDurationMs: 30_000,
+      maxDurationMs: body.capability === "player.resolve" ? 90_000 : 30_000,
       issuedAt,
       expiresAt: issuedAt + 5 * 60_000,
       nonce: randomBase64Url(24),

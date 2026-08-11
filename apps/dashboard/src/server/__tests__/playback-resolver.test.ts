@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildVidkingEquivalentUrl, resolvePlaybackStream } from "../full-download";
+import { buildVidkingEquivalentUrl, resolvePlaybackStream, setPlaybackProxyEndpointUrl } from "../full-download";
 
 const originalFetch = global.fetch;
 
 afterEach(() => {
   global.fetch = originalFetch;
+  setPlaybackProxyEndpointUrl(undefined);
   vi.restoreAllMocks();
 });
 
@@ -45,6 +46,27 @@ describe("playback resolver", () => {
     expect(resolved.playbackUrl).toContain("/api/download-full/browser-file?");
     expect(resolved.playbackUrl).toContain("playback=1");
     expect(resolved.streamType).toBe("hls");
+  });
+
+  it("uses the node's live endpoint for gateway playback", async () => {
+    setPlaybackProxyEndpointUrl("https://private-node.example/");
+    global.fetch = vi.fn(async () => new Response("#EXTM3U\n#EXT-X-VERSION:3", {
+      status: 200,
+      headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+    })) as typeof fetch;
+    const resolved = await resolvePlaybackStream({
+      episodeId: "private-episode",
+      activePlayerAlias: "direct",
+      players: [{
+        alias: "direct",
+        provider: "provider",
+        label: "Provider",
+        sourcePageUrl: "https://provider.example/watch",
+        embedUrl: "https://provider.example/embed",
+        streamUrl: "https://cdn.example/master.m3u8",
+      }],
+    });
+    expect(resolved.playbackUrl).toMatch(/^https:\/\/private-node\.example\/api\/download-full\/browser-file\?/);
   });
 
   it("tries the next player when the selected provider cannot resolve", async () => {

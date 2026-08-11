@@ -119,6 +119,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
 
   function persistLogin(result: {
     token: string;
+    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -128,6 +129,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     const next = writePrivateNodeConnection({
       ...connection,
       token: result.token,
+      refreshToken: result.refreshToken,
       accountId: result.account.accountId,
       accountName: result.account.displayName,
       profileId: nextProfileId,

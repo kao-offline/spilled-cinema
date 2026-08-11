@@ -867,6 +867,7 @@ export class SpilledCinemaNodeRuntime {
       method: string;
       params: unknown;
       capability: Capability;
+      principalKind: "public" | "private" | "verifier";
       ticketId: string;
       limits: { maxResponseBytes: number; maxDurationMs: number };
     }) => Promise<unknown>;
@@ -933,6 +934,7 @@ export class SpilledCinemaNodeRuntime {
         method: decoded.method,
         params: decoded.params ?? {},
         capability: input.ticket.capability,
+        principalKind: input.ticket.principalKind,
         ticketId: input.ticket.ticketId,
         limits: {
           maxResponseBytes: input.ticket.maxResponseBytes,

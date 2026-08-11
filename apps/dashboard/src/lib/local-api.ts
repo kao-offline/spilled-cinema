@@ -1,4 +1,6 @@
-import { requestPublicGateway } from "./v2-gateway-client";
+import { readPrivateNodeConnection, refreshPrivateNodeSessionViaGateway } from "./private-node-client";
+import { requestPrivateGateway, requestPublicGateway, resolvePrivateGatewayCandidate } from "./v2-gateway-client";
+import { getPrivatePlaybackOperation } from "./private-playback-operation";
 import {
   isLocalhostProbeOnCooldown,
   markLocalhostProbeAttempted,
@@ -432,6 +434,49 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     ? init.body as Record<string, unknown>
     : {};
 
+  const privatePlayback = getPrivatePlaybackOperation(path, body);
+  if (privatePlayback) {
+    let connection = readPrivateNodeConnection();
+    if (connection.nodeId && connection.connectionCode && connection.token) {
+      const request = async () => {
+        const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode!);
+        if (candidate.nodeId !== connection.nodeId) {
+          throw new Error("Saved private node identity no longer matches its connection code.");
+        }
+        return {
+          candidate,
+          data: await requestPrivateGateway(candidate, "player.resolve", privatePlayback.action, privatePlayback.method, {
+            ...privatePlayback.params,
+            accessToken: connection.token,
+            ...(connection.profileId ? { profileId: connection.profileId } : {}),
+          }),
+        };
+      };
+      try {
+        const response = await request();
+        return {
+          ok: true,
+          status: 200,
+          data: response.data as T,
+          origin: response.candidate.endpointUrl ?? response.candidate.nodeId,
+          transport: "gateway",
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/private session|session (?:expired|revoked)|access token/i.test(message)) throw error;
+        connection = await refreshPrivateNodeSessionViaGateway(connection);
+        const response = await request();
+        return {
+          ok: true,
+          status: 200,
+          data: response.data as T,
+          origin: response.candidate.endpointUrl ?? response.candidate.nodeId,
+          transport: "gateway",
+        };
+      }
+    }
+  }
+
   if (path === "/api/search") {
     const response = await requestPublicGateway(
       "provider.search",
@@ -475,15 +520,8 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
         params: { ...body, moduleId: "bombuj" },
       };
     }
-    if (path === "/api/player/resolve") {
-      return { capability: "player.resolve" as const, action: "resolve", method: "player.embed.resolve", params: body };
-    }
-    if (path === "/api/player/clean-resolve") {
-      return { capability: "player.resolve" as const, action: "resolve", method: "player.clean.resolve", params: body };
-    }
-    if (path === "/api/player/playback-resolve") {
-      return { capability: "player.resolve" as const, action: "resolve", method: "player.playback.resolve", params: body };
-    }
+    const playerOperation = getPrivatePlaybackOperation(path, body);
+    if (playerOperation) return { capability: "player.resolve" as const, ...playerOperation };
     return null;
   })();
   if (!operation) return null;
@@ -585,7 +623,8 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     if (gateway) {
       return gateway;
     }
-  } catch {
+  } catch (error) {
+    if (getPrivatePlaybackOperation(path, {}) && readPrivateNodeConnection().token) throw error;
     // Fall through to legacy public fetch servers.
   }
 

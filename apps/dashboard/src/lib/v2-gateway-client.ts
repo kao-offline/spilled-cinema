@@ -4,7 +4,7 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha256";
 
 type PublicCapability = "provider.search" | "provider.feed" | "provider.import" | "player.resolve";
-export type PrivateCapability = "library.read" | "library.write" | "node.admin";
+export type PrivateCapability = "library.read" | "library.write" | "node.admin" | "player.resolve";
 type Capability = PublicCapability | PrivateCapability;
 
 type CapabilityTicketV2 = {

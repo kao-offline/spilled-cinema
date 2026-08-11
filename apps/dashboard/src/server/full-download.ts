@@ -140,6 +140,19 @@ function inferStreamType(value: string): PlaybackStreamType {
   return "unknown";
 }
 
+let playbackProxyEndpointUrl = process.env.SPILLED_NODE_ENDPOINT_URL;
+
+export function setPlaybackProxyEndpointUrl(endpointUrl?: string) {
+  playbackProxyEndpointUrl = endpointUrl?.trim() || undefined;
+}
+
+function makeBrowserFileUrl(relative: string) {
+  if (playbackProxyEndpointUrl && /^https?:\/\//i.test(playbackProxyEndpointUrl)) {
+    return `${playbackProxyEndpointUrl.replace(/\/$/, "")}${relative}`;
+  }
+  return relative;
+}
+
 function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId: string, streamType = inferStreamType(streamUrl)) {
   const extension = streamType === "mp4" ? "mp4" : streamType === "dash" ? "mpd" : "m3u8";
   const name = `${sanitizeFilename(episodeId || "playback")}.${extension}`;
@@ -150,11 +163,7 @@ function buildPlaybackProxyPath(streamUrl: string, refererUrl: string, episodeId
     playback: "1",
   });
   const relative = `/api/download-full/browser-file?${params.toString()}`;
-  const endpointUrl = process.env.SPILLED_NODE_ENDPOINT_URL;
-  if (endpointUrl && /^https?:\/\//i.test(endpointUrl)) {
-    return `${endpointUrl.replace(/\/$/, "")}${relative}`;
-  }
-  return relative;
+  return makeBrowserFileUrl(relative);
 }
 
 function extractSubtitleUrlFromPlayerUrl(value: string | undefined) {
@@ -3266,7 +3275,7 @@ export async function resolveBrowserDownload(input: CreateDownloadInput): Promis
       }
 
       const baseOutputName = basename(createOutputPath(input));
-      const downloadUrl = `/api/download-full/browser-file?url=${encodeURIComponent(resolved.streamUrl)}&name=${encodeURIComponent(baseOutputName)}&referer=${encodeURIComponent(resolved.refererUrl)}`;
+      const downloadUrl = makeBrowserFileUrl(`/api/download-full/browser-file?url=${encodeURIComponent(resolved.streamUrl)}&name=${encodeURIComponent(baseOutputName)}&referer=${encodeURIComponent(resolved.refererUrl)}`);
 
       return {
         downloadUrl,

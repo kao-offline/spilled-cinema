@@ -11,6 +11,7 @@ import {
   listDownloadedEpisodeIds,
   resolveBrowserDownload,
   resolvePlaybackStream,
+  setPlaybackProxyEndpointUrl,
 } from "../../../apps/dashboard/src/server/full-download";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -63,8 +64,10 @@ function inferEndpointUrl() {
   return `http://${host}:${port}`;
 }
 
+let nodeEndpointUrl = inferEndpointUrl();
+
 const runtime = new SpilledCinemaNodeRuntime({
-  endpointUrl: inferEndpointUrl(),
+  endpointUrl: nodeEndpointUrl,
 });
 
 export function getNodeRuntime() {
@@ -72,7 +75,16 @@ export function getNodeRuntime() {
 }
 
 export function setNodeEndpointUrl(endpointUrl?: string) {
+  nodeEndpointUrl = endpointUrl;
   runtime.setEndpointUrl(endpointUrl);
+  setPlaybackProxyEndpointUrl(endpointUrl);
+}
+
+function syncPlaybackProxyEndpoint() {
+  // Keep this at the operation boundary as well as the tunnel callback. The
+  // bundled Windows server lazily initializes the resolver module, which can
+  // otherwise overwrite an endpoint set during server startup.
+  setPlaybackProxyEndpointUrl(nodeEndpointUrl);
 }
 
 export async function getNodeStatus() {
@@ -525,14 +537,17 @@ export async function checkDownload(episodeId: string) {
 }
 
 export async function resolveBrowserDownloadViaNode(input: Parameters<typeof resolveBrowserDownload>[0]) {
+  syncPlaybackProxyEndpoint();
   return resolveBrowserDownload(input);
 }
 
 export async function resolveCleanPlaybackViaNode(input: Parameters<typeof resolveBrowserDownload>[0]) {
+  syncPlaybackProxyEndpoint();
   return resolveBrowserDownload(input);
 }
 
 export async function resolvePlaybackViaNode(input: Parameters<typeof resolvePlaybackStream>[0]) {
+  syncPlaybackProxyEndpoint();
   return resolvePlaybackStream(input);
 }
 

@@ -12,6 +12,7 @@ function executorFixture() {
     method,
     params,
     capability,
+    principalKind: "private",
     ticketId: "ticket-private",
     limits: { maxResponseBytes: 1024 * 1024, maxDurationMs: 30_000 },
   });

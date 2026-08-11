@@ -13,6 +13,11 @@ const LIGHTWEIGHT_LIMITS: ResourceLimits = {
   maxTemporaryBytes: 0,
 };
 
+const PLAYER_RESOLVE_LIMITS: ResourceLimits = {
+  ...LIGHTWEIGHT_LIMITS,
+  maxDurationMs: 90_000,
+};
+
 const BULK_LIMITS: ResourceLimits = {
   maxRequestBytes: 256 * 1024,
   maxResponseBytes: 10 * 1024 * 1024 * 1024,
@@ -51,6 +56,7 @@ export type PolicyRequest = {
 };
 
 function limitsFor(capability: Capability) {
+  if (capability === "player.resolve") return PLAYER_RESOLVE_LIMITS;
   return capability === "download.transient" || capability === "spillshare.read" || capability === "relay.stream"
     ? BULK_LIMITS
     : LIGHTWEIGHT_LIMITS;

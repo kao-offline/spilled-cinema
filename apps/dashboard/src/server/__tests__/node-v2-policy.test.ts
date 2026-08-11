@@ -25,6 +25,16 @@ describe("node v2 capability policy", () => {
     })).toEqual({ allow: false, reason: "principal-not-allowed" });
   });
 
+  it("reserves the full playback resolver budget", () => {
+    const decision = decideCapability({
+      principal: { kind: "owner", accountId: "watcher", sessionId: "session" },
+      capability: "player.resolve",
+      enabledCapabilities: enabled,
+    });
+    expect(decision.allow).toBe(true);
+    if (decision.allow) expect(decision.limits.maxDurationMs).toBe(90_000);
+  });
+
   it("preempts public bulk work for local playback", () => {
     expect(decidePublicWork({
       cpuPercent: 20,

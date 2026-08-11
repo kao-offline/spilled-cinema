@@ -70,10 +70,17 @@ export function createV2RpcExecutor(
     method: string;
     params: unknown;
     capability: Capability;
+    principalKind: "public" | "private" | "verifier";
     ticketId: string;
     limits: { maxResponseBytes: number; maxDurationMs: number };
   }) => {
     const params = asRecord(request.params);
+    if (request.principalKind === "private" && isPlayerResolveMethod(request.method)) {
+      await runtime.validatePrivateSession(
+        typeof params.accessToken === "string" ? params.accessToken : undefined,
+        "library",
+      );
+    }
     switch (request.method) {
       case "provider.search":
         return await invokeJsonHandler(
@@ -324,4 +331,11 @@ export function createV2RpcExecutor(
         throw new Error(`Remote RPC method "${request.method}" is not implemented.`);
     }
   };
+}
+
+export function isPlayerResolveMethod(method: string) {
+  return method === "player.embed.resolve" ||
+    method === "player.clean.resolve" ||
+    method === "player.playback.resolve" ||
+    method === "player.resolve";
 }
