@@ -309,6 +309,26 @@ body {
   }
 }
 
+.spilled-audio-marker {
+  gap: 0.28rem;
+  min-width: 2.15rem;
+  padding-inline: 0.38rem;
+}
+
+.spilled-dubbing-tag {
+  display: inline-flex;
+  height: 1.35rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.13);
+  color: rgba(167, 243, 208, 0.96);
+  font-size: 0.58rem;
+  font-weight: 900;
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.2);
+}
+
 @supports (animation-timeline: view()) {
   .animate-grid-scroll-reveal {
     animation: grid-scroll-reveal linear both;
@@ -685,9 +705,33 @@ body {
   }
 
   .tv-mode .tv-episode-card {
-    min-height: 6rem;
-    padding: 1rem;
+    min-height: 7.4rem;
+    padding: 1.15rem;
     border-radius: 1rem;
+  }
+
+  .tv-mode .tv-episode-code {
+    font-size: 0.92rem !important;
+    line-height: 1.15rem !important;
+    color: rgba(255, 255, 255, 0.58);
+  }
+
+  .tv-mode .tv-episode-title {
+    font-size: 1.12rem;
+    line-height: 1.35rem;
+  }
+
+  .tv-mode .spilled-audio-marker {
+    height: 1.8rem;
+    min-width: 3.25rem;
+    gap: 0.35rem;
+    padding-inline: 0.55rem;
+    font-size: 0.7rem;
+  }
+
+  .tv-mode .spilled-audio-marker svg {
+    height: 1rem;
+    width: 1rem;
   }
 
   .tv-mode .player-episode-selector {
@@ -698,6 +742,30 @@ body {
 
   .tv-mode .player-episode-selector header button {
     min-height: 3rem;
+    min-width: 9rem;
+  }
+
+  .tv-mode .player-selector-title {
+    font-size: 1.25rem !important;
+    line-height: 1.45rem !important;
+  }
+
+  .tv-mode .player-selector-number {
+    font-size: 1.45rem;
+    color: rgba(255, 255, 255, 0.96);
+  }
+
+  .tv-mode .player-selector-meta {
+    font-size: 0.78rem !important;
+    line-height: 1rem !important;
+  }
+
+  .tv-mode .player-source-menu {
+    width: min(92vw, 36rem);
+  }
+
+  .tv-mode .player-language-tab {
+    min-height: 5rem;
     min-width: 9rem;
   }
 

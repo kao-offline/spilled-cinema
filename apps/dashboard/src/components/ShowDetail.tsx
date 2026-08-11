@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
-import { ArrowLeft, Captions, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, Volume2, X } from "lucide-react";
 import { clsx } from "clsx";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
@@ -10,7 +10,7 @@ import { fetchCastForShow, fetchPersonCredits } from "../lib/import-client";
 import { fetchExploreFeed } from "../lib/discovery-client";
 import { getProviderLabel } from "../lib/command-search";
 import { getOverlayBannerArtwork, getShowArtwork, getShowMetadata, getStandaloneBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
-import { getCanonicalLanguageKey } from "../lib/language";
+import { getEpisodeAudioAvailability } from "../lib/episode-audio";
 
 type ShowDetailProps = {
   show: ImportedShow | null;
@@ -52,14 +52,6 @@ function episodeShortLabel(episode: LibraryEpisode | null) {
     return `S${episode.seasonNumber}E${String(episode.episodeNumber).padStart(2, "0")}`;
   }
   return `S${episode.seasonNumber}`;
-}
-
-function hasCzechSubtitles(episode: LibraryEpisode) {
-  return episode.players.some((player) => {
-    if (!player.subtitlesUrl) return false;
-    const key = getCanonicalLanguageKey(player.language);
-    return key.includes("cz") && key.includes("subs");
-  });
 }
 
 function initialsForName(name: string) {
@@ -426,7 +418,7 @@ export function ShowDetail({
                             const fullPercent = fullJob?.percent ?? 0;
                             const isDownloaded = downloadedEpisodeIds.has(episode.id) || fullJob?.state === "completed";
                             const episodeTitle = formatEpisodeTitle(episode);
-                            const hasCzSubs = hasCzechSubtitles(episode);
+                            const audioAvailability = getEpisodeAudioAvailability(episode);
                             return (
                               <div key={episode.id} className="spilled-episode-row group">
                                 <button
@@ -441,7 +433,8 @@ export function ShowDetail({
                                   <span className="spilled-episode-code">{episodeShortLabel(episode)}</span>
                                    <span className="min-w-0 flex-1 truncate text-sm font-black leading-tight text-white">{episodeTitle}</span>
                                    {episode.watched ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-400/18 text-emerald-200" title="Watched"><Check className="h-3 w-3" /></span> : null}
-                                   {hasCzSubs ? <span className="spilled-subtitle-tag inline-flex h-5 w-5 items-center justify-center" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
+                                   {audioAvailability.subtitles ? <span className="spilled-subtitle-tag spilled-audio-marker" title="Subtitles available" aria-label="Subtitles available"><Captions className="h-3.5 w-3.5" /><span>SUB</span></span> : null}
+                                   {audioAvailability.dubbing ? <span className="spilled-dubbing-tag spilled-audio-marker" title="Dubbed audio available" aria-label="Dubbed audio available"><Volume2 className="h-3.5 w-3.5" /><span>DUB</span></span> : null}
                                  </button>
                                  {episode.directors?.length ? (
                                    <div className="flex min-w-0 items-center gap-1 text-xs text-white/40 mt-0.5 pl-11">
@@ -672,8 +665,8 @@ export function ShowDetail({
                         ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
                         : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
                     )}
-                    aria-label="Check for new episodes"
-                    title="Scan svetserialu for episodes you don't have yet"
+                    aria-label="Refresh episodes, subtitles, and dubbing"
+                    title="Check for new episodes, subtitles, and dubbed audio"
                   >
                     <RefreshCw className={clsx("h-3.5 w-3.5", checkNewEpisodesState?.checking && "animate-spin")} />
                   </button>
@@ -694,18 +687,24 @@ export function ShowDetail({
               ))}
             </div>
             <div className="tv-episode-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              {activeSeasonEpisodes.map((episode) => (
+              {activeSeasonEpisodes.map((episode) => {
+                const audioAvailability = getEpisodeAudioAvailability(episode);
+                return (
                 <button key={episode.id} type="button" onClick={() => onSelectEpisode(episode)} className="tv-episode-card group min-w-0 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3 text-left transition hover:border-white/18 hover:bg-white/[0.065] active:scale-[0.98]">
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-[0.18em] text-white/35">{episodeShortLabel(episode)}</span>
+                    <span className="tv-episode-code text-[10px] font-black uppercase tracking-[0.18em] text-white/35">{episodeShortLabel(episode)}</span>
                     <Play className="h-3.5 w-3.5 fill-white/65 text-white/65 transition group-hover:fill-white group-hover:text-white" />
                   </div>
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <div className="min-w-0 truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
-                    {hasCzechSubtitles(episode) ? <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-300/10 text-sky-200/80" title="Czech subtitles" aria-label="Czech subtitles"><Captions className="h-3.5 w-3.5" /></span> : null}
+                  <div className="flex min-w-0 items-end justify-between gap-2">
+                    <div className="tv-episode-title min-w-0 truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {audioAvailability.subtitles ? <span className="spilled-subtitle-tag spilled-audio-marker" title="Subtitles available" aria-label="Subtitles available"><Captions className="h-3.5 w-3.5" /><span>SUB</span></span> : null}
+                      {audioAvailability.dubbing ? <span className="spilled-dubbing-tag spilled-audio-marker" title="Dubbed audio available" aria-label="Dubbed audio available"><Volume2 className="h-3.5 w-3.5" /><span>DUB</span></span> : null}
+                    </div>
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           </section>
         ) : null}

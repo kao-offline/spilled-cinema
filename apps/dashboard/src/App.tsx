@@ -146,6 +146,7 @@ import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLib
 import { scanProviderFeeds } from "./lib/library-watcher";
 import { applyTvMode, readTvMode, writeTvMode } from "./lib/tv-mode";
 import { createImportGate, findImportedShowBySource, importSourceKey } from "./lib/import-guard";
+import { countAddedEpisodeAudioOptions } from "./lib/episode-audio";
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
@@ -797,7 +798,7 @@ function AppContent() {
       }
       const updated = result.changedTitles.length;
       if (updated > 0) {
-        setNewEpisodeCheckState({ checking: false, message: `Updated ${updated} ${updated === 1 ? "title" : "titles"} with new episodes.`, error: false });
+        setNewEpisodeCheckState({ checking: false, message: `Updated ${updated} ${updated === 1 ? "title" : "titles"} with new episodes or playback options.`, error: false });
       } else if (result.refreshedTitles > 0) {
         setNewEpisodeCheckState({ checking: false, message: "Checked — no new episodes, your library is up to date.", error: false });
       } else {
@@ -839,16 +840,26 @@ function AppContent() {
         .map((episode) => episode.episodeCode?.trim().toLowerCase())
         .filter((code): code is string => Boolean(code) && !existingCodes.has(code!));
       const newCount = newCodes.length;
+      const nextState = mergeLibraryStates(stateRef.current, mergeImportedShowIntoState(stateRef.current, imported, show.slug));
+      const refreshedShow = nextState.shows.find((entry) => entry.slug === show.slug);
+      const addedAudio = countAddedEpisodeAudioOptions(show.episodes, refreshedShow?.episodes ?? show.episodes);
 
-      if (newCount > 0) {
-        const nextState = mergeLibraryStates(stateRef.current, mergeImportedShowIntoState(stateRef.current, imported, show.slug));
-        writeLibraryState(nextState);
-        stateRef.current = nextState;
-        setState(nextState);
-        setNewEpisodeCheckState({ checking: false, message: `Found ${newCount} new ${newCount === 1 ? "episode" : "episodes"} for this show.`, error: false });
-      } else {
-        setNewEpisodeCheckState({ checking: false, message: "No new episodes found for this show.", error: false });
-      }
+      writeLibraryState(nextState);
+      stateRef.current = nextState;
+      setState(nextState);
+
+      const additions = [
+        newCount > 0 ? `${newCount} new ${newCount === 1 ? "episode" : "episodes"}` : null,
+        addedAudio.subtitles > 0 ? `subtitles for ${addedAudio.subtitles} ${addedAudio.subtitles === 1 ? "episode" : "episodes"}` : null,
+        addedAudio.dubbing > 0 ? `dubbing for ${addedAudio.dubbing} ${addedAudio.dubbing === 1 ? "episode" : "episodes"}` : null,
+      ].filter((entry): entry is string => Boolean(entry));
+      setNewEpisodeCheckState({
+        checking: false,
+        message: additions.length > 0
+          ? `Refresh found ${additions.join(", ")}.`
+          : "Up to date — no new episodes, subtitles, or dubbing found.",
+        error: false,
+      });
     } catch (error) {
       setNewEpisodeCheckState({ checking: false, message: `Check failed: ${error instanceof Error ? error.message : String(error)}`, error: true });
     }
@@ -3907,11 +3918,11 @@ function AppContent() {
                             ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
                             : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
                         )}
-                        aria-label="Check for new episodes"
-                        title="Scan svetserialu for episodes you don't have yet"
+                        aria-label="Refresh episodes, subtitles, and dubbing"
+                        title="Check for new episodes, subtitles, and dubbed audio"
                       >
                         <RefreshCw className={clsx("h-3.5 w-3.5", newEpisodeCheckState.checking && "animate-spin")} />
-                        {newEpisodeCheckState.checking ? "Checking…" : "Check for new episodes"}
+                        {newEpisodeCheckState.checking ? "Checking…" : "Refresh library"}
                       </button>
                     ) : null}
                     <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>

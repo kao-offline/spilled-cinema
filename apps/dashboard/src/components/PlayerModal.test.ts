@@ -34,4 +34,10 @@ describe("universal playback modal policy", () => {
     expect(source).toContain("fixed inset-0 z-[120] h-[100dvh]");
     expect(source).toContain("env(safe-area-inset-top)");
   });
+
+  it("does not show the episode selector for movies", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "PlayerModal.tsx"), "utf8");
+    expect(source).toContain("{!isMovieEntry ? (");
+    expect(source).toContain('aria-label="Episodes"');
+  });
 });
