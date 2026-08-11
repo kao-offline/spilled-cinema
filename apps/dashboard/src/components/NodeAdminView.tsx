@@ -127,7 +127,10 @@ export function NodeAdminView() {
       setPassword("");
       await refresh(next);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Invalid username or password.");
+      const detail = error instanceof Error ? error.message : "Invalid username or password.";
+      setMessage(detail.includes("Invalid username or password")
+        ? "Owner login was rejected. Use the settings username owner, not the viewing-account name. Reinstalling keeps the old password; reset it on the server PC from the tray → Open setup and settings → Accounts."
+        : detail);
     } finally {
       setBusy(false);
     }
@@ -218,11 +221,11 @@ export function NodeAdminView() {
             </div>
             <div className="grid gap-3 md:grid-cols-[1.2fr_0.8fr_0.8fr_auto]">
               <input value={displayCode(connection.connectionCode ?? "")} onChange={(event) => setConnection((current) => ({ ...current, nodeUrl: "", nodeId: null, connectionCode: displayCode(event.target.value) }))} placeholder="7A3F-19C2-88B4-D0E1" aria-label="Private node connection code" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 font-mono text-sm font-bold uppercase tracking-[.08em] outline-none focus:border-orange-300" />
-              <input value={adminId} onChange={(event) => setAdminId(event.target.value)} placeholder="admin" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
+              <input value={adminId} onChange={(event) => setAdminId(event.target.value)} placeholder="owner" aria-label="Settings username" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
               <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Password" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
               <button onClick={() => void login()} disabled={busy} className="rounded-full bg-white px-5 py-3 text-sm font-black text-black disabled:opacity-60">Sign in</button>
             </div>
-            <p className="mt-3 text-xs font-semibold text-white/32">No IP address or server URL needed. The code locates the node; your admin password authorizes every change on the node itself.</p>
+            <p className="mt-3 text-xs font-semibold text-white/32">No IP address or server URL needed. The settings username created by Windows setup is <strong className="text-white/55">owner</strong>. If needed, reset it locally from the server tray → Open setup and settings → Accounts.</p>
           </section>
         ) : (
           <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">

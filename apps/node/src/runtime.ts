@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
 import { open, stat } from "node:fs/promises";
 import { gzip as gzipCallback } from "node:zlib";
@@ -74,6 +74,7 @@ function gzipFast(input: Buffer) {
 
 const ACCESS_SESSION_TTL_MS = 15 * 60 * 1000;
 const REFRESH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const LOCAL_CREDENTIAL_RECOVERY_TTL_MS = 15 * 60 * 1000;
 
 function createRefreshTokenRecord(input: {
   accessSessionId: string;
@@ -215,6 +216,7 @@ export class SpilledCinemaNodeRuntime {
   private statePromise: Promise<NodeStateFile> | null = null;
   private readonly options: NodeRuntimeOptions;
   private bootstrapSetupCode: string | null = null;
+  private localCredentialRecovery: { tokenHash: string; expiresAt: number } | null = null;
   private ephemeralEnrollmentCredential: string | null = null;
   private readonly remoteReplayWindow = new TicketReplayWindow();
 
@@ -374,6 +376,96 @@ export class SpilledCinemaNodeRuntime {
       };
     }
     return null;
+  }
+
+  async createLocalCredentialRecovery() {
+    const state = await this.loadState();
+    if (this.getSetupReason(state) !== "complete") {
+      throw new Error("Finish initial setup before managing account passwords.");
+    }
+    const admin = state.adminAccounts.find((account) => !account.disabledAt);
+    if (!admin) {
+      throw new Error("No active owner account is configured.");
+    }
+    const token = base64UrlEncode(randomBytes(32));
+    this.localCredentialRecovery = {
+      tokenHash: sha256(token),
+      expiresAt: Date.now() + LOCAL_CREDENTIAL_RECOVERY_TTL_MS,
+    };
+    return {
+      token,
+      expiresAt: this.localCredentialRecovery.expiresAt,
+      admin: this.toPublicAdminAccount(admin),
+      watchers: state.watcherAccounts
+        .filter((watcher) => !watcher.disabledAt)
+        .map((watcher) => this.toPublicWatcherAccount(
+          watcher,
+          state.watcherProfiles.filter((profile) => profile.watcherId === watcher.watcherId),
+        )),
+    };
+  }
+
+  async resetLocalCredentials(input: {
+    token: string;
+    adminPassword?: string;
+    watcherId?: string;
+    watcherPassword?: string;
+  }) {
+    const recovery = this.localCredentialRecovery;
+    const suppliedHash = sha256(input.token || "");
+    const expected = recovery ? Buffer.from(recovery.tokenHash, "utf8") : Buffer.alloc(0);
+    const supplied = Buffer.from(suppliedHash, "utf8");
+    if (!recovery || recovery.expiresAt <= Date.now() || expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+      throw new Error("Local recovery session expired. Reload Server Settings and try again.");
+    }
+    const resetAdmin = typeof input.adminPassword === "string" && input.adminPassword.length > 0;
+    const resetWatcher = typeof input.watcherPassword === "string" && input.watcherPassword.length > 0;
+    if (!resetAdmin && !resetWatcher) {
+      throw new Error("Enter at least one new password.");
+    }
+    if (resetAdmin && input.adminPassword!.length < 10) {
+      throw new Error("Owner password must be at least 10 characters.");
+    }
+    if (resetWatcher && input.watcherPassword!.length < 10) {
+      throw new Error("Viewing password must be at least 10 characters.");
+    }
+    const state = await this.loadState();
+    const admin = state.adminAccounts.find((account) => !account.disabledAt);
+    if (resetAdmin && !admin) {
+      throw new Error("No active owner account is configured.");
+    }
+    const watcher = resetWatcher
+      ? state.watcherAccounts.find((account) => account.watcherId === input.watcherId && !account.disabledAt)
+      : undefined;
+    if (resetWatcher && !watcher) {
+      throw new Error("Choose an active viewing account.");
+    }
+    this.localCredentialRecovery = null;
+    const now = Date.now();
+    const adminPasswordHash = resetAdmin ? await hashPassword(input.adminPassword!) : undefined;
+    const watcherPasswordHash = resetWatcher ? await hashPassword(input.watcherPassword!) : undefined;
+    await this.saveState({
+      ...state,
+      adminAccounts: state.adminAccounts.map((account) => account.adminId === admin?.adminId && adminPasswordHash
+        ? { ...account, passwordHash: adminPasswordHash, updatedAt: now }
+        : account),
+      watcherAccounts: state.watcherAccounts.map((account) => account.watcherId === watcher?.watcherId && watcherPasswordHash
+        ? { ...account, passwordHash: watcherPasswordHash, updatedAt: now }
+        : account),
+      sessions: [],
+      refreshSessions: [],
+      securityEvents: state.securityEvents.concat({
+        eventId: randomId("security"),
+        eventType: "local-credential-recovery",
+        details: { ownerPasswordReset: resetAdmin, watcherPasswordReset: resetWatcher },
+        createdAt: now,
+      }),
+    });
+    return {
+      ok: true,
+      ownerPasswordReset: resetAdmin,
+      watcherPasswordReset: resetWatcher,
+    };
   }
 
   private getAccount(accountId: string): PrivateNodeAccountConfig {

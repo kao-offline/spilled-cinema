@@ -43,6 +43,8 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
   const [nodeOnline, setNodeOnline] = useState(Boolean(saved.nodeId));
 
   const selectedAccount = accounts.find((account) => account.accountId === accountId);
+  const selectedAccountHasPassword = Boolean(selectedAccount?.hasPassword);
+  const selectedAccountHasPasskey = (selectedAccount?.passkeyCount ?? 0) > 0;
 
   useEffect(() => {
     if (!embedded) return;
@@ -147,7 +149,10 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     try {
       persistLogin(await loginWatcherViaGateway({ connection, watcherId: accountId, password, profileId }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Sign-in failed.");
+      const detail = error instanceof Error ? error.message : "Sign-in failed.";
+      setMessage(detail.includes("Invalid username or password")
+        ? "That viewing password was rejected. It is separate from Server Settings. On the server PC, open the tray → Open setup and settings → Accounts to set or reset it."
+        : detail);
     } finally {
       setBusy(false);
     }
@@ -251,11 +256,18 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
                     ))}
                   </div>
                 ) : null}
-                <div className="mt-8 grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void passwordLogin(); }} type="password" autoComplete="current-password" placeholder="Account password" className="min-h-12 rounded-full border border-white/12 bg-black/30 px-5 text-sm font-bold outline-none transition placeholder:text-white/25 focus:border-orange-300" />
-                  <button onClick={() => void passwordLogin()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-6 text-sm font-black text-black disabled:opacity-40">{busy ? <LoaderCircle className="animate-spin" size={18} /> : <KeyRound size={18} />} Sign in</button>
-                </div>
-                <button onClick={() => void passkeyLogin()} disabled={busy} className="mt-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.035] text-sm font-black text-white/75 transition hover:border-white/25 hover:text-white disabled:opacity-40"><LockKeyhole size={18} /> Use a passkey instead</button>
+                {!selectedAccountHasPassword && !selectedAccountHasPasskey ? (
+                  <div className="mt-8 rounded-2xl border border-amber-200/20 bg-amber-200/[0.06] p-5 text-sm font-semibold leading-6 text-amber-50/80">
+                    This viewing account has no sign-in method yet. On the server PC, open the Spilled Server tray → <strong>Open setup and settings</strong> → <strong>Accounts</strong>, then set a viewing password. Sharing can stay completely off.
+                  </div>
+                ) : null}
+                {selectedAccountHasPassword ? (
+                  <div className="mt-8 grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void passwordLogin(); }} type="password" autoComplete="current-password" placeholder="Viewing password" className="min-h-12 rounded-full border border-white/12 bg-black/30 px-5 text-sm font-bold outline-none transition placeholder:text-white/25 focus:border-orange-300" />
+                    <button onClick={() => void passwordLogin()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-6 text-sm font-black text-black disabled:opacity-40">{busy ? <LoaderCircle className="animate-spin" size={18} /> : <KeyRound size={18} />} Sign in</button>
+                  </div>
+                ) : null}
+                {selectedAccountHasPasskey ? <button onClick={() => void passkeyLogin()} disabled={busy} className="mt-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.035] text-sm font-black text-white/75 transition hover:border-white/25 hover:text-white disabled:opacity-40"><LockKeyhole size={18} /> Use a passkey instead</button> : null}
               </div>
             ) : null}
 

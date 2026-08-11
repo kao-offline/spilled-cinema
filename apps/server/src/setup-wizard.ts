@@ -3,6 +3,12 @@ type SetupWizardInput = {
   setupRequired: boolean;
   suggestedNodeName: string;
   connectionCode: string;
+  credentialRecovery: null | {
+    token: string;
+    expiresAt: number;
+    admin: { adminId: string; displayName: string; hasPassword: boolean };
+    watchers: Array<{ watcherId: string; displayName: string; hasPassword: boolean }>;
+  };
 };
 
 function jsonForScript(value: unknown) {
@@ -26,7 +32,7 @@ export function renderSetupWizard(input: SetupWizardInput) {
       radial-gradient(circle at 78% 10%,rgba(255,90,31,.16),transparent 27rem),
       repeating-linear-gradient(90deg,transparent 0 79px,rgba(255,255,255,.025) 80px),
       var(--ink)}
-    button,input{font:inherit}
+    button,input,select{font:inherit}
     button{cursor:pointer}
     .shell{width:min(1080px,calc(100% - 32px));margin:0 auto;padding:28px 0 50px}
     .mast{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:18px}
@@ -58,8 +64,8 @@ export function renderSetupWizard(input: SetupWizardInput) {
     .secondary{background:transparent;color:var(--paper);border:1px solid var(--line)}
     .field{display:grid;gap:8px;margin-top:22px}
     .field label{font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-    .field input{width:100%;border:1px solid var(--line);border-radius:2px;background:#090908;color:var(--paper);padding:15px 16px;outline:none}
-    .field input:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(255,193,90,.1)}
+    .field input,.field select{width:100%;border:1px solid var(--line);border-radius:2px;background:#090908;color:var(--paper);padding:15px 16px;outline:none}
+    .field input:focus,.field select:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(255,193,90,.1)}
     .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
     .choices{display:grid;gap:10px;margin-top:28px}
     .choice{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:center;border:1px solid var(--line);padding:16px;background:#0e0e0c}
@@ -72,7 +78,7 @@ export function renderSetupWizard(input: SetupWizardInput) {
     .finish{display:grid;place-items:center;text-align:center;min-height:430px}
     .check{display:grid;place-items:center;width:72px;height:72px;border-radius:50%;background:var(--green);color:#08130c;font-size:36px;font-weight:900;margin:0 auto 23px}
     .fine{color:#777167;font-size:12px;margin-top:16px}
-    .console{width:100%;text-align:left}
+    .console{width:100%;min-width:0;max-width:100%;text-align:left}
     .identity{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:28px 0 20px;padding:18px;border:1px solid rgba(255,193,90,.38);background:rgba(255,193,90,.06)}
     .identity small{display:block;color:var(--muted);font-size:11px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;margin-bottom:7px}
     .code{font:900 clamp(18px,4vw,27px)/1.1 ui-monospace,"Cascadia Code",monospace;letter-spacing:.08em;color:var(--amber);overflow-wrap:anywhere}
@@ -82,8 +88,9 @@ export function renderSetupWizard(input: SetupWizardInput) {
     .console-tab.active{border-color:var(--orange);color:var(--paper)}
     .console-panel{padding:22px 2px 4px}.console-panel p{margin:0;color:var(--muted);line-height:1.6}
     .console-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.console-actions a{text-decoration:none}
+    .recovery-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:18px;min-width:0}.recovery-card{min-width:0;border:1px solid var(--line);background:#0e0e0c;padding:18px}.recovery-card h3{margin:0;font-size:16px}.recovery-card p{font-size:13px;margin-top:6px}.recovery-status{display:none;margin-top:16px;padding:13px;border:1px solid rgba(116,216,155,.35);background:rgba(116,216,155,.08);color:#c9f7d8;font-size:13px;font-weight:800}
     [hidden]{display:none!important}
-    @media(max-width:760px){.layout{grid-template-columns:1fr;padding-top:25px}.rail{display:flex;overflow:auto}.rail:before{display:none}.step-label{min-width:110px;min-height:45px}.step-label span{display:none}.assurance,.grid2{grid-template-columns:1fr}.frame{padding:30px 22px}.card{min-height:0}.identity{align-items:flex-start;flex-direction:column}.copy{width:100%}}
+    @media(max-width:760px){.layout{grid-template-columns:1fr;padding-top:25px}.rail{display:flex;overflow:auto}.rail:before{display:none}.step-label{min-width:110px;min-height:45px}.step-label span{display:none}.assurance,.grid2{grid-template-columns:1fr}.recovery-grid{grid-template-columns:minmax(0,1fr)}.frame{padding:30px 22px}.card{min-height:0}.identity{align-items:flex-start;flex-direction:column}.copy{width:100%}}
   </style>
 </head>
 <body>
@@ -114,14 +121,14 @@ export function renderSetupWizard(input: SetupWizardInput) {
         <div class="frame" data-step="1" hidden>
           <div class="eyebrow">Owner & server</div>
           <h2>Make it yours.</h2>
-          <p class="lead">Use a name you will recognize. Your owner password stays on this PC and protects server settings.</p>
+          <p class="lead">Use a name you will recognize. Your owner password stays on this PC and signs your first viewing profile into Spilled Cinema.</p>
           <div class="field"><label for="nodeName">Server name</label><input id="nodeName" autocomplete="organization"></div>
           <div class="field"><label for="ownerName">Your name</label><input id="ownerName" value="Owner" autocomplete="name"></div>
           <div class="grid2">
             <div class="field"><label for="password">Owner password</label><input id="password" type="password" minlength="10" autocomplete="new-password" placeholder="At least 10 characters"></div>
             <div class="field"><label for="confirm">Confirm password</label><input id="confirm" type="password" minlength="10" autocomplete="new-password"></div>
           </div>
-          <div class="notice">Use a password you do not use anywhere else. Passkey and recovery setup can be completed from Server Admin after this first run.</div>
+          <div class="notice">Use a password you do not use anywhere else. The settings username is always <strong>owner</strong>. You can give viewing accounts separate passwords later.</div>
           <div class="error" id="ownerError"></div>
           <div class="actions"><button class="secondary" data-back>Back</button><button class="primary" id="ownerNext">Continue →</button></div>
         </div>
@@ -152,12 +159,33 @@ export function renderSetupWizard(input: SetupWizardInput) {
             </div>
             <nav class="console-tabs" aria-label="Server console">
               <button class="console-tab active" type="button" data-console-tab="connect">Connect</button>
+              <button class="console-tab" type="button" data-console-tab="accounts">Accounts</button>
               <button class="console-tab" type="button" data-console-tab="manage">Manage</button>
               <button class="console-tab" type="button" data-console-tab="diagnostics">Diagnostics</button>
             </nav>
             <section class="console-panel" data-console-panel="connect">
               <p>Open Spilled Cinema with this node already selected. Only people you approve can use it.</p>
               <div class="console-actions"><a class="primary" id="openCinema" href="#">Open Spilled Cinema</a></div>
+            </section>
+            <section class="console-panel" data-console-panel="accounts" hidden>
+              <p>Reset passwords locally if sign-in is rejected. This works only on the server PC and does not enable sharing.</p>
+              <div class="recovery-grid" id="recoveryForm">
+                <div class="recovery-card">
+                  <h3>Server Settings owner</h3>
+                  <p>Sign in online with username <strong id="ownerLogin">owner</strong>.</p>
+                  <div class="field"><label for="ownerRecoveryPassword">New owner password</label><input id="ownerRecoveryPassword" type="password" minlength="10" autocomplete="new-password" placeholder="Leave blank to keep it"></div>
+                </div>
+                <div class="recovery-card">
+                  <h3>Viewing account</h3>
+                  <p>This password is used on the Connect screen.</p>
+                  <div class="field"><label for="viewerAccount">Account</label><select id="viewerAccount"></select></div>
+                  <div class="field"><label for="viewerRecoveryPassword">New viewing password</label><input id="viewerRecoveryPassword" type="password" minlength="10" autocomplete="new-password" placeholder="Leave blank to keep it"></div>
+                </div>
+              </div>
+              <div class="error" id="recoveryError"></div>
+              <div class="recovery-status" id="recoveryStatus"></div>
+              <div class="console-actions"><button class="primary" id="saveCredentials" type="button">Save new passwords</button></div>
+              <div class="fine">Saving signs out existing sessions. Your connection code, library, private settings, and disabled sharing switches stay unchanged.</div>
             </section>
             <section class="console-panel" data-console-panel="manage" hidden>
               <p>Edit people, privacy, sharing, and storage from the full Server Settings screen.</p>
@@ -191,6 +219,22 @@ export function renderSetupWizard(input: SetupWizardInput) {
     const encodedCode=encodeURIComponent(bootstrap.connectionCode||"");
     document.getElementById("openCinema").href="https://spilled.overload.studio/connect?code="+encodedCode;
     document.getElementById("openAdmin").href="https://spilled.overload.studio/node/admin?code="+encodedCode;
+    const recovery=bootstrap.credentialRecovery;
+    const recoveryForm=document.getElementById("recoveryForm");
+    const saveCredentials=document.getElementById("saveCredentials");
+    if(recovery){
+      document.getElementById("ownerLogin").textContent=recovery.admin.adminId;
+      const viewerAccount=document.getElementById("viewerAccount");
+      recovery.watchers.forEach((watcher)=>{
+        const option=document.createElement("option");
+        option.value=watcher.watcherId;
+        option.textContent=watcher.displayName+(watcher.hasPassword?"":" — password not set");
+        viewerAccount.appendChild(option);
+      });
+      if(!recovery.watchers.length)document.getElementById("viewerRecoveryPassword").disabled=true;
+    }else{
+      recoveryForm.hidden=true;saveCredentials.hidden=true;
+    }
     document.getElementById("copyCode").onclick=async(event)=>{
       if(!bootstrap.connectionCode)return;
       await navigator.clipboard.writeText(bootstrap.connectionCode);
@@ -202,6 +246,31 @@ export function renderSetupWizard(input: SetupWizardInput) {
       document.querySelectorAll("[data-console-tab]").forEach((item)=>item.classList.toggle("active",item===button));
       document.querySelectorAll("[data-console-panel]").forEach((panel)=>panel.hidden=panel.dataset.consolePanel!==target);
     });
+    saveCredentials.onclick=async()=>{
+      const ownerPassword=document.getElementById("ownerRecoveryPassword").value;
+      const watcherPassword=document.getElementById("viewerRecoveryPassword").value;
+      const error=document.getElementById("recoveryError");
+      const status=document.getElementById("recoveryStatus");
+      error.style.display="none";status.style.display="none";
+      if(!recovery){error.textContent="Reload this page to start a new local recovery session.";error.style.display="block";return}
+      if(!ownerPassword&&!watcherPassword){error.textContent="Enter at least one new password.";error.style.display="block";return}
+      const body={token:recovery.token};
+      if(ownerPassword)body.adminPassword=ownerPassword;
+      if(watcherPassword){body.watcherId=document.getElementById("viewerAccount").value;body.watcherPassword=watcherPassword}
+      saveCredentials.disabled=true;saveCredentials.textContent="Saving…";
+      try{
+        const response=await fetch("/api/node/local-credentials",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        const payload=await response.json();
+        if(!response.ok)throw new Error(payload.error||"Passwords could not be updated.");
+        document.getElementById("ownerRecoveryPassword").value="";
+        document.getElementById("viewerRecoveryPassword").value="";
+        status.textContent="Passwords updated. Existing sessions were signed out; use the new password in Spilled Cinema.";
+        status.style.display="block";saveCredentials.textContent="Saved — reload to change again";
+      }catch(reason){
+        error.textContent=reason instanceof Error?reason.message:"Passwords could not be updated.";
+        error.style.display="block";saveCredentials.disabled=false;saveCredentials.textContent="Save new passwords";
+      }
+    };
     document.querySelectorAll("[data-next]").forEach((button)=>button.onclick=()=>show(step+1));
     document.querySelectorAll("[data-back]").forEach((button)=>button.onclick=()=>show(Math.max(0,step-1)));
     document.getElementById("ownerNext").onclick=()=>{
@@ -227,11 +296,11 @@ export function renderSetupWizard(input: SetupWizardInput) {
           nodeName:document.getElementById("nodeName").value.trim()||bootstrap.suggestedNodeName,
           admin:{adminId:"owner",displayName:ownerName,password:document.getElementById("password").value},
           publicCapabilities:{fetch:search,search,import:search,stream:document.getElementById("resolve").checked,download:document.getElementById("download").checked,spillshare:document.getElementById("spillshare").checked,relay:false},
-          initialWatchers:[{watcherId:"watcher_"+safeOwner,displayName:ownerName,quotaBytes:536870912000,profiles:[{profileId:"prof_owner",displayName:ownerName,avatar:"default"}]}]
+          initialWatchers:[{watcherId:"watcher_"+safeOwner,displayName:ownerName,password:document.getElementById("password").value,quotaBytes:536870912000,profiles:[{profileId:"prof_owner",displayName:ownerName,avatar:"default"}]}]
         })});
         const payload=await response.json();
         if(!response.ok)throw new Error(payload.error||"Setup could not be completed.");
-        show(3);
+        location.reload();
       }catch(reason){
         error.textContent=reason instanceof Error?reason.message:"Setup could not be completed.";
         error.style.display="block";button.disabled=false;button.textContent="Finish setup";

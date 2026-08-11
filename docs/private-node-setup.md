@@ -30,15 +30,16 @@ The connection code locates a node; it is not a password. Authentication happens
 
 Management uses encrypted gateway RPC. The app does not need the PC's IP address, a LAN scan, or a public URL. Every edit requires an administrator session issued by the node.
 
-## Test beta.29 before installing it everywhere
+## Test beta.30 before installing it everywhere
 
 On the server PC:
 
-1. Install `Spilled-Server-Setup-0.2.0-beta.29-x64.exe` and let Spilled Server start.
+1. Install `Spilled-Server-Setup-0.2.0-beta.30-x64.exe` and let Spilled Server start.
    The current beta installer is not code-signed, so Windows SmartScreen may show **More info → Run anyway**. Verify the SHA-256 published with the release before continuing.
 2. Open the tray menu and select **Check server health**. The browser should show `{"status":"ok"}`.
-3. Select **Open setup and settings** and confirm the local console shows the permanent connection code. Test **Connect**, **Manage**, and **Diagnostics**; reinstalling must not change the code.
-4. In Windows PowerShell, run `Get-NetTCPConnection -LocalPort 8787 -State Listen`. The local address must be `127.0.0.1`, not `0.0.0.0`.
+3. Select **Open setup and settings** and confirm the local console shows the permanent connection code. Test **Connect**, **Accounts**, **Manage**, and **Diagnostics**; reinstalling must not change the code.
+4. In **Accounts**, confirm the Server Settings username is shown. Set a viewing password if the viewing account says **password not set**. This local recovery does not enable sharing.
+5. In Windows PowerShell, run `Get-NetTCPConnection -LocalPort 8787 -State Listen`. The local address must be `127.0.0.1`, not `0.0.0.0`.
 
 On another device or browser:
 
@@ -64,6 +65,7 @@ npm run test:private-node-connection -w @spilledcinema/dashboard
 npm run test:private-node-admin -w @spilledcinema/dashboard
 npm run test:private-node-admin -w @spilledcinema/dashboard -- --self-test-failure
 npm run test:setup-wizard -w @spilledcinema/server
+npm run test:local-credential-recovery -w @spilledcinema/server
 npm run test:privacy-defaults -w @spilledcinema/server-windows
 npm run build -w @spilledcinema/dashboard
 npm run dist:windows -w @spilledcinema/server-windows

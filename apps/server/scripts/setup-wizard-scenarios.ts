@@ -8,20 +8,26 @@ type Scenario = {
 };
 
 const permanentCode = "7A3F-19C2-88B4-D0E1";
+const credentialRecovery = {
+  token: "local-only-token",
+  expiresAt: Date.now() + 60_000,
+  admin: { adminId: "owner", displayName: "Owner", hasPassword: true },
+  watchers: [{ watcherId: "watcher_owner", displayName: "Owner", hasPassword: false }],
+};
 const scenarios: Scenario[] = [
   {
     name: "configured server console",
-    html: renderSetupWizard({ setupCode: "", setupRequired: false, suggestedNodeName: "Cinema Server", connectionCode: permanentCode }),
-    expected: [permanentCode, 'data-console-tab="connect"', 'data-console-tab="manage"', 'data-console-tab="diagnostics"', "openAdmin", "/api/status"],
+    html: renderSetupWizard({ setupCode: "", setupRequired: false, suggestedNodeName: "Cinema Server", connectionCode: permanentCode, credentialRecovery }),
+    expected: [permanentCode, 'data-console-tab="connect"', 'data-console-tab="accounts"', 'data-console-tab="manage"', 'data-console-tab="diagnostics"', "owner", "password not set", "/api/node/local-credentials", "openAdmin", "/api/status"],
   },
   {
     name: "fresh setup",
-    html: renderSetupWizard({ setupCode: "setup-once", setupRequired: true, suggestedNodeName: "Cinema Server", connectionCode: permanentCode }),
-    expected: ["First run", "Finish setup", permanentCode],
+    html: renderSetupWizard({ setupCode: "setup-once", setupRequired: true, suggestedNodeName: "Cinema Server", connectionCode: permanentCode, credentialRecovery: null }),
+    expected: ["First run", "Finish setup", permanentCode, 'password:document.getElementById("password").value'],
   },
   {
     name: "script-safe bootstrap",
-    html: renderSetupWizard({ setupCode: "</script><script>alert(1)</script>", setupRequired: true, suggestedNodeName: "Safe", connectionCode: permanentCode }),
+    html: renderSetupWizard({ setupCode: "</script><script>alert(1)</script>", setupRequired: true, suggestedNodeName: "Safe", connectionCode: permanentCode, credentialRecovery: null }),
     expected: ["\\u003c/script>"],
     rejected: ["</script><script>alert(1)</script>"],
   },

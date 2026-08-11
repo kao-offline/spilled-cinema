@@ -24,3 +24,7 @@
 - Beta.29 verification: setup-wizard normal and controlled-failure scenarios, dashboard and server production builds, gateway admin/connection scenarios, privacy defaults, and desktop/mobile tab inspection.
 - Beta.29 Windows deployment: uploaded through the pinned handoff wrapper, remote SHA-256 matched, silent installer exited `0`, preserved configured identity, and `/api/status` returned `200` after restart.
 - Beta.29 dashboard deployment: production Vercel build completed and was aliased to `https://spilled.overload.studio`.
+- Beta.30 login hotfix scope: make the initial owner viewing profile password-capable, clearly distinguish viewing and settings logins, and add loopback-only one-time credential recovery without changing private capability settings.
+- Beta.30 recovery point: beta.29 installer/release and commit `95ceffc`; rollback by reinstalling beta.29. Existing node data remains preserved.
+- Beta.30 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.30-x64.exe` (116,306,162 bytes), SHA-256 `64BB483F7D536AF7106FD47EE490ECA2E51F55201D153D196D740B8BD0CD7176`, unsigned.
+- Beta.30 verification: disposable fresh setup with every sharing switch off; local owner/viewing password recovery; both login endpoints returned `200`; all capabilities stayed private; desktop/mobile UI inspection; controlled-failure harnesses; dashboard/server builds and existing gateway/privacy scenarios.
