@@ -1,11 +1,12 @@
 {
   "name": "@spilledcinema/server-windows",
   "private": true,
-  "version": "0.2.0-beta.27",
+  "version": "0.2.0-beta.30",
   "description": "Headless Spilled Server host for Windows",
   "author": "Overload Studio",
   "main": "main.js",
   "scripts": {
+    "test:privacy-defaults": "node scripts/check-private-defaults.mjs",
     "prepare:payload": "npm run build -w @spilledcinema/server && node ../../scripts/prepare-server-windows-payload.mjs",
     "dist:windows": "npm run prepare:payload && electron-builder --win nsis",
     "pack:windows": "npm run prepare:payload && electron-builder --win --dir"

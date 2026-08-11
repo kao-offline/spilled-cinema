@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, Server, WifiOff } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, Server, WifiOff, X } from "lucide-react";
 import {
   connectPrivateNodeWithCode,
   fetchPrivateNodeAccountsViaGateway,
@@ -21,7 +21,13 @@ function displayCode(value: string) {
   return compact.match(/.{1,4}/g)?.join("-") ?? compact;
 }
 
-export function PrivateNodeConnectView() {
+type PrivateNodeConnectViewProps = {
+  embedded?: boolean;
+  onClose?: () => void;
+  onConnected?: (connection: PrivateNodeConnection) => void;
+};
+
+export function PrivateNodeConnectView({ embedded = false, onClose, onConnected }: PrivateNodeConnectViewProps = {}) {
   const saved = useMemo(() => readPrivateNodeConnection(), []);
   const queryCode = useMemo(() => new URLSearchParams(window.location.search).get("code") ?? "", []);
   const [step, setStep] = useState<ConnectStep>(saved.nodeId && saved.token ? "connected" : "locate");
@@ -37,10 +43,30 @@ export function PrivateNodeConnectView() {
   const [nodeOnline, setNodeOnline] = useState(Boolean(saved.nodeId));
 
   const selectedAccount = accounts.find((account) => account.accountId === accountId);
+  const selectedAccountHasPassword = Boolean(selectedAccount?.hasPassword);
+  const selectedAccountHasPasskey = (selectedAccount?.passkeyCount ?? 0) > 0;
+
+  useEffect(() => {
+    if (!embedded) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [embedded, onClose]);
 
   useEffect(() => {
     if (queryCode && normalizeNodeConnectionCode(queryCode)) void connect(queryCode);
   }, [queryCode]);
+
+  useEffect(() => {
+    if (!queryCode && saved.connectionCode && !saved.token) void connect(saved.connectionCode);
+  }, []);
 
   async function connect(value = code) {
     setBusy(true);
@@ -108,6 +134,7 @@ export function PrivateNodeConnectView() {
       profileName: nextProfile?.displayName ?? null,
     });
     setConnection(next);
+    onConnected?.(next);
     setPassword("");
     setStep("connected");
   }
@@ -122,7 +149,10 @@ export function PrivateNodeConnectView() {
     try {
       persistLogin(await loginWatcherViaGateway({ connection, watcherId: accountId, password, profileId }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Sign-in failed.");
+      const detail = error instanceof Error ? error.message : "Sign-in failed.";
+      setMessage(detail.includes("Invalid username or password")
+        ? "That viewing password was rejected. It is separate from Server Settings. On the server PC, open the tray → Open setup and settings → Accounts to set or reset it."
+        : detail);
     } finally {
       setBusy(false);
     }
@@ -148,9 +178,10 @@ export function PrivateNodeConnectView() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#08090b] text-[#f4efe6]">
+    <main className={`relative overflow-auto bg-[#08090b] text-[#f4efe6] ${embedded ? "fixed inset-0 z-[100] min-h-[100dvh] bg-black/88 backdrop-blur-2xl" : "min-h-screen"}`} role={embedded ? "dialog" : undefined} aria-modal={embedded ? true : undefined} aria-label={embedded ? "Connect a private node" : undefined}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(232,91,30,0.18),transparent_28%),radial-gradient(circle_at_82%_76%,rgba(255,255,255,0.06),transparent_30%)]" />
       <div className="pointer-events-none absolute inset-y-0 left-[11%] w-px bg-gradient-to-b from-transparent via-orange-400/35 to-transparent" />
+      {embedded ? <button type="button" onClick={onClose} className="fixed right-4 top-4 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-black/45 text-white/65 backdrop-blur-xl transition hover:bg-white/10 hover:text-white sm:right-7 sm:top-7" aria-label="Close private node connection"><X size={20} /></button> : null}
       <div className="relative mx-auto grid min-h-screen max-w-7xl lg:grid-cols-[0.82fr_1.18fr]">
         <aside className="flex flex-col justify-between border-b border-white/10 px-5 py-5 sm:px-6 sm:py-7 lg:border-b-0 lg:border-r lg:px-10 lg:py-10">
           <a href="/" className="inline-flex w-fit items-center gap-2 text-xs font-black uppercase tracking-[0.26em] text-white/55 transition hover:text-white">
@@ -225,11 +256,18 @@ export function PrivateNodeConnectView() {
                     ))}
                   </div>
                 ) : null}
-                <div className="mt-8 grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void passwordLogin(); }} type="password" autoComplete="current-password" placeholder="Account password" className="min-h-12 rounded-full border border-white/12 bg-black/30 px-5 text-sm font-bold outline-none transition placeholder:text-white/25 focus:border-orange-300" />
-                  <button onClick={() => void passwordLogin()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-6 text-sm font-black text-black disabled:opacity-40">{busy ? <LoaderCircle className="animate-spin" size={18} /> : <KeyRound size={18} />} Sign in</button>
-                </div>
-                <button onClick={() => void passkeyLogin()} disabled={busy} className="mt-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.035] text-sm font-black text-white/75 transition hover:border-white/25 hover:text-white disabled:opacity-40"><LockKeyhole size={18} /> Use a passkey instead</button>
+                {!selectedAccountHasPassword && !selectedAccountHasPasskey ? (
+                  <div className="mt-8 rounded-2xl border border-amber-200/20 bg-amber-200/[0.06] p-5 text-sm font-semibold leading-6 text-amber-50/80">
+                    This viewing account has no sign-in method yet. On the server PC, open the Spilled Server tray → <strong>Open setup and settings</strong> → <strong>Accounts</strong>, then set a viewing password. Sharing can stay completely off.
+                  </div>
+                ) : null}
+                {selectedAccountHasPassword ? (
+                  <div className="mt-8 grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <input value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void passwordLogin(); }} type="password" autoComplete="current-password" placeholder="Viewing password" className="min-h-12 rounded-full border border-white/12 bg-black/30 px-5 text-sm font-bold outline-none transition placeholder:text-white/25 focus:border-orange-300" />
+                    <button onClick={() => void passwordLogin()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-6 text-sm font-black text-black disabled:opacity-40">{busy ? <LoaderCircle className="animate-spin" size={18} /> : <KeyRound size={18} />} Sign in</button>
+                  </div>
+                ) : null}
+                {selectedAccountHasPasskey ? <button onClick={() => void passkeyLogin()} disabled={busy} className="mt-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.035] text-sm font-black text-white/75 transition hover:border-white/25 hover:text-white disabled:opacity-40"><LockKeyhole size={18} /> Use a passkey instead</button> : null}
               </div>
             ) : null}
 
@@ -239,7 +277,10 @@ export function PrivateNodeConnectView() {
                 <p className="mt-7 text-xs font-black uppercase tracking-[0.28em] text-emerald-200">Connection ready</p>
                 <h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">Welcome, {connection.profileName ?? connection.accountName ?? "home"}.</h2>
                 <p className="mt-4 max-w-lg text-sm leading-6 text-white/50">This browser now knows your node by identity, not by a tunnel address. You can change profiles or disconnect in Settings.</p>
-                <a href="/" className="mt-8 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>
+                <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                  {embedded ? <button type="button" onClick={onClose} className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
+                  {connection.connectionCode ? <a href={`/node/admin?code=${encodeURIComponent(connection.connectionCode)}`} className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/12 bg-white/[.045] px-7 text-sm font-black text-white/75">Manage server</a> : null}
+                </div>
               </div>
             ) : null}
 
@@ -248,7 +289,7 @@ export function PrivateNodeConnectView() {
                 <WifiOff className="mt-0.5 shrink-0" size={17} /> {message}
               </div>
             ) : null}
-            <p className="mt-8 text-xs font-semibold text-white/27">Setting up a brand-new server? <a href="/node/setup" className="text-white/55 underline decoration-white/20 underline-offset-4 hover:text-white">Open local setup</a>. Manual URL entry remains in Advanced Settings for older nodes.</p>
+            <p className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-white/27"><span>Setting up a brand-new server? <a href="/node/setup" className="text-white/55 underline decoration-white/20 underline-offset-4 hover:text-white">Open local setup</a>.</span><a href="/private-node-guide" className="inline-flex items-center gap-1.5 text-white/55 underline decoration-white/20 underline-offset-4 hover:text-white"><BookOpen size={13} /> Private setup guide</a></p>
           </div>
         </section>
       </div>

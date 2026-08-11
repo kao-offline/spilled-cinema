@@ -193,6 +193,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/node/auth/anonymous", handler: handlers.anonymousGrantHandler },
   { path: "/api/node/setup/status", handler: handlers.privateSetupStatusHandler },
   { path: "/api/node/setup/complete", handler: handlers.privateSetupCompleteHandler },
+  { path: "/api/node/local-credentials", handler: handlers.localCredentialRecoveryHandler },
   { path: "/api/node/admin/auth/login", handler: handlers.adminAuthHandler },
   { path: "/api/node/admin/auth/logout", handler: handlers.adminAuthHandler },
   { path: "/api/node/admin/auth/me", handler: handlers.adminAuthHandler },
@@ -353,6 +354,11 @@ function startNativePipe() {
   nativePipeServer.listen(pipePath);
 }
 
+function isLoopbackRequest(req: IncomingMessage) {
+  const remote = req.socket.remoteAddress ?? "";
+  return remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+}
+
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = req.url?.split("?")[0];
   const isBrowserFile = pathname === "/api/download-full/browser-file";
@@ -373,15 +379,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 
   if (pathname === "/setup" && req.method === "GET") {
-    const remote = req.socket.remoteAddress ?? "";
-    const loopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-    if (!loopback) {
+    if (!isLoopbackRequest(req)) {
       res.statusCode = 403;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Initial setup is available only from this computer.");
       return;
     }
     const setup = await handlers.runtime.getSetupCodeForTerminal();
+    const status = await handlers.runtime.getStatus();
+    const credentialRecovery = setup ? null : await handlers.runtime.createLocalCredentialRecovery();
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
@@ -390,7 +396,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       setupCode: setup?.setupCode ?? "",
       setupRequired: Boolean(setup?.setupCode),
       suggestedNodeName: `${hostname() || "Home"} Server`,
+      connectionCode: status.node.connectionCode ?? "",
+      credentialRecovery,
     }));
+    return;
+  }
+  if (pathname === "/api/node/local-credentials" && !isLoopbackRequest(req)) {
+    res.statusCode = 403;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Password recovery is available only from this computer." }));
     return;
   }
   if (pathname === "/v2/health/live" || pathname === "/v2/health/ready") {

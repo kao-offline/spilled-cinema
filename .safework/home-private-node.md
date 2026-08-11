@@ -1,0 +1,48 @@
+# Safe-work record: Home private node
+
+- Branch: `feat/home-private-node`
+- Base: `origin/release/private-node-beta27` (`5cc9cf5`)
+- Worktree: `C:\Users\hrdyk\Documents\PROJEKTY-MOJE\SpilledCinema-home-private-node`
+- Scope: Home connection/reconnection UI, private setup guide, Windows private-network defaults.
+- Release extension: beta.28 adds connection-code-based remote administration from the app and an installer/test tutorial.
+- Excluded: control-plane schema changes and gateway secrets.
+- Rollback: revert the feature commit; the previous beta.27 behavior remains intact.
+- Verification: dashboard production build, connection-code scenarios, Windows privacy-default scenarios, desktop/mobile browser inspection.
+- Beta.28 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.28-x64.exe` (116,303,729 bytes).
+- Beta.28 SHA-256: `A67182BEA0A84C9796057D8684EF6F7F35DABA73C7F4001605618E8D0D01A59A`.
+- Signing: unsigned; Windows SmartScreen behavior is documented in the test tutorial.
+- Smoke: disposable server returned health/status `ok`, mode `local`, bound to `127.0.0.1`; temporary data removed.
+- Previous known-good release: `v0.2.0-beta.27`; rollback by reinstalling that release and reverting beta.28 commits.
+- Published branch: `origin/feat/home-private-node` at `5960a52` (before this handoff-only update).
+- Draft PR: `https://github.com/kao-offline/spilled-cinema/pull/11`, base `release/private-node-beta27`.
+- Prerelease: `https://github.com/kao-offline/spilled-cinema/releases/tag/v0.2.0-beta.28`; installer and blockmap uploads verified.
+- Tag `v0.2.0-beta.28` resolves to artifact commit `5960a52`.
+- Beta.29 scope: replace the post-install dead-end with a local server console, keep the permanent connection code visible after reinstall, and organize hosted settings into working Overview, People, Privacy, and Storage tabs.
+- Beta.29 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.29-x64.exe` (116,304,540 bytes).
+- Beta.29 SHA-256: `3C25B0A6C1C57943CF3B0D93B38475A8752E8EA3F27D99725AA1A28C6A01A2E4`.
+- Beta.29 signing: unsigned; preserve beta.28 as the immediate installer rollback point.
+- Beta.29 verification: setup-wizard normal and controlled-failure scenarios, dashboard and server production builds, gateway admin/connection scenarios, privacy defaults, and desktop/mobile tab inspection.
+- Beta.29 Windows deployment: uploaded through the pinned handoff wrapper, remote SHA-256 matched, silent installer exited `0`, preserved configured identity, and `/api/status` returned `200` after restart.
+- Beta.29 dashboard deployment: production Vercel build completed and was aliased to `https://spilled.overload.studio`.
+- Beta.30 login hotfix scope: make the initial owner viewing profile password-capable, clearly distinguish viewing and settings logins, and add loopback-only one-time credential recovery without changing private capability settings.
+- Beta.30 recovery point: beta.29 installer/release and commit `95ceffc`; rollback by reinstalling beta.29. Existing node data remains preserved.
+- Beta.30 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.30-x64.exe` (116,306,162 bytes), SHA-256 `64BB483F7D536AF7106FD47EE490ECA2E51F55201D153D196D740B8BD0CD7176`, unsigned.
+- Beta.30 verification: disposable fresh setup with every sharing switch off; local owner/viewing password recovery; both login endpoints returned `200`; all capabilities stayed private; desktop/mobile UI inspection; controlled-failure harnesses; dashboard/server builds and existing gateway/privacy scenarios.
+- Beta.30 production deployment: Vercel deployment `dpl_EFcoyE7NRvNJ6B8rvEFQu8WtogYd` reached `READY` and was aliased to `https://spilled.overload.studio`.
+- Beta.30 Windows deployment: remote installer hash matched, silent install exited `0`, the Accounts UI and loopback recovery route were present, `/api/status` returned `200`, existing configuration remained complete, and all capabilities remained private. The temporary upload and launch task were removed afterward.
+- Beta.30 release: tag `v0.2.0-beta.30` points to `9ab2d83`; GitHub prerelease contains the verified installer and blockmap. Beta.29 remains available for rollback.
+- Mobile connection follow-up: production was later replaced by deployment `dpl_2AcEePiya8SU4VCQZaaYFLJfYWQz` from the mobile-playback branch, which did not contain the private-node UI. Recovery point `a0c4e7a` is retained as `backup/mobile-connect-before-production-sync`; playback commit `d967da1` was integrated before restoring the connection UI.
+- Mobile navigation fix: the fixed phone dock now has a labeled `Server` destination that opens `/connect` from every app view and provider tab; the existing Home connection card remains available as a second entry point.
+- Mobile connection production deployment: Vercel deployment `dpl_FdDzy4492NMX5pWnUwXQRvv8FUBA` reached `READY` and owns the `https://spilled.overload.studio` alias. Live mobile inspection confirmed labels `Home`, `Vault`, `Favorites`, `Explore`, and `Server`, no horizontal dock overflow, the Home connection card, and successful navigation to `/connect`. Previous production deployment `dpl_2AcEePiya8SU4VCQZaaYFLJfYWQz` remains the rollback handle.
+- Beta.31 scope: route phone search/feed/import/player operations through the authenticated private node session, rotate watcher sessions, add remote/local logout, cache node discovery briefly, and compact the phone connection UI without enabling public capabilities.
+- Beta.31 recovery point: branch `backup/mobile-private-session-before-auth-fix` at `3f1fd15`; beta.30 remains the installer rollback point.
+- Beta.31 security boundary: private provider/player RPCs require both a private capability ticket and a node-validated watcher access token with `library` scope. Public ticket behavior remains unchanged.
+- Beta.31 verification target: phone connection heading above 120px, no forced focus or horizontal overflow, no large Home banner while authenticated, visible Server/Logout controls, and private search/feed/import/playback scenarios with all public switches off.
+- Beta.31 local verification: connection heading at 88px and input at 188px in a 430x932 viewport; body fits the viewport, horizontal overflow is zero, focus stays on the document, the connected Home banner is absent, and Server/Logout controls are visible. Eighteen focused tests, production dashboard/server builds, privacy defaults, normal scenarios, and a controlled-failure scenario passed.
+- Beta.31 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.31-x64.exe` (116,306,322 bytes), SHA-256 `EC70CFDD4ECF00A88293E067108F4C8B799752E8BFC1EEE399A34D53CA6A47F1`, unsigned.
+- Beta.31 Windows deployment: wrapper identity matched `desktop-koedi91\kao`; pre-change `/api/status` returned `200`; the remote installer hash matched; silent install exited `0`; post-change status is `ok`, setup is complete, watcher authentication is enabled, and fetch/stream/download/spillshare visibility remains private. The temporary upload and launch task were removed.
+- Beta.31 control-plane deployment: production target `cheerful-lynx-4` deployed successfully with no index deletions.
+- Beta.31 dashboard deployment: Vercel deployment `dpl_26F6NcQHx4JwtoHM816EWvWXJAjn` reached `READY` and owns `https://spilled.overload.studio`; live mobile layout measurements match local QA. Previous deployment `dpl_FdDzy4492NMX5pWnUwXQRvv8FUBA` remains the dashboard rollback handle.
+- Beta.31 release: tag `v0.2.0-beta.31` points to feature commit `4c52f06`; GitHub prerelease contains the verified installer and blockmap. Beta.30 remains the Windows rollback installer.
+- Beta.31 playback incident: moving `player.playback.resolve` onto the private gateway forced the operation through a 30-second private ticket even though the runtime reserves 90 seconds for playback resolution. The public playback endpoint remained healthy. User requested a full rollback without a forward fix; recovery target is the pre-beta.31 source, beta.30 Windows installer, and dashboard deployment `dpl_FdDzy4492NMX5pWnUwXQRvv8FUBA`.
+- Beta.31 rollback completed: revert commit `57b330b` restores all non-record source to pre-beta.31 commit `3f1fd15`; `spilled.overload.studio` points to immutable deployment `dpl_FdDzy4492NMX5pWnUwXQRvv8FUBA`; production control plane `cheerful-lynx-4` has the pre-beta.31 ticket whitelist; beta.30 installer hash matched and reinstalled with exit `0`; final server status is `ok`, setup is complete, and all capability visibilities remain private. Live browser inspection confirmed the beta.31 UI bundle is no longer served.

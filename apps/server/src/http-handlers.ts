@@ -1819,6 +1819,30 @@ export function createHttpHandlers() {
     }
   };
 
+  const localCredentialRecoveryHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "local-credential-recovery", 6)) {
+        return sendJson(res, 429, { error: "Too many recovery attempts. Reload Server Settings in a few minutes." });
+      }
+      const body = await readJsonBody<{
+        token?: string;
+        adminPassword?: string;
+        watcherId?: string;
+        watcherPassword?: string;
+      }>(req);
+      if (!body.token) return sendJson(res, 400, { error: "Missing local recovery session." });
+      sendJson(res, 200, await runtime.resetLocalCredentials({
+        token: body.token,
+        adminPassword: body.adminPassword,
+        watcherId: body.watcherId,
+        watcherPassword: body.watcherPassword,
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Could not update local passwords." });
+    }
+  };
+
   const adminAuthHandler = async (req: RequestLike, res: JsonResponse) => {
     try {
       if (req.method === "GET") {
@@ -2314,6 +2338,7 @@ export function createHttpHandlers() {
     anonymousGrantHandler,
     privateSetupStatusHandler,
     privateSetupCompleteHandler,
+    localCredentialRecoveryHandler,
     adminAuthHandler,
     watcherAuthHandler,
     adminStatusHandler,
