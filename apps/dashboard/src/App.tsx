@@ -15,7 +15,6 @@ import { ImportView, type ImportPlatformFilter } from "./components/ImportView";
 import { SettingsView } from "./components/SettingsView";
 import { NodeSetupView } from "./components/NodeSetupView";
 import { NodeAdminView } from "./components/NodeAdminView";
-import { PrivateNodeConnectView } from "./components/PrivateNodeConnectView";
 import { PrivateNodeGuideView } from "./components/PrivateNodeGuideView";
 import { SupportView } from "./components/SupportView";
 import { DownloadedView } from "./components/DownloadedView";
@@ -434,7 +433,7 @@ function App() {
     return <NodeAdminView />;
   }
   if (routePath === "/connect") {
-    return <PrivateNodeConnectView />;
+    return <AppContent initialPrivateNodeOpen />;
   }
   if (routePath === "/private-node-guide") {
     return <PrivateNodeGuideView />;
@@ -442,7 +441,7 @@ function App() {
   return <AppContent />;
 }
 
-function AppContent() {
+function AppContent({ initialPrivateNodeOpen = false }: { initialPrivateNodeOpen?: boolean } = {}) {
   const HERO_ROTATION_MS = 7000;
   const initialProviderRepositoryUrls = readProviderRepositoryUrls();
   const cachedProviderModules = readCachedProviderModules();
@@ -465,7 +464,7 @@ function AppContent() {
   });
   const [routePath, setRoutePath] = useState(() => window.location.pathname);
   const [mediaFilter, setMediaFilter] = useState<"all" | "movies" | "series">("all");
-  const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => !hasDismissedWelcome());
+  const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => !initialPrivateNodeOpen && !hasDismissedWelcome());
   const [downloadedEpisodeIds, setDownloadedEpisodeIds] = useState<Set<string>>(new Set());
   const [downloadedEpisodeFileById, setDownloadedEpisodeFileById] = useState<Map<string, string>>(new Map());
   const [downloadedEpisodeLanguageById, setDownloadedEpisodeLanguageById] = useState<Map<string, string>>(
@@ -3635,6 +3634,13 @@ function AppContent() {
             void handleEnsureHomepageTextArtwork(slug);
           }}
           importActivity={importActivity}
+          initialPrivateNodeOpen={initialPrivateNodeOpen}
+          onPrivateNodeClose={() => {
+            if (window.location.pathname === "/connect") {
+              window.history.replaceState({}, "", "/");
+              setRoutePath("/");
+            }
+          }}
         />
         <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
         <ImportActivityPopup activity={importActivity} />

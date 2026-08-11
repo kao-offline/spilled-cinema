@@ -255,6 +255,23 @@ export async function selectPrivateNodeProfileViaGateway(connection: PrivateNode
   }) as Awaited<ReturnType<typeof selectPrivateNodeProfile>>;
 }
 
+export async function logoutPrivateNode(connection: PrivateNodeConnection) {
+  if (!connection.token) return { ok: true };
+  if (connection.connectionCode) {
+    const candidate = await resolveSavedPrivateNode(connection);
+    return await requestPrivateGateway(candidate, "library.write", "logout", "auth.logout", {
+      accessToken: connection.token,
+    }) as { ok: boolean };
+  }
+  if (connection.nodeUrl) {
+    return await privateFetch<{ ok: boolean }>(connection.nodeUrl, "/api/node/auth/logout", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${connection.token}` },
+    });
+  }
+  return { ok: true };
+}
+
 let privateSessionRefresh: Promise<PrivateNodeConnection> | null = null;
 
 export async function refreshPrivateNodeSessionViaGateway(connection: PrivateNodeConnection) {

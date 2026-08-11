@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, BookOpen, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, Server, WifiOff, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, KeyRound, LoaderCircle, LocateFixed, LockKeyhole, LogOut, Server, WifiOff, X } from "lucide-react";
 import {
+  clearPrivateNodeConnection,
   connectPrivateNodeWithCode,
   fetchPrivateNodeAccountsViaGateway,
   fetchPrivateNodeStatusViaGateway,
   findPrivateNodeCandidates,
   loginPasskeyViaGateway,
   loginWatcherViaGateway,
+  logoutPrivateNode,
   readPrivateNodeConnection,
   writePrivateNodeConnection,
   type PrivateNodeAccount,
@@ -179,13 +181,41 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     setProfileId(account?.profiles[0]?.profileId ?? "");
   }
 
+  async function handleLogout() {
+    setBusy(true);
+    setMessage(null);
+    let warning: string | null = null;
+    try {
+      await logoutPrivateNode(connection);
+    } catch {
+      warning = "Signed out on this device. The node could not be reached to revoke the old session.";
+    }
+    const next = clearPrivateNodeConnection();
+    setConnection(next);
+    setAccounts([]);
+    setAccountId("");
+    setProfileId("");
+    setPassword("");
+    setNodeOnline(false);
+    setStep("locate");
+    setBusy(false);
+    setMessage(warning ?? "Logged out.");
+    onConnected?.(next);
+  }
+
   return (
-    <main className={`relative overflow-auto bg-[#08090b] text-[#f4efe6] ${embedded ? "fixed inset-0 z-[100] min-h-[100dvh] bg-black/88 backdrop-blur-2xl" : "min-h-screen"}`} role={embedded ? "dialog" : undefined} aria-modal={embedded ? true : undefined} aria-label={embedded ? "Connect a private node" : undefined}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(232,91,30,0.18),transparent_28%),radial-gradient(circle_at_82%_76%,rgba(255,255,255,0.06),transparent_30%)]" />
-      <div className="pointer-events-none absolute inset-y-0 left-[11%] w-px bg-gradient-to-b from-transparent via-orange-400/35 to-transparent" />
-      {embedded ? <button type="button" onClick={onClose} className="fixed right-4 top-4 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-black/45 text-white/65 backdrop-blur-xl transition hover:bg-white/10 hover:text-white sm:right-7 sm:top-7" aria-label="Close private node connection"><X size={20} /></button> : null}
-      <div className="relative mx-auto grid min-h-screen max-w-7xl lg:grid-cols-[0.82fr_1.18fr]">
-        <aside className="flex flex-col justify-between border-b border-white/10 px-5 py-5 sm:px-6 sm:py-7 lg:border-b-0 lg:border-r lg:px-10 lg:py-10">
+    <main
+      className={`text-[#f4efe6] ${embedded ? "fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-black/72 p-3 sm:p-6" : "relative min-h-screen overflow-auto bg-[#08090b]"}`}
+      role={embedded ? "dialog" : undefined}
+      aria-modal={embedded ? true : undefined}
+      aria-label={embedded ? "Connect a private node" : undefined}
+      onMouseDown={(event) => { if (embedded && event.target === event.currentTarget) onClose?.(); }}
+    >
+      <div className={`relative grid overflow-hidden bg-[#08090b] lg:grid-cols-[0.82fr_1.18fr] ${embedded ? "my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl overflow-y-auto rounded-[1.75rem] border border-white/10 shadow-[0_30px_90px_rgba(0,0,0,.62)] sm:max-h-[calc(100dvh-3rem)]" : "mx-auto min-h-screen max-w-7xl"}`}>
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(232,91,30,0.16),transparent_28%),radial-gradient(circle_at_82%_76%,rgba(255,255,255,0.05),transparent_30%)]" />
+        <div className="pointer-events-none absolute inset-y-0 left-[11%] w-px bg-gradient-to-b from-transparent via-orange-400/30 to-transparent" />
+        {embedded ? <button type="button" onClick={onClose} className="absolute right-3 top-3 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white/65 transition hover:bg-white/10 hover:text-white sm:right-5 sm:top-5" aria-label="Close private node connection"><X size={20} /></button> : null}
+        <aside className="relative flex flex-col justify-between border-b border-white/10 px-5 py-5 sm:px-6 sm:py-7 lg:border-b-0 lg:border-r lg:px-10 lg:py-10">
           <a href="/" className="inline-flex w-fit items-center gap-2 text-xs font-black uppercase tracking-[0.26em] text-white/55 transition hover:text-white">
             <ArrowLeft size={15} /> Spilled Cinema
           </a>
@@ -207,7 +237,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
           </div>
         </aside>
 
-        <section className="flex items-center px-5 py-7 sm:px-10 sm:py-10 lg:px-16">
+        <section className="relative flex items-center px-5 py-7 sm:px-10 sm:py-10 lg:px-16">
           <div className="w-full max-w-2xl">
             {step === "locate" ? (
               <div>
@@ -282,6 +312,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                   {embedded ? <button type="button" onClick={onClose} className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Back to Home</button> : <a href="/" className="inline-flex min-h-12 items-center justify-center rounded-full bg-white px-7 text-sm font-black text-black">Enter the library</a>}
                   {connection.connectionCode ? <a href={`/node/admin?code=${encodeURIComponent(connection.connectionCode)}`} className="inline-flex min-h-12 items-center justify-center rounded-full border border-white/12 bg-white/[.045] px-7 text-sm font-black text-white/75">Manage server</a> : null}
+                  <button type="button" onClick={() => void handleLogout()} disabled={busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-red-300/20 bg-red-300/[.055] px-7 text-sm font-black text-red-100/80 transition hover:border-red-300/35 hover:bg-red-300/10 hover:text-red-50 disabled:opacity-40"><LogOut size={17} /> Log out</button>
                 </div>
               </div>
             ) : null}

@@ -37,6 +37,8 @@ type CinematicHomePageProps = {
   onImportRemote: (platform: IntegrationId, slug: string, mediaType?: "movie" | "serial", context?: { title?: string; posterUrl?: string | null }) => Promise<unknown>;
   onEnsureHomepageTextArtwork: (slug: string) => void;
   importActivity?: ImportActivity | null;
+  initialPrivateNodeOpen?: boolean;
+  onPrivateNodeClose?: () => void;
 };
 
 function normalizeRemoteResult(raw: RemoteCommandResult & {
@@ -90,8 +92,10 @@ export function CinematicHomePage({
   onImportRemote,
   onEnsureHomepageTextArtwork,
   importActivity,
+  initialPrivateNodeOpen = false,
+  onPrivateNodeClose,
 }: CinematicHomePageProps) {
-  const [privateNodeOpen, setPrivateNodeOpen] = useState(false);
+  const [privateNodeOpen, setPrivateNodeOpen] = useState(initialPrivateNodeOpen);
   const [privateNodeConnection, setPrivateNodeConnection] = useState<PrivateNodeConnection>(() => readPrivateNodeConnection());
   const privateNodeConnected = Boolean(privateNodeConnection.nodeId && privateNodeConnection.token);
 
@@ -476,7 +480,7 @@ export function CinematicHomePage({
         }}
         onMore={handleMoreResult}
       />
-      {privateNodeOpen ? <PrivateNodeConnectView embedded onClose={() => setPrivateNodeOpen(false)} onConnected={(connection) => setPrivateNodeConnection(connection)} /> : null}
+      {privateNodeOpen ? <PrivateNodeConnectView embedded onClose={() => { setPrivateNodeOpen(false); onPrivateNodeClose?.(); }} onConnected={(connection) => setPrivateNodeConnection(connection)} /> : null}
     </div>
   );
 }
