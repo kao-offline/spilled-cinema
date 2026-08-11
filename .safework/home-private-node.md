@@ -5,7 +5,7 @@
 - Worktree: `C:\Users\hrdyk\Documents\PROJEKTY-MOJE\SpilledCinema-home-private-node`
 - Scope: Home connection/reconnection UI, private setup guide, Windows private-network defaults.
 - Release extension: beta.28 adds connection-code-based remote administration from the app and an installer/test tutorial.
-- Excluded: production deployment, control-plane schema changes, gateway secrets.
+- Excluded: control-plane schema changes and gateway secrets.
 - Rollback: revert the feature commit; the previous beta.27 behavior remains intact.
 - Verification: dashboard production build, connection-code scenarios, Windows privacy-default scenarios, desktop/mobile browser inspection.
 - Beta.28 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.28-x64.exe` (116,303,729 bytes).
@@ -22,3 +22,5 @@
 - Beta.29 SHA-256: `3C25B0A6C1C57943CF3B0D93B38475A8752E8EA3F27D99725AA1A28C6A01A2E4`.
 - Beta.29 signing: unsigned; preserve beta.28 as the immediate installer rollback point.
 - Beta.29 verification: setup-wizard normal and controlled-failure scenarios, dashboard and server production builds, gateway admin/connection scenarios, privacy defaults, and desktop/mobile tab inspection.
+- Beta.29 Windows deployment: uploaded through the pinned handoff wrapper, remote SHA-256 matched, silent installer exited `0`, preserved configured identity, and `/api/status` returned `200` after restart.
+- Beta.29 dashboard deployment: production Vercel build completed and was aliased to `https://spilled.overload.studio`.
