@@ -32,6 +32,9 @@ Both public and private traffic already use the same encrypted `sendGatewayRpc` 
 - Focused suite: 4 files, 13 tests passed, covering encrypted gateway compatibility, private retry, logout RPC, private session playback, and node RPC authentication.
 - Dashboard production build passed.
 - Browser failure simulation: with remote revocation intentionally left pending, logout removed local access and refresh state in 1 ms, never disabled the button, and returned the UI to the connection step.
+- Preview canary: `dpl_6JiAR8s8yZ9gQTTK31AbehoJocw6` (Ready).
+- Production deployment: `dpl_HDaa2dJTdn5szuZWNzjfX1eBPLTB` (Ready), aliased to `https://spilled.overload.studio`.
+- Live failure simulation: with remote revocation stalled, production cleared local session state in 1.2 ms, kept the button enabled, and returned to the connection step.
 
 ## thinkBETTER iteration 1
 
