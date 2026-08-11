@@ -4,7 +4,7 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha256";
 
 type PublicCapability = "provider.search" | "provider.feed" | "provider.import" | "player.resolve";
-export type PrivateCapability = PublicCapability | "library.read" | "library.write" | "node.admin";
+export type PrivateCapability = "library.read" | "library.write" | "node.admin";
 type Capability = PublicCapability | PrivateCapability;
 
 type CapabilityTicketV2 = {
@@ -80,9 +80,7 @@ type GatewayCachedSession = {
 };
 
 const gatewaySessionCache = new Map<string, GatewayCachedSession>();
-const privateCandidateCache = new Map<string, { candidate: V2Candidate & { connectionCode: string; online: boolean }; expiresAt: number }>();
 const GATEWAY_TICKET_REUSE_MARGIN_MS = 10_000;
-const PRIVATE_CANDIDATE_CACHE_MS = 60_000;
 
 function gatewaySessionCacheKey(capability: Capability, action: string, nodeId = "public") {
   return `${nodeId}:${capability}:${action}`;
@@ -319,9 +317,6 @@ async function issuePrivateTicket(candidate: V2Candidate, capability: PrivateCap
 }
 
 export async function resolvePrivateGatewayCandidate(connectionCode: string) {
-  const cacheKey = connectionCode.trim().toUpperCase();
-  const cached = privateCandidateCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.candidate;
   const response = await fetch(
     `/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=${encodeURIComponent(connectionCode)}`,
     { headers: { Accept: "application/json" } },
@@ -336,20 +331,7 @@ export async function resolvePrivateGatewayCandidate(connectionCode: string) {
     }
     throw new Error(payload?.error ?? `Private node lookup failed (${response.status}).`);
   }
-  privateCandidateCache.set(cacheKey, {
-    candidate: payload.candidate,
-    expiresAt: Date.now() + PRIVATE_CANDIDATE_CACHE_MS,
-  });
   return payload.candidate;
-}
-
-export function clearV2GatewaySessionCache(nodeId?: string) {
-  for (const [key, value] of gatewaySessionCache) {
-    if (!nodeId || value.candidate.nodeId === nodeId) gatewaySessionCache.delete(key);
-  }
-  for (const [key, value] of privateCandidateCache) {
-    if (!nodeId || value.candidate.nodeId === nodeId) privateCandidateCache.delete(key);
-  }
 }
 
 async function sendGatewayRpc(

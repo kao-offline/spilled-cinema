@@ -63,7 +63,7 @@ export function NodeSetupView() {
       await fetchPrivateNodeSetupStatus(clean);
       setNodeUrl(clean);
       setStep("verify");
-      writePrivateNodeConnection({ nodeUrl: clean, token: null, refreshToken: null, accountId: null, accountName: null, profileId: null, profileName: null });
+      writePrivateNodeConnection({ nodeUrl: clean, token: null, accountId: null, accountName: null, profileId: null, profileName: null });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not reach this node.");
     } finally {

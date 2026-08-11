@@ -130,7 +130,7 @@ export function MobileHomePage({
         <HomeSourceTabs activeTab={activeTab} onTabChange={onTabChange} compact className="mt-3 w-full" />
       </header>
 
-      {activeTab === "home" && !privateNodeConnected ? (
+      {activeTab === "home" ? (
         <button type="button" onClick={onOpenPrivateNode} className="mx-4 mb-4 flex w-[calc(100%-2rem)] items-center gap-3 rounded-[18px] border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-left shadow-[0_14px_36px_rgba(0,0,0,.25)] backdrop-blur-xl transition active:scale-[.985]">
           <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${privateNodeConnected ? "bg-emerald-300/12 text-emerald-200" : "bg-orange-300/12 text-orange-200"}`}>{privateNodeConnected ? <ShieldCheck className="h-5 w-5" /> : <Server className="h-5 w-5" />}</span>
           <span className="min-w-0 flex-1"><span className="block text-[10px] font-black uppercase tracking-[.18em] text-white/34">Private node</span><span className="mt-0.5 block truncate text-sm font-black">{privateNodeConnected ? privateNodeName ?? "Ready to stream" : "Connect without finding a URL"}</span></span>

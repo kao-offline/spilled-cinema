@@ -21,8 +21,6 @@ The Windows build binds to `127.0.0.1`, disables automatic public tunnels, and e
 
 The connection code locates a node; it is not a password. Authentication happens on the node. The browser saves the node identity and session so Home can reconnect without asking for a URL.
 
-After sign-in, the phone routes search, feeds, imports, and playback resolution through that authenticated private session. Public capability switches can remain off. Home hides the large connection prompt while signed in; use the fixed **Server** destination to manage the connection or choose **Log out**. Sessions refresh automatically. If the phone was signed in before beta.31, log out once and sign in again so it receives a refresh token.
-
 ## Manage the server from the app
 
 1. Connect the private node from Home once so the app remembers its identity.
@@ -32,11 +30,11 @@ After sign-in, the phone routes search, feeds, imports, and playback resolution 
 
 Management uses encrypted gateway RPC. The app does not need the PC's IP address, a LAN scan, or a public URL. Every edit requires an administrator session issued by the node.
 
-## Test beta.31 before installing it everywhere
+## Test beta.30 before installing it everywhere
 
 On the server PC:
 
-1. Install `Spilled-Server-Setup-0.2.0-beta.31-x64.exe` and let Spilled Server start.
+1. Install `Spilled-Server-Setup-0.2.0-beta.30-x64.exe` and let Spilled Server start.
    The current beta installer is not code-signed, so Windows SmartScreen may show **More info → Run anyway**. Verify the SHA-256 published with the release before continuing.
 2. Open the tray menu and select **Check server health**. The browser should show `{"status":"ok"}`.
 3. Select **Open setup and settings** and confirm the local console shows the permanent connection code. Test **Connect**, **Accounts**, **Manage**, and **Diagnostics**; reinstalling must not change the code.
@@ -47,11 +45,10 @@ On another device or browser:
 
 1. Open Spilled Cinema and choose **Private node** on Home.
 2. Enter the connection code and sign in as a watcher. Confirm Home changes to the connected state.
-3. With every public capability switch still off, search for a title, import it, and start playback. These actions must use the signed-in private session rather than anonymous sharing tickets.
-4. Return to Home and confirm the large connection prompt is gone while the compact **Server** destination remains. Open it, choose **Log out**, and confirm watcher actions require sign-in again.
-5. Choose **Manage server**, enter the administrator password, and switch through **Overview**, **People**, **Privacy**, and **Storage**.
-6. In **People**, create a disposable test watcher, refresh the page, and confirm it remains listed. In **Privacy**, change a capability, save it, refresh, and confirm the edit remains.
-7. Leave public capability switches off unless you deliberately want public sharing.
+3. Play a title or request a library refresh to confirm encrypted remote RPC works.
+4. Choose **Manage server**, enter the administrator password, and switch through **Overview**, **People**, **Privacy**, and **Storage**.
+5. In **People**, create a disposable test watcher, refresh the page, and confirm it remains listed. In **Privacy**, change a capability, save it, refresh, and confirm the edit remains.
+6. Leave public capability switches off unless you deliberately want public sharing.
 
 Expected privacy checks:
 
@@ -67,7 +64,6 @@ Developer verification commands from the repository root:
 npm run test:private-node-connection -w @spilledcinema/dashboard
 npm run test:private-node-admin -w @spilledcinema/dashboard
 npm run test:private-node-admin -w @spilledcinema/dashboard -- --self-test-failure
-npm run test:mobile-private-session -w @spilledcinema/server
 npm run test:setup-wizard -w @spilledcinema/server
 npm run test:local-credential-recovery -w @spilledcinema/server
 npm run test:privacy-defaults -w @spilledcinema/server-windows

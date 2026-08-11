@@ -779,15 +779,7 @@ http.route({
     const connectionCode = typeof body.connectionCode === "string"
       ? normalizeConnectionCode(body.connectionCode)
       : null;
-    const privateCapabilities = [
-      "library.read",
-      "library.write",
-      "node.admin",
-      "provider.search",
-      "provider.feed",
-      "provider.import",
-      "player.resolve",
-    ];
+    const privateCapabilities = ["library.read", "library.write", "node.admin"];
     if (
       typeof body.nodeId !== "string" ||
       !connectionCode ||

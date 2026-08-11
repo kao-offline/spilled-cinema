@@ -1,7 +1,4 @@
-import { readPrivateNodeConnection, refreshPrivateNodeSessionViaGateway } from "./private-node-client";
-import { requestPrivateGateway, requestPublicGateway, resolvePrivateGatewayCandidate, type PrivateCapability } from "./v2-gateway-client";
-export { getV2GatewayOperation } from "./gateway-operation";
-import { getV2GatewayOperation } from "./gateway-operation";
+import { requestPublicGateway } from "./v2-gateway-client";
 import {
   isLocalhostProbeOnCooldown,
   markLocalhostProbeAttempted,
@@ -430,57 +427,73 @@ async function fetchViaFetchServer<T>(path: string, init: JsonRequestInit): Prom
   return lastFailure;
 }
 
-function isPrivateSessionFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /private session|session (?:expired|revoked)|access token/i.test(message);
-}
-
-async function requestConnectedPrivateRuntime(
-  operation: NonNullable<ReturnType<typeof getV2GatewayOperation>>,
-) {
-  let connection = readPrivateNodeConnection();
-  if (!connection.nodeId || !connection.connectionCode || !connection.token) return null;
-  const request = async () => {
-    const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode!);
-    if (candidate.nodeId !== connection.nodeId) throw new Error("Saved private node identity no longer matches its connection code.");
-    return {
-      nodeId: candidate.nodeId,
-      endpointUrl: candidate.endpointUrl ?? null,
-      data: await requestPrivateGateway(
-        candidate,
-        operation.capability as PrivateCapability,
-        operation.action,
-        operation.method,
-        {
-          ...operation.params,
-          accessToken: connection.token,
-          ...(connection.profileId ? { profileId: connection.profileId } : {}),
-        },
-      ),
-    };
-  };
-  try {
-    return await request();
-  } catch (error) {
-    if (!isPrivateSessionFailure(error)) throw error;
-    connection = await refreshPrivateNodeSessionViaGateway(connection);
-    return await request();
-  }
-}
-
 async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promise<RuntimeApiResult<T> | null> {
   const body = init.body && typeof init.body === "object" && !Array.isArray(init.body)
     ? init.body as Record<string, unknown>
     : {};
-  const operation = getV2GatewayOperation(path, body);
+
+  if (path === "/api/search") {
+    const response = await requestPublicGateway(
+      "provider.search",
+      "search",
+      "provider.search",
+      body,
+    );
+    if (!response) return null;
+    return {
+      ok: true,
+      status: 200,
+      data: response.data as T,
+      origin: response.endpointUrl ?? response.nodeId,
+      transport: "gateway",
+    };
+  }
+
+  const operation = (() => {
+    if (path === "/api/provider-search") {
+      return { capability: "provider.search" as const, action: "search", method: "provider.search", params: body };
+    }
+    if (path === "/api/provider-feed") {
+      return { capability: "provider.feed" as const, action: "feed", method: "provider.feed", params: body };
+    }
+    if (path === "/api/provider-import") {
+      return { capability: "provider.import" as const, action: "import", method: "provider.import", params: body };
+    }
+    if (path === "/api/import-svetserialu") {
+      return {
+        capability: "provider.import" as const,
+        action: "import",
+        method: "provider.import",
+        params: { ...body, moduleId: "svetserialu" },
+      };
+    }
+    if (path === "/api/import-bombuj") {
+      return {
+        capability: "provider.import" as const,
+        action: "import",
+        method: "provider.import",
+        params: { ...body, moduleId: "bombuj" },
+      };
+    }
+    if (path === "/api/player/resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.embed.resolve", params: body };
+    }
+    if (path === "/api/player/clean-resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.clean.resolve", params: body };
+    }
+    if (path === "/api/player/playback-resolve") {
+      return { capability: "player.resolve" as const, action: "resolve", method: "player.playback.resolve", params: body };
+    }
+    return null;
+  })();
   if (!operation) return null;
 
-  const response = await requestConnectedPrivateRuntime(operation) ?? await requestPublicGateway(
-      operation.capability,
-      operation.action,
-      operation.method,
-      operation.params,
-    );
+  const response = await requestPublicGateway(
+    operation.capability,
+    operation.action,
+    operation.method,
+    operation.params,
+  );
   if (!response) return null;
   return {
     ok: true,
@@ -530,7 +543,6 @@ function returnIfUsable<T>(result: RuntimeApiResult<T> | null) {
 }
 
 export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit = {}): Promise<RuntimeApiResult<T>> {
-  let gatewayFailure: unknown = null;
   try {
     const native = returnIfUsable(await fetchNative<T>(path, init));
     if (native) return native;
@@ -573,8 +585,7 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     if (gateway) {
       return gateway;
     }
-  } catch (error) {
-    gatewayFailure = error;
+  } catch {
     // Fall through to legacy public fetch servers.
   }
 
@@ -596,6 +607,5 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     // Fall through to the final error.
   }
 
-  if (gatewayFailure instanceof Error) throw gatewayFailure;
   throw new Error(`No runtime or fetch server is available for ${path}. Start a local node or wait for a public fetch server to register.`);
 }

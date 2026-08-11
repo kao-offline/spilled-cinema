@@ -1,7 +1,6 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { normalizeNodeConnectionCode } from "../../../../packages/node-protocol/src";
 import {
-  clearV2GatewaySessionCache,
   requestPrivateGateway,
   resolvePrivateGatewayCandidate,
   type V2Candidate,
@@ -32,7 +31,6 @@ export type PrivateNodeConnection = {
   nodeId?: string | null;
   connectionCode?: string | null;
   token: string | null;
-  refreshToken: string | null;
   accountId: string | null;
   profileId: string | null;
   accountName: string | null;
@@ -94,7 +92,6 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
       nodeId: null,
       connectionCode: null,
       token: null,
-      refreshToken: null,
       accountId: null,
       profileId: null,
       accountName: null,
@@ -108,7 +105,6 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
       nodeId: typeof parsed.nodeId === "string" ? parsed.nodeId : null,
       connectionCode: typeof parsed.connectionCode === "string" ? parsed.connectionCode : null,
       token: typeof parsed.token === "string" ? parsed.token : null,
-      refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : null,
       accountId: typeof parsed.accountId === "string" ? parsed.accountId : null,
       profileId: typeof parsed.profileId === "string" ? parsed.profileId : null,
       accountName: typeof parsed.accountName === "string" ? parsed.accountName : null,
@@ -120,7 +116,6 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
       nodeId: null,
       connectionCode: null,
       token: null,
-      refreshToken: null,
       accountId: null,
       profileId: null,
       accountName: null,
@@ -144,7 +139,6 @@ export function clearPrivateNodeConnection() {
     nodeId: null,
     connectionCode: null,
     token: null,
-    refreshToken: null,
     accountId: null,
     profileId: null,
     accountName: null,
@@ -179,7 +173,6 @@ export async function connectPrivateNodeWithCode(value: string) {
       nodeId: candidate.nodeId,
       connectionCode,
       token: null,
-      refreshToken: null,
       accountId: null,
       profileId: null,
       accountName: null,
@@ -416,62 +409,6 @@ export function clearAdminNodeConnection() {
   return next;
 }
 
-let privateSessionRefresh: Promise<PrivateNodeConnection> | null = null;
-
-export async function refreshPrivateNodeSessionViaGateway(connection: PrivateNodeConnection) {
-  if (!connection.refreshToken) throw new Error("Your private-node session expired. Sign in again.");
-  if (privateSessionRefresh) return await privateSessionRefresh;
-  privateSessionRefresh = (async () => {
-    const candidate = await resolveSavedPrivateNode(connection);
-    const refreshed = await requestPrivateGateway(candidate, "library.read", "refresh", "auth.refresh", {
-      refreshToken: connection.refreshToken,
-    }) as {
-      token?: string;
-      accessToken: string;
-      refreshToken: string;
-      session: { profileId?: string | null };
-    };
-    return writePrivateNodeConnection({
-      ...connection,
-      token: refreshed.accessToken ?? refreshed.token ?? null,
-      refreshToken: refreshed.refreshToken,
-      profileId: refreshed.session.profileId ?? connection.profileId,
-    });
-  })();
-  try {
-    return await privateSessionRefresh;
-  } finally {
-    privateSessionRefresh = null;
-  }
-}
-
-export async function logoutPrivateNodeViaGateway(connection: PrivateNodeConnection) {
-  let remoteRevoked = false;
-  if (connection.token && connection.connectionCode) {
-    try {
-      const candidate = await resolveSavedPrivateNode(connection);
-      await requestPrivateGateway(candidate, "library.read", "logout", "auth.logout", {
-        accessToken: connection.token,
-        principalKind: "watcher",
-      });
-      remoteRevoked = true;
-    } catch {
-      // Local logout must remain available while the server is offline.
-    }
-  }
-  clearV2GatewaySessionCache(connection.nodeId ?? undefined);
-  const next = writePrivateNodeConnection({
-    ...connection,
-    token: null,
-    refreshToken: null,
-    accountId: null,
-    profileId: null,
-    accountName: null,
-    profileName: null,
-  });
-  return { connection: next, remoteRevoked };
-}
-
 async function resolveSavedAdminNode(connection: Pick<AdminNodeConnection, "nodeId" | "connectionCode">) {
   if (!connection.connectionCode) throw new Error("Enter the private node connection code.");
   const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode);
@@ -508,7 +445,6 @@ export async function createAdminWatcherViaGateway(connection: AdminNodeConnecti
 export async function loginAdminNodePassword(input: { nodeUrl: string; adminId: string; password: string }) {
   return privateFetch<{
     token: string;
-    refreshToken: string;
     admin: { adminId: string; displayName: string };
     session: { expiresAt: number };
   }>(input.nodeUrl, "/api/node/admin/auth/login", {
@@ -568,7 +504,6 @@ export async function loginWatcherNodePassword(input: {
 }) {
   return privateFetch<{
     token: string;
-    refreshToken: string;
     account: { accountId: string; watcherId?: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -599,7 +534,6 @@ export async function enrollPrivateNodePasskey(input: {
   const response = await startRegistration({ optionsJSON: optionsPayload.options as never });
   return privateFetch<{
     token: string;
-    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -629,7 +563,6 @@ export async function loginPrivateNodePasskey(input: {
   const response = await startAuthentication({ optionsJSON: optionsPayload.options as never });
   return privateFetch<{
     token: string;
-    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -660,7 +593,6 @@ export async function selectPrivateNodeProfile(input: {
 }) {
   return privateFetch<{
     token: string;
-    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
