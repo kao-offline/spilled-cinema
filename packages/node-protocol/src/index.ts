@@ -17,6 +17,23 @@ export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
 export type NodeVisibility = (typeof NODE_VISIBILITY)[number];
 export type NodeMode = (typeof NODE_MODES)[number];
 
+const NODE_CONNECTION_CODE_HEX_LENGTH = 16;
+
+/** A connection code is an opaque locator, never an authentication factor. */
+export function formatNodeConnectionCode(hexDigest: string) {
+  const prefix = hexDigest.trim().slice(0, NODE_CONNECTION_CODE_HEX_LENGTH);
+  if (!/^[a-f0-9]{16}$/i.test(prefix)) {
+    throw new Error("Connection-code digest is invalid.");
+  }
+  return prefix.toUpperCase().match(/.{1,4}/g)!.join("-");
+}
+
+export function normalizeNodeConnectionCode(value: string) {
+  const compact = value.trim().toUpperCase().replace(/^SPILL(?:ED)?/, "").replace(/[^A-F0-9]/g, "");
+  if (compact.length !== NODE_CONNECTION_CODE_HEX_LENGTH) return null;
+  return compact.match(/.{1,4}/g)!.join("-");
+}
+
 export const V2_CAPABILITIES = [
   "provider.search",
   "provider.feed",
@@ -285,6 +302,7 @@ export type NodeCompatibilityStatus = {
   status: "ok";
   node: {
     nodeId: string;
+    connectionCode: string;
     mode: NodeMode;
     protocolVersion: number;
     regionHint: string | null;

@@ -12,7 +12,7 @@ import {
 } from "@simplewebauthn/server";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import { MemoryDiscoveryRegistry, MdnsService, verifyNodeRecord } from "../../../packages/discovery/src";
-import { NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, V2_CAPABILITIES, type AnonymousSessionGrant, type Capability, type CapabilityTicketV2, type CapabilityPolicy, type EncryptedRequestEnvelopeV2, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
+import { formatNodeConnectionCode, NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, V2_CAPABILITIES, type AnonymousSessionGrant, type Capability, type CapabilityTicketV2, type CapabilityPolicy, type EncryptedRequestEnvelopeV2, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
 import { approvePairing, base64UrlDecode, base64UrlEncode, createPairingRequest, createPasskeyAuthenticationChallenge, createPasskeyRegistrationChallenge, createSignedToken, decryptNodeRequest, encryptNodeResponse, generateNodeIdentity, generateNodeTransportIdentity, hashPassword, issueAnonymousSession, issuePrivateSession, randomId, sha256, signPayload, TicketReplayWindow, verifyCapabilityTicket, verifyPassword, verifySignedToken, type NodeIdentity } from "../../../packages/security/src";
 import { DpapiSecretStore, JsonNodeStorage, MasterKeyFileSecretStore, SqliteNodeStorage, type AdminAccountRuntimeState, type NodeStateFile, type NodeStorage, type PrivateDownloadRecord, type PrivatePasskeyCredential, type PrivateProfileState, type RefreshSessionRecord, type StoredImportedShow, type WatcherAccountRuntimeState, type WatcherProfileRuntimeState } from "../../../packages/storage/src";
 import type { LoadedPrivateNodeConfig, PrivateNodeAccountConfig, PrivateNodeConfig, SpilledNodeMode } from "./private-config";
@@ -43,11 +43,20 @@ const REMOTE_METHOD_CAPABILITIES: Record<string, Capability> = {
   "spillshare.manifest": "spillshare.read",
   "spillshare.transfer.prepare": "spillshare.read",
   "relay.stream": "relay.stream",
+  "node.status": "library.read",
+  "auth.accounts": "library.read",
   "auth.refresh": "library.read",
+  "auth.watcher.password.login": "library.write",
+  "auth.admin.password.login": "node.admin",
   "auth.logout": "library.read",
   "auth.passkey.options": "library.read",
   "auth.passkey.verify": "library.write",
   "auth.password.disable": "node.admin",
+  "library.storage": "library.read",
+  "library.profile.select": "library.write",
+  "node.admin.status": "node.admin",
+  "node.admin.capabilities.update": "node.admin",
+  "node.admin.watcher.create": "node.admin",
   "invite.inspect": "library.read",
   "invite.accept": "library.write",
   "recovery.export": "node.admin",
@@ -206,6 +215,7 @@ export class SpilledCinemaNodeRuntime {
   private statePromise: Promise<NodeStateFile> | null = null;
   private readonly options: NodeRuntimeOptions;
   private bootstrapSetupCode: string | null = null;
+  private ephemeralEnrollmentCredential: string | null = null;
   private readonly remoteReplayWindow = new TicketReplayWindow();
 
   constructor(options: NodeRuntimeOptions = {}) {
@@ -715,17 +725,32 @@ export class SpilledCinemaNodeRuntime {
     };
   }
 
+  private async ensureGatewayEnrollmentCredential() {
+    const stored = await this.storage.getProtectedSecret?.("gateway.enrollmentCredential");
+    if (stored) return stored;
+    if (this.ephemeralEnrollmentCredential) return this.ephemeralEnrollmentCredential;
+    const created = base64UrlEncode(randomBytes(32));
+    this.ephemeralEnrollmentCredential = created;
+    await this.storage.setProtectedSecret?.("gateway.enrollmentCredential", created);
+    return created;
+  }
+
+  async getConnectionCode() {
+    return formatNodeConnectionCode(sha256(await this.ensureGatewayEnrollmentCredential()));
+  }
+
   async createGatewayEnrollmentApplication(input: {
     enrollmentCredential?: string;
     advertisedCapabilities?: Capability[];
     issuedAt?: number;
   } = {}) {
     const identity = await this.ensureIdentity();
-    const storedCredential = await this.storage.getProtectedSecret?.("gateway.enrollmentCredential");
+    const storedCredential = await this.ensureGatewayEnrollmentCredential();
     const enrollmentCredential = input.enrollmentCredential ?? storedCredential ?? base64UrlEncode(randomBytes(32));
-    if (!storedCredential && this.storage.setProtectedSecret) {
+    if (enrollmentCredential !== storedCredential && this.storage.setProtectedSecret) {
       await this.storage.setProtectedSecret("gateway.enrollmentCredential", enrollmentCredential);
     }
+    if (enrollmentCredential !== storedCredential) this.ephemeralEnrollmentCredential = enrollmentCredential;
     const advertisedCapabilities = [...new Set(
       input.advertisedCapabilities ?? [...this.getEnabledV2Capabilities()],
     )].sort();
@@ -911,6 +936,7 @@ export class SpilledCinemaNodeRuntime {
       status: "ok",
       node: {
         nodeId: record.nodeId,
+        connectionCode: await this.getConnectionCode(),
         mode: this.options.mode ?? "local",
         protocolVersion: record.protocolVersion,
         regionHint: record.regionHint ?? null,

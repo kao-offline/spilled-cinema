@@ -11,6 +11,7 @@
     "audit:vault-playback": "node scripts/audit-vault-playback.mjs",
     "audit:resolver": "node scripts/audit-resolver-stack.mjs",
     "audit:search": "tsx scripts/evaluate-search.ts",
+    "test:private-node-connection": "tsx scripts/private-node-connection-scenarios.ts",
     "preview": "vite preview"
   },
   "dependencies": {

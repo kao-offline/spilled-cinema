@@ -415,6 +415,7 @@ export const listVerifiedSpillshareAvailability = internalQuery({
 export const enrollV2Node = internalMutation({
   args: {
     nodeId: v.string(),
+    connectionCode: v.string(),
     ed25519PublicKey: v.string(),
     x25519PublicKey: v.string(),
     transportKeySignature: v.string(),
@@ -452,6 +453,7 @@ export const enrollV2Node = internalMutation({
       .unique();
     if (registration) {
       await ctx.db.patch(registration._id, {
+        connectionCode: args.connectionCode,
         enrollmentCredentialHash: args.enrollmentCredentialHash,
         advertisedCapabilities: args.advertisedCapabilities,
         endpointUrl: args.endpointUrl,
@@ -461,6 +463,7 @@ export const enrollV2Node = internalMutation({
     } else {
       await ctx.db.insert("nodeRegistrations", {
         nodeId: args.nodeId,
+        connectionCode: args.connectionCode,
         status: "pending",
         enrollmentCredentialHash: args.enrollmentCredentialHash,
         advertisedCapabilities: args.advertisedCapabilities,
@@ -760,6 +763,34 @@ export const getReachablePrivateV2Node = internalQuery({
       .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
       .unique();
     return heartbeat && heartbeat.expiresAt > Date.now() ? { nodeId: args.nodeId } : null;
+  },
+});
+
+export const resolvePrivateV2NodeConnection = internalQuery({
+  args: { connectionCode: v.string() },
+  handler: async (ctx, args) => {
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_connection_code", (q) => q.eq("connectionCode", args.connectionCode))
+      .unique();
+    if (!registration || ["disabled", "quarantined"].includes(registration.status)) return null;
+    const heartbeat = await ctx.db
+      .query("nodeHeartbeatsV2")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId))
+      .unique();
+    const identity = await ctx.db
+      .query("nodeIdentities")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId))
+      .unique();
+    if (!identity) return null;
+    return {
+      nodeId: registration.nodeId,
+      connectionCode: registration.connectionCode ?? args.connectionCode,
+      online: Boolean(heartbeat && heartbeat.expiresAt > Date.now()),
+      identity: {
+        x25519PublicKey: identity.x25519PublicKey,
+      },
+    };
   },
 });
 

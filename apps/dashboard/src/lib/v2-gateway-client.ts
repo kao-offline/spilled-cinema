@@ -3,7 +3,9 @@ import { x25519 } from "@noble/curves/ed25519";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha256";
 
-type Capability = "provider.search" | "provider.feed" | "provider.import" | "player.resolve";
+type PublicCapability = "provider.search" | "provider.feed" | "provider.import" | "player.resolve";
+export type PrivateCapability = "library.read" | "library.write" | "node.admin";
+type Capability = PublicCapability | PrivateCapability;
 
 type CapabilityTicketV2 = {
   version: 2;
@@ -22,9 +24,10 @@ type CapabilityTicketV2 = {
   signature: string;
 };
 
-type V2Candidate = {
+export type V2Candidate = {
   nodeId: string;
   endpointUrl?: string;
+  connectionCode?: string;
   identity: {
     x25519PublicKey: string;
   };
@@ -79,8 +82,8 @@ type GatewayCachedSession = {
 const gatewaySessionCache = new Map<string, GatewayCachedSession>();
 const GATEWAY_TICKET_REUSE_MARGIN_MS = 10_000;
 
-function gatewaySessionCacheKey(capability: Capability, action: string) {
-  return `${capability}:${action}`;
+function gatewaySessionCacheKey(capability: Capability, action: string, nodeId = "public") {
+  return `${nodeId}:${capability}:${action}`;
 }
 
 function isGatewayTicketUsable(ticket: CapabilityTicketV2) {
@@ -273,7 +276,7 @@ function gatewayWebSocketUrl(nodeId: string) {
   return url.toString();
 }
 
-async function discoverCandidates(capability: Capability) {
+async function discoverCandidates(capability: PublicCapability) {
   const response = await fetch(
     `/api/server?path=v2%2Fdiscovery%2Fnodes&capability=${encodeURIComponent(capability)}&limit=12`,
     { headers: { Accept: "application/json" } },
@@ -283,7 +286,7 @@ async function discoverCandidates(capability: Capability) {
   return payload.candidates ?? [];
 }
 
-async function issueTicket(candidate: V2Candidate, capability: Capability, action: string) {
+async function issueTicket(candidate: V2Candidate, capability: PublicCapability, action: string) {
   const response = await fetch("/api/server?path=v2%2Ftickets", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -295,6 +298,40 @@ async function issueTicket(candidate: V2Candidate, capability: Capability, actio
   });
   if (!response.ok) throw new Error(`Capability ticket request failed (${response.status}).`);
   return await response.json() as CapabilityTicketV2;
+}
+
+async function issuePrivateTicket(candidate: V2Candidate, capability: PrivateCapability, action: string) {
+  const response = await fetch("/api/server?path=v2%2Fprivate-tickets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      nodeId: candidate.nodeId,
+      connectionCode: candidate.connectionCode,
+      capability,
+      action,
+    }),
+  });
+  const payload = await response.json().catch(() => null) as CapabilityTicketV2 & { error?: string };
+  if (!response.ok) throw new Error(payload?.error ?? `Private routing ticket request failed (${response.status}).`);
+  return payload;
+}
+
+export async function resolvePrivateGatewayCandidate(connectionCode: string) {
+  const response = await fetch(
+    `/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=${encodeURIComponent(connectionCode)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  const payload = await response.json().catch(() => null) as {
+    candidate?: V2Candidate & { connectionCode: string; online: boolean };
+    error?: string;
+  } | null;
+  if (!response.ok || !payload?.candidate) {
+    if (response.status >= 500) {
+      throw new Error("The private-node connection service is temporarily unavailable. Try again in a moment.");
+    }
+    throw new Error(payload?.error ?? `Private node lookup failed (${response.status}).`);
+  }
+  return payload.candidate;
 }
 
 async function sendGatewayRpc(
@@ -364,7 +401,7 @@ async function sendGatewayRpc(
 
 
 export async function requestPublicGateway(
-  capability: Capability,
+  capability: PublicCapability,
   action: string,
   method: string,
   params: Record<string, unknown>,
@@ -402,4 +439,25 @@ export async function requestPublicGateway(
   }
   if (lastError) throw lastError;
   return null;
+}
+
+export async function requestPrivateGateway(
+  candidate: V2Candidate,
+  capability: PrivateCapability,
+  action: string,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const cacheKey = gatewaySessionCacheKey(capability, action, candidate.nodeId);
+  let ticket = gatewaySessionCache.get(cacheKey)?.ticket;
+  if (!ticket || !isGatewayTicketUsable(ticket)) {
+    ticket = await issuePrivateTicket(candidate, capability, action);
+    gatewaySessionCache.set(cacheKey, { candidate, ticket });
+  }
+  try {
+    return await sendGatewayRpc(candidate, ticket, method, params);
+  } catch (error) {
+    gatewaySessionCache.delete(cacheKey);
+    throw error;
+  }
 }

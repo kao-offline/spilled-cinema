@@ -179,6 +179,7 @@ export default defineSchema({
   }).index("by_node_id", ["nodeId"]),
   nodeRegistrations: defineTable({
     nodeId: v.string(),
+    connectionCode: v.optional(v.string()),
     status: nodeVerificationStatusValidator,
     enrollmentCredentialHash: v.optional(v.string()),
     advertisedCapabilities: v.optional(v.array(v.string())),
@@ -189,6 +190,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_node_id", ["nodeId"])
+    .index("by_connection_code", ["connectionCode"])
     .index("by_status", ["status"]),
   nodeHeartbeatsV2: defineTable({
     nodeId: v.string(),

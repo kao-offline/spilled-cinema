@@ -3,7 +3,7 @@ import type { Capability } from "../../../packages/node-protocol/src";
 import type { JsonResponse, RequestLike } from "./http-handlers";
 import type { TransientDownloadScheduler } from "../../node/src/transient-downloads";
 import type { SpilledCinemaNodeRuntime } from "../../node/src/runtime";
-import { createFileTransferSource, type RelayOnlyBulkTransferManager } from "./bulk-webrtc";
+import type { RelayOnlyBulkTransferManager } from "./bulk-webrtc";
 
 type Handler = (req: RequestLike, res: JsonResponse) => void | Promise<void>;
 
@@ -125,6 +125,7 @@ export function createV2RpcExecutor(
         const outputPath = transientDownloads.getOutputPath(params.jobId);
         if (!outputPath) throw new Error("Transient output is not ready.");
         transientDownloads.markStreaming(params.jobId);
+        const { createFileTransferSource } = await import("./bulk-webrtc");
         const source = await createFileTransferSource(outputPath, `transient:${params.jobId}`);
         source.onComplete = () => { transientDownloads.complete(params.jobId as string); };
         return {
@@ -180,6 +181,24 @@ export function createV2RpcExecutor(
       case "auth.refresh":
         if (typeof params.refreshToken !== "string") throw new Error("refreshToken is required.");
         return await runtime.rotateRefreshSession(params.refreshToken);
+      case "node.status":
+        return await runtime.getStatus();
+      case "auth.accounts":
+        return { accounts: await runtime.listPrivateAccounts() };
+      case "auth.watcher.password.login":
+        if (typeof params.watcherId !== "string" || typeof params.password !== "string") {
+          throw new Error("Watcher id and password are required.");
+        }
+        return await runtime.loginWatcherPassword({
+          watcherId: params.watcherId,
+          password: params.password,
+          profileId: typeof params.profileId === "string" ? params.profileId : undefined,
+        });
+      case "auth.admin.password.login":
+        if (typeof params.adminId !== "string" || typeof params.password !== "string") {
+          throw new Error("Admin id and password are required.");
+        }
+        return await runtime.loginAdminPassword({ adminId: params.adminId, password: params.password });
       case "auth.passkey.options":
         if (typeof params.accountId !== "string" || typeof params.origin !== "string") {
           throw new Error("accountId and origin are required.");
@@ -227,6 +246,48 @@ export function createV2RpcExecutor(
       case "auth.password.disable":
         if (typeof params.adminToken !== "string") throw new Error("adminToken is required.");
         return await runtime.disableAdminPassword(params.adminToken);
+      case "library.storage":
+        return await runtime.getPrivateStorageSummary(
+          typeof params.accessToken === "string" ? params.accessToken : undefined,
+        );
+      case "library.profile.select":
+        if (typeof params.profileId !== "string") throw new Error("profileId is required.");
+        return await runtime.selectPrivateProfile(
+          typeof params.accessToken === "string" ? params.accessToken : undefined,
+          params.profileId,
+        );
+      case "node.admin.status":
+        return await runtime.getAdminStatus(
+          typeof params.adminToken === "string" ? params.adminToken : undefined,
+        );
+      case "node.admin.capabilities.update":
+        if (!params.capabilities || typeof params.capabilities !== "object") {
+          throw new Error("capabilities are required.");
+        }
+        return await runtime.updatePublicCapabilities(
+          typeof params.adminToken === "string" ? params.adminToken : undefined,
+          params.capabilities as never,
+        );
+      case "node.admin.watcher.create":
+        if (
+          typeof params.watcherId !== "string" ||
+          typeof params.displayName !== "string" ||
+          typeof params.quotaBytes !== "number"
+        ) {
+          throw new Error("watcherId, displayName, and quotaBytes are required.");
+        }
+        return {
+          watcher: await runtime.createWatcherAccount(
+            typeof params.adminToken === "string" ? params.adminToken : undefined,
+            {
+              watcherId: params.watcherId,
+              displayName: params.displayName,
+              password: typeof params.password === "string" ? params.password : undefined,
+              quotaBytes: params.quotaBytes,
+              profiles: Array.isArray(params.profiles) ? params.profiles as never : undefined,
+            },
+          ),
+        };
       case "invite.inspect":
         if (typeof params.invitationSecret !== "string" || typeof params.confirmationCode !== "string") {
           throw new Error("invitationSecret and confirmationCode are required.");

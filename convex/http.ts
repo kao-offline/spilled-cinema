@@ -17,6 +17,16 @@ const PUBLIC_TICKET_ACTIONS = {
 } as const;
 const V2_CAPABILITIES = Object.keys(PUBLIC_TICKET_ACTIONS);
 
+async function connectionCodeForEnrollmentCredential(credential: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(credential));
+  return toHex(digest).slice(0, 16).toUpperCase().match(/.{1,4}/g)!.join("-");
+}
+
+function normalizeConnectionCode(value: string) {
+  const compact = value.trim().toUpperCase().replace(/^SPILL(?:ED)?/, "").replace(/[^A-F0-9]/g, "");
+  return compact.length === 16 ? compact.match(/.{1,4}/g)!.join("-") : null;
+}
+
 type PublicTicketCapability = keyof typeof PUBLIC_TICKET_ACTIONS;
 
 const LEGACY_CAPABILITY_FOR_TICKET: Record<PublicTicketCapability, NodeCapability> = {
@@ -293,6 +303,7 @@ http.route({
     }
     const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
       nodeId: body.nodeId as string,
+      connectionCode: await connectionCodeForEnrollmentCredential(body.enrollmentCredential as string),
       ed25519PublicKey: body.ed25519PublicKey as string,
       x25519PublicKey: body.x25519PublicKey as string,
       transportKeySignature: body.transportKeySignature as string,
@@ -381,6 +392,7 @@ http.route({
     }
     const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
       nodeId: body.nodeId as string,
+      connectionCode: await connectionCodeForEnrollmentCredential(body.enrollmentCredential as string),
       ed25519PublicKey: body.ed25519PublicKey as string,
       x25519PublicKey: body.x25519PublicKey as string,
       transportKeySignature: body.transportKeySignature as string,
@@ -740,17 +752,37 @@ http.route({
 });
 
 http.route({
+  path: "/server/v2/private-nodes/resolve",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const code = normalizeConnectionCode(new URL(req.url).searchParams.get("code") ?? "");
+    if (!code) return json({ error: "Enter a complete 16-character connection code." }, { status: 400 });
+    const candidate = await ctx.runQuery(internal.controlPlane.resolvePrivateV2NodeConnection, {
+      connectionCode: code,
+    });
+    if (!candidate) return json({ error: "No private node matches that connection code." }, { status: 404 });
+    if (!candidate.online) return json({ error: "That private node is offline." }, { status: 409 });
+    return json({ candidate }, { headers: { "Cache-Control": "no-store" } });
+  }),
+});
+
+http.route({
   path: "/server/v2/private-tickets",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     const body = (await parseJson(req)) as {
       nodeId?: unknown;
+      connectionCode?: unknown;
       capability?: unknown;
       action?: unknown;
     };
+    const connectionCode = typeof body.connectionCode === "string"
+      ? normalizeConnectionCode(body.connectionCode)
+      : null;
     const privateCapabilities = ["library.read", "library.write", "node.admin"];
     if (
       typeof body.nodeId !== "string" ||
+      !connectionCode ||
       typeof body.capability !== "string" ||
       !privateCapabilities.includes(body.capability) ||
       typeof body.action !== "string" ||
@@ -758,10 +790,12 @@ http.route({
     ) {
       return json({ error: "Invalid private routing ticket request." }, { status: 400 });
     }
-    const reachable = await ctx.runQuery(internal.controlPlane.getReachablePrivateV2Node, {
-      nodeId: body.nodeId,
+    const reachable = await ctx.runQuery(internal.controlPlane.resolvePrivateV2NodeConnection, {
+      connectionCode,
     });
-    if (!reachable) return json({ error: "Private node is not reachable." }, { status: 404 });
+    if (!reachable || !reachable.online || reachable.nodeId !== body.nodeId) {
+      return json({ error: "Private node is not reachable." }, { status: 404 });
+    }
     if (!await ctx.runQuery(internal.controlPlane.allowCapabilityTicketIssue, {
       nodeId: body.nodeId,
       windowMs: 60_000,

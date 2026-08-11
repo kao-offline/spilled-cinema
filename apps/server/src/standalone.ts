@@ -733,6 +733,9 @@ async function startServerServices() {
   mesh.start();
   backupManager?.start();
   await startManagedGateway();
+  const connectionStatus = await handlers.runtime.getStatus();
+  console.log(`[spilledcinema-server] connection code: ${connectionStatus.node.connectionCode}`);
+  console.log(`[spilledcinema-server] connect: https://spilled.overload.studio/connect?code=${encodeURIComponent(connectionStatus.node.connectionCode)}`);
   if (
     process.env.SPILLED_ENABLE_LEGACY_CONTROL_PLANE === "1" &&
     (publicTunnel || process.env.SPILLED_NODE_ENDPOINT_URL)

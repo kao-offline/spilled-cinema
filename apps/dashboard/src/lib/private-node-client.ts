@@ -1,4 +1,10 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import { normalizeNodeConnectionCode } from "../../../../packages/node-protocol/src";
+import {
+  requestPrivateGateway,
+  resolvePrivateGatewayCandidate,
+  type V2Candidate,
+} from "./v2-gateway-client";
 
 export type PrivateNodeAccount = {
   accountId: string;
@@ -17,6 +23,8 @@ export type PrivateNodeAccount = {
 
 export type PrivateNodeConnection = {
   nodeUrl: string;
+  nodeId?: string | null;
+  connectionCode?: string | null;
   token: string | null;
   accountId: string | null;
   profileId: string | null;
@@ -26,6 +34,8 @@ export type PrivateNodeConnection = {
 
 export type AdminNodeConnection = {
   nodeUrl: string;
+  nodeId?: string | null;
+  connectionCode?: string | null;
   token: string | null;
   adminId: string | null;
   adminName: string | null;
@@ -67,6 +77,8 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
   if (typeof window === "undefined") {
     return {
       nodeUrl: "",
+      nodeId: null,
+      connectionCode: null,
       token: null,
       accountId: null,
       profileId: null,
@@ -78,6 +90,8 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
     const parsed = JSON.parse(window.localStorage.getItem(PRIVATE_NODE_KEY) || "{}") as Partial<PrivateNodeConnection>;
     return {
       nodeUrl: typeof parsed.nodeUrl === "string" ? parsed.nodeUrl : "",
+      nodeId: typeof parsed.nodeId === "string" ? parsed.nodeId : null,
+      connectionCode: typeof parsed.connectionCode === "string" ? parsed.connectionCode : null,
       token: typeof parsed.token === "string" ? parsed.token : null,
       accountId: typeof parsed.accountId === "string" ? parsed.accountId : null,
       profileId: typeof parsed.profileId === "string" ? parsed.profileId : null,
@@ -87,6 +101,8 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
   } catch {
     return {
       nodeUrl: "",
+      nodeId: null,
+      connectionCode: null,
       token: null,
       accountId: null,
       profileId: null,
@@ -107,6 +123,8 @@ export function writePrivateNodeConnection(connection: PrivateNodeConnection) {
 export function clearPrivateNodeConnection() {
   const next: PrivateNodeConnection = {
     nodeUrl: "",
+    nodeId: null,
+    connectionCode: null,
     token: null,
     accountId: null,
     profileId: null,
@@ -119,12 +137,111 @@ export function clearPrivateNodeConnection() {
   return next;
 }
 
+type ResolvedPrivateNode = V2Candidate & { connectionCode: string; online: boolean };
+
+async function resolveSavedPrivateNode(connection: Pick<PrivateNodeConnection, "nodeId" | "connectionCode">) {
+  if (!connection.connectionCode) throw new Error("This saved connection is missing its connection code.");
+  const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode);
+  if (connection.nodeId && candidate.nodeId !== connection.nodeId) {
+    throw new Error("Connection code resolved to a different node identity.");
+  }
+  return candidate;
+}
+
+export async function connectPrivateNodeWithCode(value: string) {
+  const connectionCode = normalizeNodeConnectionCode(value);
+  if (!connectionCode) throw new Error("Enter all 16 letters and numbers from your server connection code.");
+  const candidate = await resolvePrivateGatewayCandidate(connectionCode);
+  return {
+    candidate,
+    connection: {
+      nodeUrl: "",
+      nodeId: candidate.nodeId,
+      connectionCode,
+      token: null,
+      accountId: null,
+      profileId: null,
+      accountName: null,
+      profileName: null,
+    } satisfies PrivateNodeConnection,
+  };
+}
+
+export async function fetchPrivateNodeStatusViaGateway(connection: PrivateNodeConnection, resolved?: ResolvedPrivateNode) {
+  const candidate = resolved ?? await resolveSavedPrivateNode(connection);
+  return await requestPrivateGateway(candidate, "library.read", "status", "node.status", {}) as Awaited<ReturnType<typeof fetchPrivateNodeStatus>>;
+}
+
+export async function fetchPrivateNodeAccountsViaGateway(connection: PrivateNodeConnection, resolved?: ResolvedPrivateNode) {
+  const candidate = resolved ?? await resolveSavedPrivateNode(connection);
+  const payload = await requestPrivateGateway(candidate, "library.read", "accounts", "auth.accounts", {}) as {
+    accounts: PrivateNodeAccount[];
+  };
+  return payload.accounts;
+}
+
+export async function loginWatcherViaGateway(input: {
+  connection: PrivateNodeConnection;
+  watcherId: string;
+  password: string;
+  profileId?: string | null;
+  candidate?: ResolvedPrivateNode;
+}) {
+  const candidate = input.candidate ?? await resolveSavedPrivateNode(input.connection);
+  return await requestPrivateGateway(candidate, "library.write", "password.login", "auth.watcher.password.login", {
+    watcherId: input.watcherId,
+    password: input.password,
+    profileId: input.profileId ?? undefined,
+  }) as Awaited<ReturnType<typeof loginWatcherNodePassword>>;
+}
+
+export async function loginPasskeyViaGateway(input: {
+  connection: PrivateNodeConnection;
+  accountId: string;
+  profileId?: string | null;
+  candidate?: ResolvedPrivateNode;
+}) {
+  const candidate = input.candidate ?? await resolveSavedPrivateNode(input.connection);
+  const origin = window.location.origin;
+  const optionsPayload = await requestPrivateGateway(candidate, "library.read", "passkey.options", "auth.passkey.options", {
+    accountId: input.accountId,
+    origin,
+    flow: "login",
+  }) as { options: unknown };
+  const response = await startAuthentication({ optionsJSON: optionsPayload.options as never });
+  return await requestPrivateGateway(candidate, "library.write", "passkey.verify", "auth.passkey.verify", {
+    accountId: input.accountId,
+    profileId: input.profileId ?? undefined,
+    origin,
+    flow: "login",
+    response,
+  }) as Awaited<ReturnType<typeof loginPrivateNodePasskey>>;
+}
+
+export async function fetchPrivateNodeStorageViaGateway(connection: PrivateNodeConnection) {
+  if (!connection.token) throw new Error("Sign in before loading private storage.");
+  const candidate = await resolveSavedPrivateNode(connection);
+  return await requestPrivateGateway(candidate, "library.read", "storage", "library.storage", {
+    accessToken: connection.token,
+  }) as PrivateNodeStorageSummary;
+}
+
+export async function selectPrivateNodeProfileViaGateway(connection: PrivateNodeConnection, profileId: string) {
+  if (!connection.token) throw new Error("Sign in before selecting a profile.");
+  const candidate = await resolveSavedPrivateNode(connection);
+  return await requestPrivateGateway(candidate, "library.write", "profile.select", "library.profile.select", {
+    accessToken: connection.token,
+    profileId,
+  }) as Awaited<ReturnType<typeof selectPrivateNodeProfile>>;
+}
+
 export async function fetchPrivateNodeStatus(nodeUrl: string) {
   return privateFetch<{
     status: "ok";
     node?: {
       mode?: string;
       nodeId?: string;
+      connectionCode?: string;
       endpointUrl?: string | null;
       capabilities?: Record<string, { visibility?: string; requiresSession?: boolean }>;
     };

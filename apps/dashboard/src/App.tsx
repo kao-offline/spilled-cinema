@@ -15,6 +15,7 @@ import { ImportView, type ImportPlatformFilter } from "./components/ImportView";
 import { SettingsView } from "./components/SettingsView";
 import { NodeSetupView } from "./components/NodeSetupView";
 import { NodeAdminView } from "./components/NodeAdminView";
+import { PrivateNodeConnectView } from "./components/PrivateNodeConnectView";
 import { SupportView } from "./components/SupportView";
 import { DownloadedView } from "./components/DownloadedView";
 import { ExploreView } from "./components/ExploreView";
@@ -429,6 +430,9 @@ function App() {
   }
   if (routePath === "/node/admin") {
     return <NodeAdminView />;
+  }
+  if (routePath === "/connect") {
+    return <PrivateNodeConnectView />;
   }
   return <AppContent />;
 }

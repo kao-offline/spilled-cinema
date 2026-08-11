@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { gzipSync } from "node:zlib";
 import {
   decryptNodeRequest,
@@ -10,7 +10,10 @@ import {
   createBrowserEncryptedNodeRequest,
   decodeBrowserNodeResponse,
   decryptBrowserNodeResponse,
+  resolvePrivateGatewayCandidate,
 } from "../v2-gateway-client";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("browser v2 gateway crypto", () => {
   it("is compatible with the node X25519 and ChaCha20-Poly1305 envelopes", () => {
@@ -79,5 +82,36 @@ describe("browser v2 gateway crypto", () => {
       privateKey: request.privateKey,
       nodeTransportPublicKey: transport.publicKey,
     })).toThrow();
+  });
+});
+
+describe("private gateway node resolution", () => {
+  it("resolves exactly one reachable candidate by connection code", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      candidate: {
+        nodeId: "node_7a3f19c288b4d0e1f9a11111",
+        connectionCode: "7A3F-19C2-88B4-D0E1",
+        online: true,
+        identity: { x25519PublicKey: "public-key" },
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    await expect(resolvePrivateGatewayCandidate("7A3F-19C2-88B4-D0E1")).resolves.toMatchObject({
+      nodeId: "node_7a3f19c288b4d0e1f9a11111",
+      online: true,
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=7A3F-19C2-88B4-D0E1",
+      { headers: { Accept: "application/json" } },
+    );
+  });
+
+  it("does not leak control-plane configuration failures", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: "CONVEX_SITE_URL is not configured.",
+    }), { status: 500, headers: { "Content-Type": "application/json" } })));
+
+    await expect(resolvePrivateGatewayCandidate("7A3F-19C2-88B4-D0E1"))
+      .rejects.toThrow("connection service is temporarily unavailable");
   });
 });

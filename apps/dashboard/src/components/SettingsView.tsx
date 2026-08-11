@@ -1192,14 +1192,19 @@ export function SettingsView({
 
         {activeTab === "private" ? (
           <div className="grid gap-4">
-            <Panel title="Private node" hint="Start the server with npm run start:server, then find it here. Setup and management open on dedicated pages.">
+            <Panel title="Private node" hint="Connect with the code shown by Spilled Server. Your node URL is no longer required.">
+              <PreferenceRow title="Secure connection" hint="Locate your node by code and sign in over the encrypted gateway.">
+                <a href="/connect" className="inline-flex h-10 items-center rounded-full bg-white px-5 text-sm font-black text-black">
+                  Connect or sign in
+                </a>
+              </PreferenceRow>
               <PreferenceRow title="Find server" hint="Looks for your running node through local/native runtime and registered fetch nodes.">
                 <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleFindPrivateNode()}>
                   <Terminal className="h-4 w-4" />
                   {privateNodeBusy ? "Finding" : "Find server"}
                 </ActionButton>
               </PreferenceRow>
-              <PreferenceRow title="Node URL" hint="Optional manual fallback if discovery cannot see your server.">
+              <PreferenceRow title="Legacy node URL" hint="Advanced fallback for older server builds only.">
                 <div className="flex min-w-[min(34rem,100%)] flex-col gap-2 sm:flex-row">
                   <input
                     value={privateNodeInput}
