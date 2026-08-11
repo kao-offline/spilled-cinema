@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Database, LockKeyhole, Plus, RefreshCw, ServerCog, SlidersHorizontal, Users } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Activity, Copy, Database, LockKeyhole, Plus, RefreshCw, ServerCog, ShieldCheck, SlidersHorizontal, Users } from "lucide-react";
 import {
   clearAdminNodeConnection,
   createAdminWatcher,
@@ -30,6 +30,8 @@ function formatBytes(value: number) {
 function cleanId(value: string, fallback: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_") || fallback;
 }
+
+type AdminTab = "overview" | "people" | "privacy" | "storage";
 
 export function NodeAdminView() {
   const queryNode = useMemo(() => {
@@ -66,6 +68,8 @@ export function NodeAdminView() {
   const [watcherPassword, setWatcherPassword] = useState("");
   const [profiles, setProfiles] = useState("");
   const [quotaGb, setQuotaGb] = useState(200);
+  const [activeTab, setActiveTab] = useState<AdminTab>("overview");
+  const [copied, setCopied] = useState(false);
 
   async function refresh(nextConnection = connection) {
     if (!(nextConnection.connectionCode || nextConnection.nodeUrl) || !nextConnection.token) return;
@@ -180,6 +184,13 @@ export function NodeAdminView() {
     setStatus(null);
   }
 
+  async function copyConnectionCode() {
+    if (!connection.connectionCode) return;
+    await navigator.clipboard.writeText(displayCode(connection.connectionCode));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  }
+
   const signedIn = Boolean(connection.token);
 
   return (
@@ -214,75 +225,80 @@ export function NodeAdminView() {
             <p className="mt-3 text-xs font-semibold text-white/32">No IP address or server URL needed. The code locates the node; your admin password authorizes every change on the node itself.</p>
           </section>
         ) : (
-          <div className="grid gap-5">
-            <section className="grid gap-4 rounded-xl border border-white/10 bg-[#15161b] p-5 md:grid-cols-4">
-              <div className="md:col-span-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <ServerCog className="text-orange-300" />
-                  <h2 className="text-xl font-black">Overview</h2>
-                </div>
-                <button onClick={() => void refresh()} disabled={busy} className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-black"><RefreshCw size={16} />Refresh</button>
+          <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
+            <aside className="self-start rounded-3xl border border-white/10 bg-[#15161b] p-4 lg:sticky lg:top-6">
+              <div className="rounded-2xl border border-orange-300/25 bg-orange-300/[0.06] p-4">
+                <div className="text-[10px] font-black uppercase tracking-[0.24em] text-orange-200/65">Permanent code</div>
+                <div className="mt-2 break-all font-mono text-lg font-black tracking-[0.09em] text-orange-200">{displayCode(connection.connectionCode ?? "") || "Local connection"}</div>
+                {connection.connectionCode ? <button onClick={() => void copyConnectionCode()} className="mt-3 inline-flex items-center gap-2 text-xs font-black text-white/70 hover:text-white"><Copy size={14} />{copied ? "Copied" : "Copy code"}</button> : null}
               </div>
-              <Metric label="Mode" value={status?.status.node?.mode ?? "Loading"} />
-              <Metric label="Watchers" value={String(status?.watchers.length ?? 0)} />
-              <Metric label="Storage" value={status ? formatBytes(status.storage.usedBytes) : "Loading"} />
-              <Metric label="Sessions" value={String(status?.sessions.length ?? 0)} />
-            </section>
+              <nav className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-1" aria-label="Server settings">
+                <AdminTabButton active={activeTab === "overview"} icon={<Activity size={17} />} label="Overview" onClick={() => setActiveTab("overview")} />
+                <AdminTabButton active={activeTab === "people"} icon={<Users size={17} />} label="People" onClick={() => setActiveTab("people")} />
+                <AdminTabButton active={activeTab === "privacy"} icon={<ShieldCheck size={17} />} label="Privacy" onClick={() => setActiveTab("privacy")} />
+                <AdminTabButton active={activeTab === "storage"} icon={<Database size={17} />} label="Storage" onClick={() => setActiveTab("storage")} />
+              </nav>
+            </aside>
 
-            <section className="rounded-xl border border-white/10 bg-[#15161b] p-5">
-              <div className="mb-4 flex items-center gap-3">
-                <SlidersHorizontal className="text-orange-300" />
-                <h2 className="text-xl font-black">Public capabilities</h2>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {Object.entries(capabilities).map(([key, checked]) => (
-                  <label key={key} className="flex items-center justify-between rounded-lg border border-white/10 bg-black/25 px-4 py-3 text-sm font-bold capitalize">
-                    {key}
-                    <input type="checkbox" checked={checked} onChange={(event) => setCapabilities((current) => ({ ...current, [key]: event.target.checked }))} className="h-5 w-5 accent-orange-500" />
-                  </label>
-                ))}
-              </div>
-              <button onClick={() => void saveCapabilities()} disabled={busy} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-black text-black disabled:opacity-60">Save server capabilities</button>
-            </section>
+            <main className="min-w-0">
+              {activeTab === "overview" ? (
+                <section className="rounded-3xl border border-white/10 bg-[#15161b] p-5 sm:p-7">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-3"><ServerCog className="text-orange-300" /><div><h2 className="text-2xl font-black">Server overview</h2><p className="text-sm font-medium text-white/45">Live health and activity for this private node.</p></div></div>
+                    <button onClick={() => void refresh()} disabled={busy} className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-black"><RefreshCw className={busy ? "animate-spin" : ""} size={16} />Refresh</button>
+                  </div>
+                  <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <Metric label="Mode" value={status?.status.node?.mode ?? "Loading"} />
+                    <Metric label="People" value={String(status?.watchers.length ?? 0)} />
+                    <Metric label="Used storage" value={status ? formatBytes(status.storage.usedBytes) : "Loading"} />
+                    <Metric label="Active sessions" value={String(status?.sessions.length ?? 0)} />
+                  </div>
+                  <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.06] p-4 text-sm font-semibold text-emerald-100"><span className="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-300" />Connected securely through the managed gateway. No public server URL is required.</div>
+                </section>
+              ) : null}
 
-            <section className="rounded-xl border border-white/10 bg-[#15161b] p-5">
-              <div className="mb-4 flex items-center gap-3">
-                <Users className="text-orange-300" />
-                <h2 className="text-xl font-black">Watcher accounts</h2>
-              </div>
-              <div className="grid gap-3">
-                {(status?.watchers ?? []).map((watcher: PrivateNodeAccount) => (
-                  <div key={watcher.accountId} className="rounded-lg border border-white/10 bg-black/25 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <h3 className="font-black">{watcher.displayName}</h3>
-                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-white/35">{watcher.watcherId ?? watcher.accountId} · {formatBytes(watcher.quotaBytes)}</p>
+              {activeTab === "people" ? (
+                <section className="rounded-3xl border border-white/10 bg-[#15161b] p-5 sm:p-7">
+                  <div className="mb-5 flex items-center gap-3"><Users className="text-orange-300" /><div><h2 className="text-2xl font-black">People & profiles</h2><p className="text-sm font-medium text-white/45">Create private accounts and control each person’s storage allowance.</p></div></div>
+                  <div className="grid gap-3">
+                    {(status?.watchers ?? []).map((watcher: PrivateNodeAccount) => (
+                      <div key={watcher.accountId} className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-black">{watcher.displayName}</h3><p className="text-xs font-bold uppercase tracking-[0.18em] text-white/35">{watcher.watcherId ?? watcher.accountId} · {formatBytes(watcher.quotaBytes)}</p></div><span className="rounded-full bg-emerald-500/15 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">{watcher.profiles.length} profiles</span></div>
                       </div>
-                      <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">{watcher.profiles.length} profiles</span>
+                    ))}
+                    {!status?.watchers.length ? <p className="rounded-2xl border border-dashed border-white/15 p-5 text-sm font-semibold text-white/40">No watcher accounts yet.</p> : null}
+                  </div>
+                  <div className="mt-6 border-t border-white/10 pt-6"><h3 className="font-black">Add a person</h3><p className="mt-1 text-xs font-semibold text-white/35">Separate profile names with commas.</p>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      <input value={watcherName} onChange={(event) => setWatcherName(event.target.value)} placeholder="Name" className="rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
+                      <input value={watcherPassword} onChange={(event) => setWatcherPassword(event.target.value)} type="password" placeholder="Password (optional)" className="rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
+                      <input value={profiles} onChange={(event) => setProfiles(event.target.value)} placeholder="Profiles" className="rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
+                      <label className="grid gap-1 text-[10px] font-black uppercase tracking-[.16em] text-white/35">Quota (GB)<input aria-label="Storage quota in GB" value={quotaGb} onChange={(event) => setQuotaGb(Number(event.target.value))} type="number" min={1} className="rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold text-white outline-none focus:border-orange-300" /></label>
+                      <button onClick={() => void addWatcher()} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-black disabled:opacity-60"><Plus size={16} />Add person</button>
                     </div>
                   </div>
-                ))}
-              </div>
-              <div className="mt-5 grid gap-3 border-t border-white/10 pt-5 md:grid-cols-5">
-                <input value={watcherName} onChange={(event) => setWatcherName(event.target.value)} placeholder="Watcher name" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
-                <input value={watcherPassword} onChange={(event) => setWatcherPassword(event.target.value)} type="password" placeholder="Password optional" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
-                <input value={profiles} onChange={(event) => setProfiles(event.target.value)} placeholder="Profiles" className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
-                <input value={quotaGb} onChange={(event) => setQuotaGb(Number(event.target.value))} type="number" min={1} className="rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm font-semibold outline-none focus:border-orange-300" />
-                <button onClick={() => void addWatcher()} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-black text-black disabled:opacity-60"><Plus size={16} />Add</button>
-              </div>
-            </section>
+                </section>
+              ) : null}
 
-            <section className="rounded-xl border border-white/10 bg-[#15161b] p-5">
-              <div className="mb-4 flex items-center gap-3">
-                <Database className="text-orange-300" />
-                <h2 className="text-xl font-black">Storage and recovery</h2>
-              </div>
-              <div className="grid gap-3 md:grid-cols-3">
-                <Metric label="Root" value={status?.storage.root ?? "Not configured"} />
-                <Metric label="Downloads" value={String(status?.storage.downloadsCount ?? 0)} />
-                <Metric label="Recovery" value="Terminal only" />
-              </div>
-            </section>
+              {activeTab === "privacy" ? (
+                <section className="rounded-3xl border border-white/10 bg-[#15161b] p-5 sm:p-7">
+                  <div className="mb-5 flex items-center gap-3"><SlidersHorizontal className="text-orange-300" /><div><h2 className="text-2xl font-black">Privacy & contribution</h2><p className="text-sm font-medium text-white/45">Choose exactly what this PC may contribute outside your private library.</p></div></div>
+                  <div className="mb-5 rounded-2xl border border-orange-300/20 bg-orange-300/[0.05] p-4 text-sm font-semibold text-orange-100/80">Everything stays private unless you enable a capability here. Changes are stored on the node and require your admin session.</div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {Object.entries(capabilities).map(([key, checked]) => <label key={key} className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/25 px-4 py-4 text-sm font-bold capitalize"><span>{key}</span><input type="checkbox" checked={checked} onChange={(event) => setCapabilities((current) => ({ ...current, [key]: event.target.checked }))} className="h-5 w-5 accent-orange-500" /></label>)}
+                  </div>
+                  <button onClick={() => void saveCapabilities()} disabled={busy} className="mt-5 rounded-full bg-white px-5 py-3 text-sm font-black text-black disabled:opacity-60">Save privacy settings</button>
+                </section>
+              ) : null}
+
+              {activeTab === "storage" ? (
+                <section className="rounded-3xl border border-white/10 bg-[#15161b] p-5 sm:p-7">
+                  <div className="mb-5 flex items-center gap-3"><Database className="text-orange-300" /><div><h2 className="text-2xl font-black">Storage & recovery</h2><p className="text-sm font-medium text-white/45">See where your library lives and check local recovery options.</p></div></div>
+                  <div className="grid gap-3 md:grid-cols-3"><Metric label="Library root" value={status?.storage.root ?? "Not configured"} /><Metric label="Downloads" value={String(status?.storage.downloadsCount ?? 0)} /><Metric label="Used space" value={status ? formatBytes(status.storage.usedBytes) : "Loading"} /></div>
+                  <div className="mt-5 rounded-2xl border border-white/10 bg-black/25 p-4"><h3 className="font-black">Recovery</h3><p className="mt-1 text-sm font-medium leading-6 text-white/45">Identity and settings remain in Windows app data during reinstall. Advanced recovery stays local to the server terminal.</p></div>
+                </section>
+              ) : null}
+            </main>
           </div>
         )}
       </div>
@@ -296,5 +312,13 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] font-black uppercase tracking-[0.24em] text-white/35">{label}</div>
       <div className="mt-2 break-words text-lg font-black text-white">{value}</div>
     </div>
+  );
+}
+
+function AdminTabButton({ active, icon, label, onClick }: { active: boolean; icon: ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button type="button" aria-pressed={active} onClick={onClick} className={`flex items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-black transition ${active ? "bg-orange-500 text-black" : "text-white/55 hover:bg-white/[0.06] hover:text-white"}`}>
+      {icon}<span>{label}</span>
+    </button>
   );
 }

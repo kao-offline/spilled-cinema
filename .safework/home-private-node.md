@@ -17,3 +17,8 @@
 - Draft PR: `https://github.com/kao-offline/spilled-cinema/pull/11`, base `release/private-node-beta27`.
 - Prerelease: `https://github.com/kao-offline/spilled-cinema/releases/tag/v0.2.0-beta.28`; installer and blockmap uploads verified.
 - Tag `v0.2.0-beta.28` resolves to artifact commit `5960a52`.
+- Beta.29 scope: replace the post-install dead-end with a local server console, keep the permanent connection code visible after reinstall, and organize hosted settings into working Overview, People, Privacy, and Storage tabs.
+- Beta.29 artifact: `apps/server-windows/release/Spilled-Server-Setup-0.2.0-beta.29-x64.exe` (116,304,540 bytes).
+- Beta.29 SHA-256: `3C25B0A6C1C57943CF3B0D93B38475A8752E8EA3F27D99725AA1A28C6A01A2E4`.
+- Beta.29 signing: unsigned; preserve beta.28 as the immediate installer rollback point.
+- Beta.29 verification: setup-wizard normal and controlled-failure scenarios, dashboard and server production builds, gateway admin/connection scenarios, privacy defaults, and desktop/mobile tab inspection.

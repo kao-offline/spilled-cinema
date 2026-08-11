@@ -6,6 +6,7 @@
     "dev": "tsx src/standalone.ts",
     "build": "tsc --noEmit && esbuild src/standalone.ts --bundle --platform=node --format=esm --target=node22 --external:@node-rs/argon2 --external:node-datachannel --external:ws --external:localtunnel --outfile=dist/standalone.mjs",
     "probe:gateway-backoff": "tsx scripts/probe-gateway-backoff.ts",
+    "test:setup-wizard": "tsx scripts/setup-wizard-scenarios.ts",
     "start": "node dist/standalone.mjs",
     "start:dev": "tsx src/standalone.ts"
   },

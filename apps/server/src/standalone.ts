@@ -382,6 +382,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       return;
     }
     const setup = await handlers.runtime.getSetupCodeForTerminal();
+    const status = await handlers.runtime.getStatus();
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
@@ -390,6 +391,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       setupCode: setup?.setupCode ?? "",
       setupRequired: Boolean(setup?.setupCode),
       suggestedNodeName: `${hostname() || "Home"} Server`,
+      connectionCode: status.node.connectionCode ?? "",
     }));
     return;
   }
