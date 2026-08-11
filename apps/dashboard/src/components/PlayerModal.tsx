@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, Volume2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
@@ -17,6 +17,7 @@ import { fetchSkipSegmentsForIds, collectSkipTitleIds, resolveSkipTitleIdsByTitl
 import { fetchEpisodePreviews, type EpisodePreview } from "../lib/import-client";
 import { prefetchEpisodePreviewImages } from "../lib/episode-preview-cache";
 import type { FullDownloadJob } from "../lib/full-download-client";
+import { getEpisodeAudioAvailability } from "../lib/episode-audio";
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -233,7 +234,7 @@ export function PlayerModal({
   fullDownloadJobsByEpisode,
   autoPlayToken = null,
 }: PlayerModalProps) {
-  const [expandedLangs, setExpandedLangs] = useState<Set<string>>(new Set());
+  const [activeLanguageTab, setActiveLanguageTab] = useState<string | null>(null);
   const [downloadedSubtitleTracks, setDownloadedSubtitleTracks] = useState<{ src: string; label: string; srclang: string }[]>([]);
   const [vaultPlaybackUrl, setVaultPlaybackUrl] = useState<string | null>(null);
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
@@ -277,25 +278,32 @@ export function PlayerModal({
 
   const groupedPlayers = useMemo(() => {
     if (!effectiveEpisode) return [];
-    const groups = new Map<string, { label: string; players: typeof effectiveEpisode.players }>();
+    const groups = new Map<string, { label: string; flags: string[]; players: typeof effectiveEpisode.players }>();
     for (const player of effectiveEpisode.players) {
       const key = getCanonicalLanguageKey(player.language);
-      const group = groups.get(key) ?? { label: getCanonicalLanguageLabel(player.language), players: [] };
+      const presentation = getLanguagePresentation(player.language);
+      const group = groups.get(key) ?? { label: getCanonicalLanguageLabel(player.language), flags: presentation.flags, players: [] };
       group.players.push(player);
       groups.set(key, group);
     }
     return Array.from(groups.entries()).map(([key, group]) => ({ key, ...group }));
   }, [effectiveEpisode]);
 
-  useEffect(() => {
-    if (groupedPlayers.length > 0 && expandedLangs.size === 0) {
-      setExpandedLangs(new Set([groupedPlayers[0].key]));
-    }
-  }, [groupedPlayers, expandedLangs]);
-
   const activePlayer = effectiveEpisode
     ? effectiveEpisode.players.find((player) => player.alias === effectiveEpisode.selectedPlayerAlias) ?? effectiveEpisode.players[0]
     : null;
+  const activePlayerLanguageKey = getCanonicalLanguageKey(activePlayer?.language);
+  const visiblePlayerGroup = groupedPlayers.find((group) => group.key === activeLanguageTab) ?? groupedPlayers.find((group) => group.key === activePlayerLanguageKey) ?? groupedPlayers[0] ?? null;
+
+  useEffect(() => {
+    if (groupedPlayers.length === 0) {
+      setActiveLanguageTab(null);
+      return;
+    }
+    if (!activeLanguageTab || !groupedPlayers.some((group) => group.key === activeLanguageTab)) {
+      setActiveLanguageTab(activePlayerLanguageKey || groupedPlayers[0].key);
+    }
+  }, [activeLanguageTab, activePlayerLanguageKey, groupedPlayers]);
   const activeIsLocal = isLocalPlayer(activePlayer);
   const isMovieEntry = effectiveEpisode?.episodeCode === "movie" || effectiveEpisode?.episodeTitle === "Movie Format";
   const modalHeading = isMovieEntry
@@ -321,15 +329,6 @@ export function PlayerModal({
     : instantPlayback?.playerAlias
       ? effectiveEpisode?.players.find((player) => player.alias === instantPlayback.playerAlias) ?? activePlayer
       : activePlayer;
-
-  function toggleLang(lang: string) {
-    setExpandedLangs((prev) => {
-      const next = new Set(prev);
-      if (next.has(lang)) next.delete(lang);
-      else next.add(lang);
-      return next;
-    });
-  }
 
   function handleChoosePlayer(player: EpisodePlayer) {
     if (!episode) return;
@@ -928,9 +927,11 @@ export function PlayerModal({
             <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
               <Settings className="h-4 w-4" />
             </button>
-            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
-              <List className="h-4 w-4" />
-            </button>
+            {!isMovieEntry ? (
+              <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
+                <List className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -968,6 +969,7 @@ export function PlayerModal({
               const title = preview?.title ?? entry.episodeTitle ?? `Episode ${entry.episodeNumber ?? index + 1}`;
               const minutes = preview?.runtimeMinutes ?? (entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null);
               const airDate = preview?.airDate ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${preview.airDate}T00:00:00`)) : null;
+              const audioAvailability = getEpisodeAudioAvailability(entry);
               return (
                 <div key={entry.id} onClick={() => {
                   if (!isFocused) { setFocusedEpisodeIndex(index); return; }
@@ -986,8 +988,14 @@ export function PlayerModal({
                       <div className="absolute inset-0 bg-gradient-to-t from-black/55 to-transparent" />
                     </div>
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/65 to-transparent px-3 pb-3 pt-16 sm:px-4 sm:pb-4">
-                      <div className="flex items-start justify-between gap-2"><p className={clsx("line-clamp-2 font-bold leading-[1.2] text-white", isFocused ? "text-base sm:text-lg" : "text-sm")}>{entry.episodeNumber ?? index + 1}. {title}</p></div>
-                      <p className="mt-1 text-[10px] font-medium text-white/45">{[minutes ? `${minutes} min` : null, airDate].filter(Boolean).join("  ·  ") || episodeShortLabel(entry)}</p>
+                      <div className="flex items-start justify-between gap-2"><p className={clsx("player-selector-title line-clamp-2 font-bold leading-[1.2] text-white", isFocused ? "text-base sm:text-lg" : "text-sm")}><span className="player-selector-number">{entry.episodeNumber ?? index + 1}.</span> {title}</p></div>
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <p className="player-selector-meta text-[10px] font-medium text-white/45">{[minutes ? `${minutes} min` : null, airDate].filter(Boolean).join("  ·  ") || episodeShortLabel(entry)}</p>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {audioAvailability.subtitles ? <span className="spilled-subtitle-tag spilled-audio-marker" title="Subtitles available" aria-label="Subtitles available"><Captions className="h-3.5 w-3.5" /><span>SUB</span></span> : null}
+                          {audioAvailability.dubbing ? <span className="spilled-dubbing-tag spilled-audio-marker" title="Dubbed audio available" aria-label="Dubbed audio available"><Volume2 className="h-3.5 w-3.5" /><span>DUB</span></span> : null}
+                        </div>
+                      </div>
                       {isFocused && preview?.description ? <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-white/52">{preview.description}</p> : null}
                     </div>
                   </button>
@@ -1019,42 +1027,43 @@ export function PlayerModal({
 
       {playerMenuOpen ? (
         <div className="absolute inset-y-0 right-0 z-30 flex justify-end" style={{ paddingTop: "max(5rem, env(safe-area-inset-top))" }}>
-          <div className="pointer-events-auto h-full w-[min(85vw,22rem)] overflow-y-auto bg-gradient-to-l from-black/95 via-black/90 to-transparent" style={{ scrollbarWidth: "none" }}>
+          <div className="player-source-menu pointer-events-auto h-full w-[min(92vw,30rem)] overflow-y-auto bg-gradient-to-l from-black/95 via-black/90 to-transparent" style={{ scrollbarWidth: "none" }}>
             <div className="p-4 pt-8 pb-24">
               <div className="glass-panel overflow-hidden rounded-2xl border border-white/10">
-                <div className="border-b border-white/10 px-4 py-3">
-                  <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Active Source"}</div>
+                <div className="border-b border-white/10 px-4 py-4">
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-white/45">{isMovieEntry ? "Movie sources" : "Choose player"}</div>
                   <div className="mt-1 truncate text-sm font-bold text-white">{modalHeading}</div>
                 </div>
-                <div className="p-2">
-                  {groupedPlayers.map((group) => {
-                    const isOpen = expandedLangs.has(group.key);
-                    return (
-                      <div key={group.key} className="mb-1">
-                        <button type="button" onClick={() => toggleLang(group.key)} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition hover:bg-white/10">
-                          <span className="text-sm font-semibold text-white/80">{group.label}</span>
-                          <ChevronDown className={clsx("h-4 w-4 text-white/40 transition-transform duration-200", isOpen && "rotate-180")} />
+                <div className="border-b border-white/10 p-2">
+                  <div className="no-scrollbar flex gap-1.5 overflow-x-auto" role="tablist" aria-label="Player language">
+                    {groupedPlayers.map((group) => {
+                      const selected = visiblePlayerGroup?.key === group.key;
+                      return (
+                        <button key={group.key} type="button" role="tab" aria-selected={selected} onClick={() => setActiveLanguageTab(group.key)} className={clsx("player-language-tab shrink-0 rounded-xl border px-3 py-2.5 text-left transition", selected ? "border-white/30 bg-white text-black" : "border-white/10 bg-white/[0.04] text-white/65 hover:bg-white/10 hover:text-white")}>
+                          <span className="block text-lg leading-none" aria-hidden="true">{group.flags.join(" ") || "🎬"}</span>
+                          <span className="mt-1.5 block max-w-36 truncate text-[10px] font-black uppercase tracking-[0.12em]">{group.label}</span>
                         </button>
-                        {isOpen ? (
-                          <div className="mt-1 space-y-1 pl-2">
-                            {group.players.map((player) => {
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="p-2" role="tabpanel">
+                  <div className="mb-2 px-3 pt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35">{visiblePlayerGroup?.players.length ?? 0} player options</div>
+                  <div className="space-y-1">
+                    {visiblePlayerGroup?.players.map((player) => {
                               const active = player.alias === activePlayer.alias;
                               const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
                               return (
-                                <button key={player.alias} type="button" onClick={() => handleChoosePlayer(player)} className={clsx("glass-settings-item w-full text-left", active && "bg-white/15")}>
+                                <button key={player.alias} type="button" onClick={() => handleChoosePlayer(player)} className={clsx("glass-settings-item min-h-14 w-full text-left", active && "bg-white/15 ring-1 ring-white/20")}>
                                   <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-medium text-white/80">{player.label}</div>
-                                    <div className="text-xs text-white/40">{player.provider}</div>
+                                    <div className="truncate text-sm font-bold text-white/88">{player.label}</div>
+                                    <div className="mt-0.5 text-xs text-white/40">{player.provider}{active ? " · Playing" : ""}</div>
                                   </div>
                                   {status === "resolving" ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : status === "resolved" ? <div className="h-2 w-2 rounded-full bg-emerald-400" /> : status === "failed" ? <div className="h-2 w-2 rounded-full bg-red-400" /> : null}
                                 </button>
                               );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                    })}
+                  </div>
                 </div>
                 {playbackFailures.length > 0 ? (
                   <div className="border-t border-white/10 px-4 py-3">
