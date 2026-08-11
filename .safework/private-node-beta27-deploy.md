@@ -64,4 +64,4 @@
 - The first Vercel CLI attempt ran from `apps/dashboard` without ignored project-link metadata. It created project `dashboard` (`prj_88d1qRzvhxSkWQ9eYwBUIa0vkqGn`) and deployment `5MEdjzUUcL4WfYuWZHrWWEypBj8B`, which failed because monorepo parent packages were not uploaded.
 - The existing `spilled-cinema` production project and alias were not changed by that failure.
 - Corrective action: explicitly linked the release repository root to `spilled-cinema`, preserving its configured `apps/dashboard` root, then deployed successfully.
-- Cleanup: remove only the newly created empty `dashboard` project after this incident is committed; retain this record and provider logs as evidence.
+- Cleanup: after committing the incident record, removed only the newly created `dashboard` project; Vercel reported success. The incident record and provider logs remain as evidence.
