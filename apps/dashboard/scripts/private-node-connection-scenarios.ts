@@ -1,4 +1,5 @@
 import { formatNodeConnectionCode, normalizeNodeConnectionCode } from "../../../packages/node-protocol/src/index.ts";
+import { readFile } from "node:fs/promises";
 
 type Scenario = {
   name: string;
@@ -73,3 +74,14 @@ if (proveFailure) {
   process.exit(0);
 }
 if (failed.length > 0) process.exit(1);
+
+const mobileDockSource = await readFile(new URL("../src/components/MobileDock.tsx", import.meta.url), "utf8");
+const mobileEntryAssertions = [
+  [mobileDockSource.includes('label: "Server"'), "labeled Server destination"],
+  [mobileDockSource.includes('window.location.assign("/connect")'), "direct connection route"],
+  [mobileDockSource.includes("grid-cols-5"), "five-item mobile navigation"],
+] as const;
+for (const [passed, label] of mobileEntryAssertions) {
+  console.log(`${passed ? "PASS" : "FAIL"} mobile-entry/${label}`);
+  if (!passed) process.exitCode = 1;
+}
