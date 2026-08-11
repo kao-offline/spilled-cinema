@@ -13,3 +13,7 @@
 - Signing: unsigned; Windows SmartScreen behavior is documented in the test tutorial.
 - Smoke: disposable server returned health/status `ok`, mode `local`, bound to `127.0.0.1`; temporary data removed.
 - Previous known-good release: `v0.2.0-beta.27`; rollback by reinstalling that release and reverting beta.28 commits.
+- Published branch: `origin/feat/home-private-node` at `5960a52` (before this handoff-only update).
+- Draft PR: `https://github.com/kao-offline/spilled-cinema/pull/11`, base `release/private-node-beta27`.
+- Prerelease: `https://github.com/kao-offline/spilled-cinema/releases/tag/v0.2.0-beta.28`; installer and blockmap uploads verified.
+- Tag `v0.2.0-beta.28` resolves to artifact commit `5960a52`.
