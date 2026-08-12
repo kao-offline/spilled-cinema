@@ -3,6 +3,7 @@ import { relative, resolve } from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
 import { open, stat } from "node:fs/promises";
+import { gzip as gzipCallback } from "node:zlib";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -52,6 +53,15 @@ const REMOTE_METHOD_CAPABILITIES: Record<string, Capability> = {
   "recovery.export": "node.admin",
   "recovery.restore": "node.admin",
 };
+
+function gzipFast(input: Buffer) {
+  return new Promise<Buffer>((resolvePromise, rejectPromise) => {
+    gzipCallback(input, { level: 1 }, (error, output) => {
+      if (error) rejectPromise(error);
+      else resolvePromise(output);
+    });
+  });
+}
 
 const ACCESS_SESSION_TTL_MS = 15 * 60 * 1000;
 const REFRESH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -827,10 +837,20 @@ export class SpilledCinemaNodeRuntime {
       responsePayload = { ok: false, error: "Remote RPC response exceeds its ticket quota." };
       responseBytes = Buffer.from(JSON.stringify(responsePayload), "utf8");
     }
+    let encodedResponseBytes = responseBytes;
+    let contentEncoding: "gzip" | undefined;
+    if (input.envelope.acceptEncoding === "gzip" && responseBytes.length >= 64 * 1024) {
+      const compressed = await gzipFast(responseBytes);
+      if (compressed.length <= responseBytes.length * 0.9) {
+        encodedResponseBytes = Buffer.from(compressed);
+        contentEncoding = "gzip";
+      }
+    }
     return encryptNodeResponse({
       request: input.envelope,
       nodeTransportPrivateKey: identity.transportPrivateKey,
-      plaintext: responseBytes,
+      plaintext: encodedResponseBytes,
+      contentEncoding,
     });
   }
 

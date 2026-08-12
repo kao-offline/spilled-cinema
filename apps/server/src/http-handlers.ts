@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
@@ -820,12 +821,15 @@ export function createHttpHandlers() {
         svetserialuCredentials?: SvetSerialuCredentials | null;
         artworkSources?: ArtworkSourcesInput;
         artworkApiKeys?: ArtworkApiKeysInput;
+        resolverDiagnostics?: boolean;
+        resolverBenchmark?: boolean;
       }>(req);
       const moduleId = body.moduleId?.trim();
       const slug = body.slug?.trim();
       if (!moduleId || !slug) {
         return sendJson(res, 400, { error: "moduleId and slug are required." });
       }
+      const startedAt = performance.now();
       const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
       const show = await importProviderItem({
         moduleId,
@@ -835,11 +839,17 @@ export function createHttpHandlers() {
         svetserialuCredentials: body.svetserialuCredentials,
       });
       sendJson(res, 200, {
-        show: await enrichAndPersistImportedShow({
-          show,
-          sources: body.artworkSources,
-          apiKeys,
-        }),
+        show: body.resolverBenchmark
+          ? await refreshArtworkForImportedShow({ show, sources: body.artworkSources, apiKeys }).catch(() => show)
+          : await enrichAndPersistImportedShow({ show, sources: body.artworkSources, apiKeys }),
+        ...(body.resolverDiagnostics ? {
+          resolverDiagnostics: {
+            traceId: randomUUID(),
+            operation: "provider.import",
+            totalMs: Math.round(performance.now() - startedAt),
+            response: { jsonBytes: Buffer.byteLength(JSON.stringify(show)) },
+          },
+        } : {}),
       });
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to import provider item." });
@@ -1390,7 +1400,19 @@ export function createHttpHandlers() {
   const playbackResolveHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
-      sendJson(res, 200, await resolvePlaybackViaNode(await readJsonBody(req)));
+      const body = await readJsonBody<Record<string, unknown> & { resolverDiagnostics?: boolean }>(req);
+      const startedAt = performance.now();
+      const result = await resolvePlaybackViaNode(body as never);
+      sendJson(res, 200, {
+        ...result,
+        ...(body.resolverDiagnostics ? {
+          resolverDiagnostics: {
+            traceId: randomUUID(),
+            operation: "player.playback.resolve",
+            totalMs: Math.round(performance.now() - startedAt),
+          },
+        } : {}),
+      });
     } catch (error) {
       const failures = error && typeof error === "object" && "failures" in error ? (error as { failures?: unknown }).failures : undefined;
       sendJson(res, 422, {
