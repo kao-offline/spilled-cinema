@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { type Doc } from "./_generated/dataModel";
 
@@ -504,6 +505,7 @@ export const listV2VerificationCandidates = internalQuery({
     const registrations = pending.concat(degraded, verified);
     const candidates: Array<{
       nodeId: string;
+      status: Doc<"nodeRegistrations">["status"];
       advertisedCapabilities: string[];
       identity: Doc<"nodeIdentities">;
       online: boolean;
@@ -520,6 +522,7 @@ export const listV2VerificationCandidates = internalQuery({
       if (identity) {
         candidates.push({
           nodeId: registration.nodeId,
+          status: registration.status,
           advertisedCapabilities: registration.advertisedCapabilities ?? [],
           identity,
           online: Boolean(heartbeat && heartbeat.expiresAt > Date.now()),
@@ -581,13 +584,33 @@ export const allowCapabilityTicketIssue = internalQuery({
     limit: v.number(),
   },
   handler: async (ctx, args) => {
+    const limit = Math.min(Math.max(Math.floor(args.limit), 1), 200);
+    const cutoff = Date.now() - Math.min(Math.max(args.windowMs, 1_000), 60 * 60_000);
     const recent = await ctx.db
       .query("capabilityTicketAudit")
-      .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+      .withIndex("by_node_id_and_issued_at", (q) =>
+        q.eq("nodeId", args.nodeId).gte("issuedAt", cutoff))
       .order("desc")
-      .take(Math.min(Math.max(Math.floor(args.limit), 1), 200));
-    const cutoff = Date.now() - Math.min(Math.max(args.windowMs, 1_000), 60 * 60_000);
-    return recent.filter((entry) => entry.issuedAt >= cutoff).length < args.limit;
+      .take(limit);
+    return recent.length < limit;
+  },
+});
+
+export const cleanupCapabilityTicketAudit = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const retentionCutoff = Date.now() - 7 * 24 * 60 * 60_000;
+    const expired = await ctx.db
+      .query("capabilityTicketAudit")
+      .withIndex("by_expires_at", (q) => q.lte("expiresAt", retentionCutoff))
+      .take(500);
+    for (const entry of expired) {
+      await ctx.db.delete(entry._id);
+    }
+    if (expired.length === 500) {
+      await ctx.scheduler.runAfter(0, internal.controlPlane.cleanupCapabilityTicketAudit, {});
+    }
+    return { deleted: expired.length };
   },
 });
 

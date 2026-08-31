@@ -74,7 +74,7 @@ const waitFor = async (predicate, timeoutMs, label) => {
 try {
   await waitFor(() => applyAttempts >= 3, 15_000, "initial bounded enrollment attempts");
   if (connections !== 0) throw new Error("Node connected before enrollment was accepted.");
-  await waitFor(() => applyAttempts >= 4 && connections >= 1, 40_000, "watchdog enrollment recovery");
+  await waitFor(() => applyAttempts >= 4 && connections >= 1, 50_000, "watchdog enrollment recovery");
   latestSocket?.close(1012, "smoke reconnect");
   await waitFor(() => connections >= 2, 10_000, "gateway reconnect");
   console.log(`gateway renewal smoke passed (applications=${applyAttempts}, connections=${connections})`);

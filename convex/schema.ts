@@ -257,6 +257,7 @@ export default defineSchema({
   })
     .index("by_ticket_id", ["ticketId"])
     .index("by_node_id", ["nodeId"])
+    .index("by_node_id_and_issued_at", ["nodeId", "issuedAt"])
     .index("by_expires_at", ["expiresAt"]),
   providerReleases: defineTable({
     providerId: v.string(),

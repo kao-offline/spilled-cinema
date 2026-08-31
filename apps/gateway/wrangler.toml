@@ -12,5 +12,5 @@ new_sqlite_classes = ["NodeLink"]
 
 [vars]
 MAX_FRAME_BYTES = "1048576"
-CONTROL_PLANE_VERIFY_URL = "https://cheerful-lynx-4.convex.site/server/v2/gateway/verify"
+CONTROL_PLANE_VERIFY_URL = "https://spilled-control-plane.hrdykrystof.workers.dev/server/v2/gateway/verify"
 TURN_URLS = "turns:turn.spilled.overload.studio:5349?transport=tcp,turn:turn.spilled.overload.studio:3478?transport=udp"

@@ -3,7 +3,6 @@ const { autoUpdater } = require("electron-updater");
 const { spawn, execFile } = require("node:child_process");
 const {
   closeSync,
-  createWriteStream,
   mkdirSync,
   openSync,
   readFileSync,
@@ -12,23 +11,36 @@ const {
   writeFileSync,
 } = require("node:fs");
 const path = require("node:path");
+const { configureScheduledTask, createRotatingLogSink } = require(
+  app.isPackaged
+    ? path.join(process.resourcesPath, "windows-runtime-support.cjs")
+    : path.join(__dirname, "../../scripts/windows-runtime-support.cjs"),
+);
 
 const REPO = { owner: "kao-offline", repo: "spilled-cinema" };
-const VERIFIER_INTERVAL_MS = 60_000;
+const SCHEDULED_TASK_NAME = "Spilled Verifier Runtime";
+const VERIFIER_INTERVAL_MS = 5 * 60_000;
+const VERIFIER_RECOVERY_INTERVAL_MS = 60_000;
+const VERIFIER_MAX_BACKOFF_MS = 30 * 60_000;
+const VERIFIER_STALE_LIMIT_MS = 45 * 60_000;
 
 let verifierProcess = null;
+let verifierLog = null;
 let tray = null;
 let mainWindow = null;
 let quitting = false;
 let lastLogSize = 0;
 let lastStatusSignature = "";
 let lastUpdateState = { stage: "idle" };
+let verifierDesiredRunning = true;
+let verifierWatchdog = null;
+let autoStartEnabled = true;
 
 app.setPath("userData", path.join(app.getPath("appData"), "Spilled Verifier"));
 
 const DEFAULT_CONFIG = {
-  controlPlaneUrl: process.env.SPILLED_CONTROL_PLANE_URL || "https://cheerful-lynx-4.convex.site/server",
-  gatewayUrl: process.env.SPILLED_GATEWAY_URL || "https://spilled-node-gateway.4thsj85ywn.workers.dev",
+  controlPlaneUrl: process.env.SPILLED_CONTROL_PLANE_URL || "https://spilled-control-plane.hrdykrystof.workers.dev/server",
+  gatewayUrl: process.env.SPILLED_GATEWAY_URL || "https://spilled-node-gateway.hrdykrystof.workers.dev",
   controlPlaneSecret: process.env.SPILLED_CONTROL_PLANE_SECRET || "",
   probesJson: process.env.SPILLED_VERIFIER_PROBES_JSON || "{}",
   once: false,
@@ -54,6 +66,17 @@ function ensureDirectories() {
   return paths;
 }
 
+function verifierLogSink() {
+  if (!verifierLog) {
+    verifierLog = createRotatingLogSink(verifierPaths().logs);
+  }
+  return verifierLog;
+}
+
+function logHost(message) {
+  verifierLogSink().write(`\n[verifier-windows] ${new Date().toISOString()} ${message}\n`);
+}
+
 function loadConfig() {
   const paths = ensureDirectories();
   try {
@@ -69,6 +92,31 @@ function saveConfig(patch) {
   const next = { ...loadConfig(), ...patch };
   writeFileSync(paths.config, JSON.stringify(next, null, 2));
   return next;
+}
+
+async function configureAutoStart(enabled) {
+  const result = await configureScheduledTask({
+    taskName: SCHEDULED_TASK_NAME,
+    executablePath: process.execPath,
+    arguments: ["background"],
+    description: "Keeps the Spilled Verifier tray host running and restarts it after failures.",
+    enabled,
+  });
+  saveConfig({ autoStart: enabled });
+  if (result.ok) {
+    app.setLoginItemSettings({ openAtLogin: false });
+    autoStartEnabled = enabled;
+  } else {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      path: process.execPath,
+      args: ["background"],
+    });
+    autoStartEnabled = enabled && app.getLoginItemSettings().openAtLogin;
+    logHost(`scheduled-task configuration failed: ${result.stderr || `exit ${result.code}`}`);
+  }
+  updateTrayMenu();
+  return result.ok;
 }
 
 function sendToWindow(channel, payload) {
@@ -96,12 +144,13 @@ function pushVerifierState() {
 
 function startVerifier() {
   if (verifierProcess) return;
+  verifierDesiredRunning = true;
   const paths = ensureDirectories();
   const config = loadConfig();
   const entrypoint = path.join(app.getAppPath(), "verifier", "index.mjs");
-  const log = createWriteStream(paths.logs, { flags: "a" });
+  const log = verifierLogSink();
   log.write(`\n[verifier-windows] starting verifier ${new Date().toISOString()}\n`);
-  verifierProcess = spawn(process.execPath, [entrypoint], {
+  const child = spawn(process.execPath, [entrypoint], {
     cwd: process.resourcesPath,
     env: {
       ...process.env,
@@ -113,38 +162,66 @@ function startVerifier() {
       SPILLED_VERIFIER_PROBES_JSON: config.probesJson || "{}",
       SPILLED_VERIFIER_STATUS_FILE: paths.status,
       SPILLED_VERIFIER_INTERVAL_MS: String(VERIFIER_INTERVAL_MS),
+      SPILLED_VERIFIER_RECOVERY_INTERVAL_MS: String(VERIFIER_RECOVERY_INTERVAL_MS),
+      SPILLED_VERIFIER_MAX_BACKOFF_MS: String(VERIFIER_MAX_BACKOFF_MS),
       ...(config.once ? { SPILLED_VERIFIER_ONCE: "1" } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  verifierProcess.spawnedAt = Date.now();
-  verifierProcess.stdout.pipe(log, { end: false });
-  verifierProcess.stderr.pipe(log, { end: false });
-  verifierProcess.once("exit", (code) => {
-    verifierProcess = null;
+  child.spawnedAt = Date.now();
+  verifierProcess = child;
+  child.stdout.pipe(log, { end: false });
+  child.stderr.pipe(log, { end: false });
+  child.once("exit", (code, signal) => {
+    if (verifierProcess === child) verifierProcess = null;
+    logHost(`runtime exited (${signal ?? code ?? "unknown"})`);
     pushVerifierState();
-    if (!quitting && code !== 0) {
+    if (!quitting && verifierDesiredRunning && !loadConfig().once) {
       const delay = Math.min(30_000, 1_000 + Math.abs(code ?? 1) * 1_000);
       setTimeout(() => startVerifier(), delay);
     }
   });
-  verifierProcess.once("error", (error) => {
-    log.write(`\n[verifier-windows] ${error.stack || error.message}\n`);
+  child.once("error", (error) => {
+    logHost(error.stack || error.message);
   });
   pushVerifierState();
 }
 
 function stopVerifier() {
+  verifierDesiredRunning = false;
   if (!verifierProcess) return;
-  verifierProcess.kill();
+  const child = verifierProcess;
   verifierProcess = null;
+  child.kill();
   pushVerifierState();
 }
 
 function restartVerifier() {
   stopVerifier();
-  setTimeout(() => startVerifier(), 500);
+  setTimeout(() => {
+    verifierDesiredRunning = true;
+    startVerifier();
+  }, 500);
+}
+
+function startVerifierWatchdog() {
+  if (verifierWatchdog) return;
+  verifierWatchdog = setInterval(() => {
+    if (quitting || loadConfig().once) return;
+    if (!verifierProcess) {
+      if (verifierDesiredRunning) startVerifier();
+      return;
+    }
+    const status = readStatus();
+    const lastProgressAt = Math.max(
+      verifierProcess.spawnedAt || 0,
+      typeof status?.lastRunAt === "number" ? status.lastRunAt : 0,
+    );
+    if (Date.now() - lastProgressAt <= VERIFIER_STALE_LIMIT_MS) return;
+    logHost("status has not advanced for 45 minutes; restarting runtime");
+    verifierProcess.kill();
+  }, 60_000);
 }
 
 function readLogTail(maxBytes = 256 * 1024) {
@@ -399,14 +476,9 @@ function updateTrayMenu() {
     {
       label: "Start with Windows",
       type: "checkbox",
-      checked: app.getLoginItemSettings().openAtLogin,
+      checked: autoStartEnabled,
       click: (item) => {
-        app.setLoginItemSettings({
-          openAtLogin: item.checked,
-          path: process.execPath,
-          args: ["background"],
-        });
-        updateTrayMenu();
+        void configureAutoStart(item.checked);
       },
     },
     {
@@ -461,11 +533,8 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
 
     const config = loadConfig();
-    app.setLoginItemSettings({
-      openAtLogin: config.autoStart,
-      path: process.execPath,
-      args: ["background"],
-    });
+    autoStartEnabled = config.autoStart;
+    await configureAutoStart(config.autoStart);
 
     tray = new Tray(path.join(__dirname, "icon.png"));
     tray.on("click", openWindow);
@@ -484,6 +553,7 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     startVerifier();
+    startVerifierWatchdog();
     setInterval(tailLogLoop, 1_000);
     setInterval(statusLoop, 5_000);
     statusLoop();
@@ -504,5 +574,8 @@ if (!app.requestSingleInstanceLock()) {
 app.on("window-all-closed", (event) => event.preventDefault());
 app.on("before-quit", () => {
   quitting = true;
+  if (verifierWatchdog) clearInterval(verifierWatchdog);
+  verifierWatchdog = null;
   stopVerifier();
+  verifierLog?.end();
 });

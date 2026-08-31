@@ -9,6 +9,7 @@
  */
 
 import type * as controlPlane from "../controlPlane.js";
+import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as integrations from "../integrations.js";
 import type * as migrations from "../migrations.js";
@@ -23,6 +24,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   controlPlane: typeof controlPlane;
+  crons: typeof crons;
   http: typeof http;
   integrations: typeof integrations;
   migrations: typeof migrations;

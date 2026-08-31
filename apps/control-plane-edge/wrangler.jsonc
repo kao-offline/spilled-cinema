@@ -1,0 +1,19 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "spilled-control-plane",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vpc_services": [
+    {
+      "binding": "CONTROL_PLANE_SITE",
+      "service_id": "01a05821-9bc4-78e1-a568-b72fa6bbf111",
+      "remote": true
+    }
+  ]
+}

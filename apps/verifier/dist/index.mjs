@@ -345,7 +345,7 @@ async function runOnce() {
       if (capability.status === "verified") capabilitiesVerified += 1;
     }
   }
-  await writeStatusFile({
+  const summary = {
     lastRunAt: Date.now(),
     nodes: candidates.length,
     verified,
@@ -354,19 +354,57 @@ async function runOnce() {
     capabilitiesVerified,
     capabilitiesTotal,
     errors
-  });
+  };
+  await writeStatusFile(summary);
+  return summary;
 }
 var passInFlight = false;
+var consecutivePassFailures = 0;
+var lastPassError = "";
+var lastPassErrorLoggedAt = 0;
+function readBoundedInterval(name, fallback, minimum, maximum) {
+  const configured = Number.parseInt(process.env[name] || String(fallback), 10);
+  return Number.isFinite(configured) ? Math.min(Math.max(configured, minimum), maximum) : fallback;
+}
+var steadyIntervalMs = readBoundedInterval("SPILLED_VERIFIER_INTERVAL_MS", 5 * 6e4, 6e4, 60 * 6e4);
+var recoveryIntervalMs = readBoundedInterval("SPILLED_VERIFIER_RECOVERY_INTERVAL_MS", 6e4, 6e4, steadyIntervalMs);
+var maximumBackoffMs = readBoundedInterval("SPILLED_VERIFIER_MAX_BACKOFF_MS", 30 * 6e4, steadyIntervalMs, 60 * 6e4);
+function nextDelay(outcome) {
+  if (outcome.success) {
+    consecutivePassFailures = 0;
+    return outcome.recoveryNeeded ? recoveryIntervalMs : steadyIntervalMs;
+  }
+  consecutivePassFailures += 1;
+  return Math.min(maximumBackoffMs, recoveryIntervalMs * 2 ** Math.min(consecutivePassFailures - 1, 10));
+}
+function withJitter(delayMs) {
+  if (process.env.SPILLED_VERIFIER_DISABLE_JITTER === "1") return delayMs;
+  return Math.floor(delayMs * (0.9 + Math.random() * 0.2));
+}
 async function main() {
-  if (passInFlight) return;
+  if (passInFlight) return { success: true, recoveryNeeded: true };
   passInFlight = true;
   try {
-    await runOnce();
+    const summary = await runOnce();
+    if (lastPassError) {
+      console.log("[verifier] control-plane pass recovered");
+      lastPassError = "";
+      lastPassErrorLoggedAt = 0;
+    }
+    return {
+      success: true,
+      recoveryNeeded: summary.degraded > 0 || summary.quarantined > 0 || summary.errors.length > 0
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[verifier] pass failed:", message);
+    const now = Date.now();
+    if (message !== lastPassError || now - lastPassErrorLoggedAt >= maximumBackoffMs) {
+      console.error("[verifier] pass failed:", message);
+      lastPassError = message;
+      lastPassErrorLoggedAt = now;
+    }
     await writeStatusFile({
-      lastRunAt: Date.now(),
+      lastRunAt: now,
       nodes: 0,
       verified: 0,
       degraded: 0,
@@ -375,13 +413,17 @@ async function main() {
       capabilitiesTotal: 0,
       errors: [message]
     });
+    return { success: false, recoveryNeeded: true };
   } finally {
     passInFlight = false;
   }
 }
-await main();
-if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
-  const configuredIntervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
-  const intervalMs = Number.isFinite(configuredIntervalMs) ? Math.max(configuredIntervalMs, 6e4) : 6e5;
-  setInterval(() => void main().catch((error) => console.error("[verifier]", error)), intervalMs);
+async function runLoop() {
+  const outcome = await main();
+  if (process.env.SPILLED_VERIFIER_ONCE === "1") return;
+  const delay = withJitter(nextDelay(outcome));
+  setTimeout(() => {
+    void runLoop().catch((error) => console.error("[verifier] scheduler failed:", error));
+  }, delay);
 }
+await runLoop();

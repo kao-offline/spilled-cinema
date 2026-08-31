@@ -54,7 +54,7 @@ function Wait-ForDocker {
   throw "Docker Desktop did not become ready within 60 seconds."
 }
 
-$env:SPILLED_CONTROL_PLANE_URL = "https://cheerful-lynx-4.convex.site/server"
+$env:SPILLED_CONTROL_PLANE_URL = "https://spilled-control-plane.hrdykrystof.workers.dev/server"
 $env:SPILLED_GATEWAY_URL = "https://spilled-node-gateway.hrdykrystof.workers.dev"
 $env:SPILLED_CONTROL_PLANE_SECRET = Read-DotEnvValue "SPILLED_CONTROL_PLANE_SECRET"
 

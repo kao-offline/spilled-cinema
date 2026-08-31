@@ -41,34 +41,36 @@ function websocketTicket(request: Request) {
   }
 }
 
+type VerificationResult = "authorized" | "rejected" | "unavailable";
+
+async function verifyCredential(
+  env: Env,
+  nodeId: string,
+  role: "node" | "client",
+  credential: string,
+): Promise<VerificationResult> {
+  try {
+    const response = await fetch(env.CONTROL_PLANE_VERIFY_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.GATEWAY_SERVICE_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ nodeId, role, credential }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (response.ok) return "authorized";
+    return response.status >= 500 || response.status === 429 ? "unavailable" : "rejected";
+  } catch {
+    return "unavailable";
+  }
+}
+
 async function verifyConnection(request: Request, env: Env, nodeId: string, role: "node" | "client") {
   const credential = role === "node"
     ? request.headers.get("X-Spilled-Node-Enrollment")
     : websocketTicket(request);
-  if (!credential) {
-    return false;
-  }
-  const response = await fetch(env.CONTROL_PLANE_VERIFY_URL, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${env.GATEWAY_SERVICE_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ nodeId, role, credential }),
-  });
-  return response.ok;
-}
-
-async function verifyCredential(env: Env, nodeId: string, role: "node" | "client", credential: string) {
-  const response = await fetch(env.CONTROL_PLANE_VERIFY_URL, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${env.GATEWAY_SERVICE_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ nodeId, role, credential }),
-  });
-  return response.ok;
+  return credential ? await verifyCredential(env, nodeId, role, credential) : "rejected";
 }
 
 function bytesToBase64(bytes: ArrayBuffer) {
@@ -93,12 +95,19 @@ export default {
       }
       const ticket = body.ticket as { ticketId?: unknown; expiresAt?: unknown };
       const credential = JSON.stringify(body.ticket);
+      const verification = typeof ticket.ticketId === "string" &&
+        typeof ticket.expiresAt === "number"
+        ? await verifyCredential(env, body.nodeId, "client", credential)
+        : "rejected";
       if (
         typeof ticket.ticketId !== "string" ||
         typeof ticket.expiresAt !== "number" ||
-        !await verifyCredential(env, body.nodeId, "client", credential)
+        verification === "rejected"
       ) {
         return json({ error: "Capability ticket rejected." }, 401);
+      }
+      if (verification === "unavailable") {
+        return json({ error: "Control plane is temporarily unavailable." }, 503);
       }
       const expiresAt = Math.min(ticket.expiresAt, Date.now() + 5 * 60_000);
       const username = `${Math.floor(expiresAt / 1000)}:${ticket.ticketId}:${body.nodeId}`;
@@ -130,8 +139,12 @@ export default {
     if (!nodeId || (role !== "node" && role !== "client")) {
       return json({ error: "A node ID and valid role are required." }, 400);
     }
-    if (!await verifyConnection(request, env, nodeId, role)) {
+    const verification = await verifyConnection(request, env, nodeId, role);
+    if (verification === "rejected") {
       return json({ error: "Gateway connection was not authorized." }, 401);
+    }
+    if (verification === "unavailable") {
+      return json({ error: "Control plane is temporarily unavailable." }, 503);
     }
     const id = env.NODE_LINKS.idFromName(nodeId);
     const headers = new Headers(request.headers);

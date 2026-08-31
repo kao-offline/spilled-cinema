@@ -14,6 +14,7 @@ import type {
 
 type Candidate = {
   nodeId: string;
+  status?: "pending" | "verified" | "degraded" | "quarantined" | "disabled" | "legacy-unverified";
   online: boolean;
   advertisedCapabilities: Capability[];
   identity: {
@@ -254,7 +255,7 @@ async function verifyCandidate(candidate: Candidate): Promise<{
   return { nodeId: candidate.nodeId, status, capabilities: results };
 }
 
-async function runOnce() {
+async function runOnce(): Promise<PassSummary> {
   const response = await controlPlane("/v2/nodes/verification-candidates?limit=20");
   if (!response.ok) throw new Error(`Candidate request failed: ${response.status}.`);
   const payload = await response.json() as { candidates?: Candidate[] };
@@ -280,7 +281,7 @@ async function runOnce() {
       if (capability.status === "verified") capabilitiesVerified += 1;
     }
   }
-  await writeStatusFile({
+  const summary = {
     lastRunAt: Date.now(),
     nodes: candidates.length,
     verified,
@@ -289,21 +290,70 @@ async function runOnce() {
     capabilitiesVerified,
     capabilitiesTotal,
     errors,
-  });
+  } satisfies PassSummary;
+  await writeStatusFile(summary);
+  return summary;
 }
 
 let passInFlight = false;
+let consecutivePassFailures = 0;
+let lastPassError = "";
+let lastPassErrorLoggedAt = 0;
 
-async function main() {
-  if (passInFlight) return;
+type PassOutcome = {
+  success: boolean;
+  recoveryNeeded: boolean;
+};
+
+function readBoundedInterval(name: string, fallback: number, minimum: number, maximum: number) {
+  const configured = Number.parseInt(process.env[name] || String(fallback), 10);
+  return Number.isFinite(configured)
+    ? Math.min(Math.max(configured, minimum), maximum)
+    : fallback;
+}
+
+const steadyIntervalMs = readBoundedInterval("SPILLED_VERIFIER_INTERVAL_MS", 5 * 60_000, 60_000, 60 * 60_000);
+const recoveryIntervalMs = readBoundedInterval("SPILLED_VERIFIER_RECOVERY_INTERVAL_MS", 60_000, 60_000, steadyIntervalMs);
+const maximumBackoffMs = readBoundedInterval("SPILLED_VERIFIER_MAX_BACKOFF_MS", 30 * 60_000, steadyIntervalMs, 60 * 60_000);
+
+function nextDelay(outcome: PassOutcome) {
+  if (outcome.success) {
+    consecutivePassFailures = 0;
+    return outcome.recoveryNeeded ? recoveryIntervalMs : steadyIntervalMs;
+  }
+  consecutivePassFailures += 1;
+  return Math.min(maximumBackoffMs, recoveryIntervalMs * 2 ** Math.min(consecutivePassFailures - 1, 10));
+}
+
+function withJitter(delayMs: number) {
+  if (process.env.SPILLED_VERIFIER_DISABLE_JITTER === "1") return delayMs;
+  return Math.floor(delayMs * (0.9 + Math.random() * 0.2));
+}
+
+async function main(): Promise<PassOutcome> {
+  if (passInFlight) return { success: true, recoveryNeeded: true };
   passInFlight = true;
   try {
-    await runOnce();
+    const summary = await runOnce();
+    if (lastPassError) {
+      console.log("[verifier] control-plane pass recovered");
+      lastPassError = "";
+      lastPassErrorLoggedAt = 0;
+    }
+    return {
+      success: true,
+      recoveryNeeded: summary.degraded > 0 || summary.quarantined > 0 || summary.errors.length > 0,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[verifier] pass failed:", message);
+    const now = Date.now();
+    if (message !== lastPassError || now - lastPassErrorLoggedAt >= maximumBackoffMs) {
+      console.error("[verifier] pass failed:", message);
+      lastPassError = message;
+      lastPassErrorLoggedAt = now;
+    }
     await writeStatusFile({
-      lastRunAt: Date.now(),
+      lastRunAt: now,
       nodes: 0,
       verified: 0,
       degraded: 0,
@@ -312,16 +362,19 @@ async function main() {
       capabilitiesTotal: 0,
       errors: [message],
     });
+    return { success: false, recoveryNeeded: true };
   } finally {
     passInFlight = false;
   }
 }
 
-await main();
-if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
-  const configuredIntervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
-  const intervalMs = Number.isFinite(configuredIntervalMs)
-    ? Math.max(configuredIntervalMs, 60_000)
-    : 600_000;
-  setInterval(() => void main().catch((error) => console.error("[verifier]", error)), intervalMs);
+async function runLoop() {
+  const outcome = await main();
+  if (process.env.SPILLED_VERIFIER_ONCE === "1") return;
+  const delay = withJitter(nextDelay(outcome));
+  setTimeout(() => {
+    void runLoop().catch((error) => console.error("[verifier] scheduler failed:", error));
+  }, delay);
 }
+
+await runLoop();

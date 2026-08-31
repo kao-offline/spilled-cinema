@@ -177,7 +177,11 @@ export class ManagedGatewayLink {
   private scheduleReconnect() {
     if (this.stopped || this.reconnectTimer) return;
     this.reconnectAttempts += 1;
-    const base = Math.min(30_000, 500 * 2 ** Math.min(this.reconnectAttempts, 6));
+    // A control-plane outage can last for hours (for example after a quota
+    // guard disables the deployment). Keep quick recovery for short blips,
+    // then back off far enough that an outage cannot become its own traffic
+    // storm.
+    const base = Math.min(5 * 60_000, 500 * 2 ** Math.min(this.reconnectAttempts, 10));
     const delay = Math.floor(base * (0.75 + Math.random() * 0.5));
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
