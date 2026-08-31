@@ -23,6 +23,7 @@ const VERIFIER_INTERVAL_MS = 5 * 60_000;
 const VERIFIER_RECOVERY_INTERVAL_MS = 60_000;
 const VERIFIER_MAX_BACKOFF_MS = 30 * 60_000;
 const VERIFIER_STALE_LIMIT_MS = 45 * 60_000;
+const CONFIGURE_SCHEDULED_TASK_ARG = "--configure-scheduled-task";
 
 let verifierProcess = null;
 let verifierLog = null;
@@ -80,7 +81,7 @@ function logHost(message) {
 function loadConfig() {
   const paths = ensureDirectories();
   try {
-    const parsed = JSON.parse(readFileSync(paths.config, "utf8"));
+    const parsed = JSON.parse(readFileSync(paths.config, "utf8").replace(/^\uFEFF/u, ""));
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -523,7 +524,12 @@ function registerIpc() {
   });
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (process.argv.includes(CONFIGURE_SCHEDULED_TASK_ARG)) {
+  app.whenReady().then(async () => {
+    const configured = await configureAutoStart(true);
+    app.exit(configured ? 0 : 1);
+  }).catch(() => app.exit(1));
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", openWindow);

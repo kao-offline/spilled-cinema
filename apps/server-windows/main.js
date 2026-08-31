@@ -13,6 +13,7 @@ const SERVER_ORIGIN = `http://127.0.0.1:${SERVER_PORT}`;
 const SCHEDULED_TASK_NAME = "Spilled Server Runtime";
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const HEALTH_FAILURE_LIMIT = 3;
+const CONFIGURE_SCHEDULED_TASK_ARG = "--configure-scheduled-task";
 let serverProcess = null;
 let serverLog = null;
 let tray = null;
@@ -234,7 +235,12 @@ function updateTrayMenu(ready = false) {
   ]));
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (process.argv.includes(CONFIGURE_SCHEDULED_TASK_ARG)) {
+  app.whenReady().then(async () => {
+    const configured = await configureAutoStart(true);
+    app.exit(configured ? 0 : 1);
+  }).catch(() => app.exit(1));
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {

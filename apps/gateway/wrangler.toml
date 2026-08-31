@@ -6,6 +6,10 @@ compatibility_date = "2026-07-26"
 name = "NODE_LINKS"
 class_name = "NodeLink"
 
+[[services]]
+binding = "CONTROL_PLANE_EDGE"
+service = "spilled-control-plane"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["NodeLink"]

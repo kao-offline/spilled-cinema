@@ -3,6 +3,7 @@ import { parseOpaqueRpcFrame } from "./protocol";
 
 type Env = {
   NODE_LINKS: DurableObjectNamespace<NodeLink>;
+  CONTROL_PLANE_EDGE: Fetcher;
   CONTROL_PLANE_VERIFY_URL: string;
   GATEWAY_SERVICE_TOKEN: string;
   MAX_FRAME_BYTES: string;
@@ -50,7 +51,7 @@ async function verifyCredential(
   credential: string,
 ): Promise<VerificationResult> {
   try {
-    const response = await fetch(env.CONTROL_PLANE_VERIFY_URL, {
+    const response = await env.CONTROL_PLANE_EDGE.fetch(env.CONTROL_PLANE_VERIFY_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${env.GATEWAY_SERVICE_TOKEN}`,
@@ -60,8 +61,22 @@ async function verifyCredential(
       signal: AbortSignal.timeout(10_000),
     });
     if (response.ok) return "authorized";
+    const payload = await response.clone().json().catch(() => ({})) as { error?: unknown };
+    console.warn(JSON.stringify({
+      event: "control_plane_verification_rejected",
+      role,
+      nodeId,
+      upstreamStatus: response.status,
+      reason: typeof payload.error === "string" ? payload.error : "Unspecified rejection.",
+    }));
     return response.status >= 500 || response.status === 429 ? "unavailable" : "rejected";
-  } catch {
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "control_plane_verification_unavailable",
+      role,
+      nodeId,
+      reason: error instanceof Error ? error.message : "Unknown verification failure.",
+    }));
     return "unavailable";
   }
 }

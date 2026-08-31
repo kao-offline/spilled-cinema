@@ -121,17 +121,31 @@ async function configureScheduledTask({
     `);
   }
 
-  const userId = process.env.USERDOMAIN && process.env.USERNAME
-    ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
-    : process.env.USERNAME;
-  if (!userId) return { ok: false, code: -1, stdout: "", stderr: "Windows user identity is unavailable." };
   const argumentText = actionArguments.map(windowsArgument).join(" ");
   return await runPowerShell(`
+    $ErrorActionPreference = 'Stop'
+    $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if (-not $userId) { throw 'Windows user identity is unavailable.' }
+    $existing = Get-ScheduledTask -TaskName ${powerShellLiteral(taskName)} -ErrorAction SilentlyContinue
+    if (
+      $existing -and
+      $existing.Actions.Count -eq 1 -and
+      $existing.Actions[0].Execute -eq ${powerShellLiteral(executablePath)} -and
+      $existing.Actions[0].Arguments -eq ${powerShellLiteral(argumentText)} -and
+      $existing.Triggers.Count -ge 2 -and
+      $existing.Settings.RestartCount -ge 1 -and
+      -not $existing.Settings.DisallowStartIfOnBatteries -and
+      -not $existing.Settings.StopIfGoingOnBatteries
+    ) {
+      'enabled'
+      exit 0
+    }
     $action = New-ScheduledTaskAction -Execute ${powerShellLiteral(executablePath)} -Argument ${powerShellLiteral(argumentText)}
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User ${powerShellLiteral(userId)}
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+    $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-    $principal = New-ScheduledTaskPrincipal -UserId ${powerShellLiteral(userId)} -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName ${powerShellLiteral(taskName)} -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description ${powerShellLiteral(description)} -Force | Out-Null
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName ${powerShellLiteral(taskName)} -Action $action -Trigger @($logonTrigger, $watchdogTrigger) -Settings $settings -Principal $principal -Description ${powerShellLiteral(description)} -Force -ErrorAction Stop | Out-Null
     $task = Get-ScheduledTask -TaskName ${powerShellLiteral(taskName)}
     if (-not $task -or -not $task.Settings -or $task.Settings.RestartCount -lt 1) { throw 'Scheduled task verification failed.' }
     'enabled'
