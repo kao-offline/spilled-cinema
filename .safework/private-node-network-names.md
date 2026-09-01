@@ -34,5 +34,8 @@
 - Self-hosted Convex deployment succeeded against `127.0.0.1:43210` through the SSH forward; schema validation passed and no indexes were deleted.
 - Public edge checks returned the expected 404 for an unclaimed valid name and 400 for a reserved name.
 - Windows privacy-default checks passed and the beta.39 NSIS installer built successfully.
-- Installer SHA-256: `7203D9BABADA173D2BFA370CB9CC4153ADDA4A430834047A24FBFC385A12FF88`.
+- Pre-install inspection found the live beta.38 process returning a DPAPI CLR initialization error from `/api/status`. The old store launched PowerShell for every secret read and permanently cached a rejected initialization promise.
+- DPAPI storage now decrypts its master key once per process, shares concurrent initialization, keeps the key only in memory, retries transient PowerShell/CLR failures, times out hung helpers, and clears rejected initialization for later recovery.
+- DPAPI stress scenarios passed: 12 serialized writes, 120 concurrent reads, restart decryption, and no plaintext `.active` key file.
+- The initial beta.39 installer hash was superseded before deployment; a rebuilt artifact is pending.
 - Windows/dashboard deployment and live `username.servername` verification are pending.

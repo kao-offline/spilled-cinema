@@ -312,28 +312,30 @@ export class MasterKeyFileSecretStore implements SecretStore {
 }
 
 export class DpapiSecretStore implements SecretStore {
-  private readonly delegate: MasterKeyFileSecretStore;
-  private readonly plaintextKeyFile: string;
-  private initialized: Promise<void> | null = null;
+  private masterKey: Promise<Buffer> | null = null;
   private readonly protectedKeyFile: string;
+  private readonly recordsFile: string;
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     protectedKeyFile: string,
     recordsFile: string,
   ) {
     this.protectedKeyFile = protectedKeyFile;
-    this.plaintextKeyFile = `${protectedKeyFile}.${process.pid}.active`;
-    this.delegate = new MasterKeyFileSecretStore(this.plaintextKeyFile, recordsFile);
+    this.recordsFile = recordsFile;
   }
 
-  private ensureInitialized() {
+  private loadMasterKey() {
     if (process.platform !== "win32") {
       throw new Error("DPAPI secret storage is available only on Windows.");
     }
-    if (!this.initialized) {
-      this.initialized = this.initialize();
+    if (!this.masterKey) {
+      this.masterKey = this.initialize().catch((error) => {
+        this.masterKey = null;
+        throw error;
+      });
     }
-    return this.initialized;
+    return this.masterKey;
   }
 
   private async initialize() {
@@ -352,31 +354,73 @@ export class DpapiSecretStore implements SecretStore {
       await writeFile(this.protectedKeyFile, protectedBytes.toString("base64"), { encoding: "utf8", mode: 0o600 });
     }
     if (masterKey.length !== 32) throw new Error("DPAPI returned an invalid node master key.");
-    await writeFile(this.plaintextKeyFile, masterKey.toString("base64"), { encoding: "utf8", mode: 0o600 });
+    return masterKey;
+  }
+
+  private async readRecords(): Promise<Record<string, EncryptedSecretRecord>> {
+    try {
+      return JSON.parse(await readFile(this.recordsFile, "utf8")) as Record<string, EncryptedSecretRecord>;
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+      if (code === "ENOENT") return {};
+      throw error;
+    }
   }
 
   async get(key: string) {
-    await this.ensureInitialized();
-    try {
-      return await this.delegate.get(key);
-    } finally {
-      await rm(this.plaintextKeyFile, { force: true });
-      this.initialized = null;
-    }
+    const record = (await this.readRecords())[key];
+    if (!record) return null;
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      await this.loadMasterKey(),
+      Buffer.from(record.nonce, "base64"),
+    );
+    decipher.setAAD(Buffer.from(key, "utf8"));
+    decipher.setAuthTag(Buffer.from(record.tag, "base64"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(record.ciphertext, "base64")),
+      decipher.final(),
+    ]).toString("utf8");
   }
 
   async set(key: string, value: string) {
-    await this.ensureInitialized();
-    try {
-      await this.delegate.set(key, value);
-    } finally {
-      await rm(this.plaintextKeyFile, { force: true });
-      this.initialized = null;
-    }
+    const task = this.writeChain.then(async () => {
+      const nonce = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", await this.loadMasterKey(), nonce);
+      cipher.setAAD(Buffer.from(key, "utf8"));
+      const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+      const records = await this.readRecords();
+      records[key] = {
+        nonce: nonce.toString("base64"),
+        ciphertext: ciphertext.toString("base64"),
+        tag: cipher.getAuthTag().toString("base64"),
+      };
+      await mkdir(dirname(this.recordsFile), { recursive: true });
+      const tempPath = `${this.recordsFile}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(tempPath, JSON.stringify(records, null, 2), { encoding: "utf8", mode: 0o600 });
+      await rename(tempPath, this.recordsFile);
+    });
+    this.writeChain = task.catch(() => undefined);
+    await task;
   }
 }
 
 async function runDpapi(operation: "protect" | "unprotect", bytes: Buffer) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await runDpapiOnce(operation, bytes);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await delay(250 * 2 ** attempt);
+    }
+  }
+  throw lastError;
+}
+
+async function runDpapiOnce(operation: "protect" | "unprotect", bytes: Buffer) {
   const method = operation === "protect" ? "Protect" : "Unprotect";
   const script = [
     "Add-Type -AssemblyName System.Security",
@@ -395,8 +439,16 @@ async function runDpapi(operation: "protect" | "unprotect", bytes: Buffer) {
   child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
   child.stdin.end(bytes.toString("base64"));
   const exitCode = await new Promise<number | null>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error(`DPAPI ${operation} timed out.`));
+    }, 15_000);
+    timeout.unref?.();
     child.once("error", reject);
-    child.once("exit", resolve);
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
   });
   if (exitCode !== 0) {
     throw new Error(`DPAPI ${operation} failed: ${Buffer.concat(stderr).toString("utf8").trim()}`);
