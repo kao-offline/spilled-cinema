@@ -4,6 +4,7 @@
 - Worktree: `C:\Users\hrdyk\Documents\PROJEKTY-MOJE\SpilledCinema-node-names`
 - Base: `8427954` (the currently deployed private-login recovery stack)
 - Production scope: self-hosted Convex control plane, Vercel dashboard, Windows server runtime
+- Windows release: `0.2.0-beta.39`
 - Compatibility rule: existing 16-character connection codes remain valid as a recovery locator
 - Data migration: widen-only schema change; existing nodes do not require a backfill
 
@@ -30,4 +31,8 @@
 - Local credential recovery scenarios passed unchanged.
 - Convex code generation and strict TypeScript check passed against the self-hosted instance.
 - Fresh cold backup `20260901-090331` created on `DESKTOP-KOEDI91`; manifest is present (3,092 bytes, 13 files) and the backend returned ready afterward.
-- Production deployment and live `username.servername` verification are pending.
+- Self-hosted Convex deployment succeeded against `127.0.0.1:43210` through the SSH forward; schema validation passed and no indexes were deleted.
+- Public edge checks returned the expected 404 for an unclaimed valid name and 400 for a reserved name.
+- Windows privacy-default checks passed and the beta.39 NSIS installer built successfully.
+- Installer SHA-256: `7203D9BABADA173D2BFA370CB9CC4153ADDA4A430834047A24FBFC385A12FF88`.
+- Windows/dashboard deployment and live `username.servername` verification are pending.
