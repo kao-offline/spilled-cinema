@@ -67,5 +67,5 @@
 - Dashboard fix: bound control-plane fetches and quick private RPC calls, reject any WebSocket close that occurs before a response, retry with a fresh ticket, cap the connect screen at 20 seconds with an actionable retry message, and prevent SPA HTML from retaining an obsolete release.
 - Pre-deploy checks: gateway TypeScript build passed; Wrangler dry run passed; dashboard production build passed; focused private gateway tests passed (10/10), including immediate recovery from a clean early close.
 - Previous production rollback handles: gateway version `268b2c6b-7d80-4441-ab1c-aba96e040c38`; Vercel deployment `dpl_4S4omq9eyyG9B3mgkAVH6vhws8x6`.
-- Production hotfix: gateway version `2ad23c9f-6cc0-46ed-8a8a-51e3b1585bfe`; Vercel deployment `dpl_ABfpQTMVnHAUHNSjR2EfAxF2MB6Y`, aliased to `https://spilled.overload.studio`.
+- Production hotfix: gateway version `29948d67-8fbf-4a54-b093-11adb0480def`; Vercel deployment `dpl_ABfpQTMVnHAUHNSjR2EfAxF2MB6Y`, aliased to `https://spilled.overload.studio`.
 - Post-deploy verification: the Windows runtime remained ready with HTTP 200 and reconnected after the Worker rotation. Four fresh production browser connections loaded asset `index-QH2cUh09.js`, resolved the live node, and displayed both watcher accounts without a gateway error; three completed in about 2.5 seconds and the slowest completed within 5.5 seconds.
