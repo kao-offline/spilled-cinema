@@ -35,12 +35,6 @@ async function waitForPrivateNodeBootstrap<T>(work: Promise<T>) {
   }
 }
 
-function displayLocator(value: string) {
-  if (value.includes(".")) return value.toLowerCase();
-  const compact = value.toUpperCase().replace(/[^A-F0-9]/g, "").slice(0, 16);
-  return compact.match(/.{1,4}/g)?.join("-") ?? compact;
-}
-
 function accountMatchesUsername(account: PrivateNodeAccount, username: string) {
   const candidates = [account.accountId, account.watcherId]
     .filter((value): value is string => Boolean(value))
@@ -284,8 +278,12 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
                   <input
                     autoFocus
                     autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect="off"
                     inputMode="text"
-                    value={displayLocator(code)}
+                    spellCheck={false}
+                    enterKeyHint="go"
+                    value={code}
                     onChange={(event) => setCode(event.target.value)}
                     onKeyDown={(event) => { if (event.key === "Enter") void connect(); }}
                     placeholder="kao.home-cinema"

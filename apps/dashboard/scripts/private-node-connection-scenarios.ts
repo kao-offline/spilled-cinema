@@ -76,6 +76,7 @@ if (proveFailure) {
 if (failed.length > 0) process.exit(1);
 
 const mobileDockSource = await readFile(new URL("../src/components/MobileDock.tsx", import.meta.url), "utf8");
+const privateNodeConnectSource = await readFile(new URL("../src/components/PrivateNodeConnectView.tsx", import.meta.url), "utf8");
 const mobileEntryAssertions = [
   [mobileDockSource.includes('label: "Server"'), "labeled Server destination"],
   [mobileDockSource.includes('window.location.assign("/connect")'), "direct connection route"],
@@ -83,5 +84,16 @@ const mobileEntryAssertions = [
 ] as const;
 for (const [passed, label] of mobileEntryAssertions) {
   console.log(`${passed ? "PASS" : "FAIL"} mobile-entry/${label}`);
+  if (!passed) process.exitCode = 1;
+}
+
+const privateNodeInputAssertions = [
+  [privateNodeConnectSource.includes("value={code}"), "preserves the locator draft while typing"],
+  [!privateNodeConnectSource.includes("value={displayLocator(code)}"), "does not rewrite each keystroke as a recovery code"],
+  [privateNodeConnectSource.includes('autoCapitalize="none"'), "disables mobile auto-capitalization"],
+  [privateNodeConnectSource.includes('spellCheck={false}'), "disables locator spellcheck"],
+] as const;
+for (const [passed, label] of privateNodeInputAssertions) {
+  console.log(`${passed ? "PASS" : "FAIL"} private-node-input/${label}`);
   if (!passed) process.exitCode = 1;
 }
