@@ -38,4 +38,8 @@
 - DPAPI storage now decrypts its master key once per process, shares concurrent initialization, keeps the key only in memory, retries transient PowerShell/CLR failures, times out hung helpers, and clears rejected initialization for later recovery.
 - DPAPI stress scenarios passed: 12 serialized writes, 120 concurrent reads, restart decryption, and no plaintext `.active` key file.
 - The initial beta.39 installer hash was superseded before deployment. Final rebuilt installer SHA-256: `6629D7E9EACFE8BBCA31E0BCFF65661E3A4B50790BEC8105693DD7CC1BEFB3BC`.
+- Remote beta.39 installer hash matched, silent installation exited `0`, the scheduled task is running with 999 restart attempts, configuration hash was preserved, and 12/12 status probes returned the existing node ID `node_b9909ae5609efe5f05d5d53d` and connection code `15DB-F67A-DA86-5792`.
+- The live node claimed `kao-home`; both local status and the public resolver return that name, the same node ID, and `online: true`.
+- A post-deploy control-plane outage exposed a failed startup-only backend task (last result `1`). A recurring two-minute SYSTEM watchdog and post-backup readiness/retry loop were installed, with rollback copies retained as `*.pre-beta39`.
+- Controlled recovery drill passed: the Convex backend was stopped, the watchdog returned exit `0`, local port 3210 recovered, the public edge recovered, and `kao-home` returned online again.
 - Windows/dashboard deployment and live `username.servername` verification are pending.

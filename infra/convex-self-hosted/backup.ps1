@@ -40,6 +40,20 @@ try {
 } finally {
   if ($backendWasRunning) {
     Start-ScheduledTask -TaskPath $taskPath -TaskName $taskName
+    $backendReady = $false
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+      if (Get-NetTCPConnection -State Listen -LocalPort 3210 -ErrorAction SilentlyContinue) {
+        $backendReady = $true
+        break
+      }
+      if ($attempt -gt 0 -and $attempt % 10 -eq 0) {
+        Start-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue
+      }
+      Start-Sleep -Seconds 1
+    }
+    if (-not $backendReady) {
+      throw "Convex backend did not recover after backup."
+    }
   }
 }
 

@@ -43,5 +43,29 @@ Register-ScheduledTask `
   -Principal $principal `
   -Force | Out-Null
 
+$watchdogAction = New-ScheduledTaskAction `
+  -Execute "powershell.exe" `
+  -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$(Join-Path $BasePath 'scripts\watchdog.ps1')`" -BasePath `"$BasePath`""
+$watchdogTrigger = New-ScheduledTaskTrigger `
+  -Once `
+  -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 2) `
+  -RepetitionDuration (New-TimeSpan -Days 3650)
+$watchdogSettings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable `
+  -MultipleInstances IgnoreNew `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+Register-ScheduledTask `
+  -TaskName "Convex Watchdog" `
+  -TaskPath $taskPath `
+  -Action $watchdogAction `
+  -Trigger $watchdogTrigger `
+  -Settings $watchdogSettings `
+  -Principal $principal `
+  -Force | Out-Null
+
 Start-ScheduledTask -TaskPath $taskPath -TaskName "Convex Backend"
 Start-ScheduledTask -TaskPath $taskPath -TaskName "Convex Tunnel"
+Start-ScheduledTask -TaskPath $taskPath -TaskName "Convex Watchdog"

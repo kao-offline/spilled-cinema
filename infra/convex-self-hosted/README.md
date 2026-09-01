@@ -35,8 +35,10 @@ self-hosted instance.
 ## Recovery
 
 The backend and tunnel are independent SYSTEM scheduled tasks with unlimited
-runtime and restart-on-failure. Runtime logs rotate at 25 MB. A third task makes
-a consistent cold backup every day at 04:15 and retains seven restore points.
+runtime and restart-on-failure. A recurring watchdog checks them every two
+minutes so a failed task launch cannot leave the service down. Runtime logs
+rotate at 25 MB. The backup task makes a consistent cold backup every day at
+04:15, verifies that the backend becomes ready again, and retains seven restore points.
 The durable data, file storage, backups, and secrets live outside the
 application install directory so an application update cannot remove them.
 
