@@ -42,4 +42,6 @@
 - The live node claimed `kao-home`; both local status and the public resolver return that name, the same node ID, and `online: true`.
 - A post-deploy control-plane outage exposed a failed startup-only backend task (last result `1`). A recurring two-minute SYSTEM watchdog and post-backup readiness/retry loop were installed, with rollback copies retained as `*.pre-beta39`.
 - Controlled recovery drill passed: the Convex backend was stopped, the watchdog returned exit `0`, local port 3210 recovered, the public edge recovered, and `kao-home` returned online again.
-- Windows/dashboard deployment and live `username.servername` verification are pending.
+- Dashboard production deployment `ELELuQ3CuMiWhiuFo8Kpi98Rh4bg` completed and was aliased to `https://spilled.overload.studio`; the production bundle includes `assets/index-tSCT12YW.js`.
+- Live browser verification passed on the deployed site: `https://spilled.overload.studio/connect?login=kao.kao-home` resolved `kao-home`, selected account `kao`, and reached the viewing-password form without hanging.
+- Legacy recovery verification also passed on the deployed site: connection code `15DB-F67A-DA86-5792` resolved the same node and returned both `kao` and `pao` profiles.
