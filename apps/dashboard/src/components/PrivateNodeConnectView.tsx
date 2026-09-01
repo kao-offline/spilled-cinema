@@ -14,7 +14,7 @@ import {
   type PrivateNodeAccount,
   type PrivateNodeConnection,
 } from "../lib/private-node-client";
-import { normalizeNodeConnectionCode } from "../../../../packages/node-protocol/src";
+import { normalizeNodeConnectionCode, parsePrivateNodeLoginName } from "../../../../packages/node-protocol/src";
 
 type ConnectStep = "locate" | "login" | "connected";
 const PRIVATE_NODE_BOOTSTRAP_TIMEOUT_MS = 20_000;
@@ -35,9 +35,17 @@ async function waitForPrivateNodeBootstrap<T>(work: Promise<T>) {
   }
 }
 
-function displayCode(value: string) {
+function displayLocator(value: string) {
+  if (value.includes(".")) return value.toLowerCase();
   const compact = value.toUpperCase().replace(/[^A-F0-9]/g, "").slice(0, 16);
   return compact.match(/.{1,4}/g)?.join("-") ?? compact;
+}
+
+function accountMatchesUsername(account: PrivateNodeAccount, username: string) {
+  const candidates = [account.accountId, account.watcherId]
+    .filter((value): value is string => Boolean(value))
+    .flatMap((value) => [value, value.replace(/^(?:watcher|acct)_/, "")]);
+  return candidates.some((value) => value.toLowerCase() === username);
 }
 
 type PrivateNodeConnectViewProps = {
@@ -49,8 +57,9 @@ type PrivateNodeConnectViewProps = {
 export function PrivateNodeConnectView({ embedded = false, onClose, onConnected }: PrivateNodeConnectViewProps = {}) {
   const saved = useMemo(() => readPrivateNodeConnection(), []);
   const queryCode = useMemo(() => new URLSearchParams(window.location.search).get("code") ?? "", []);
+  const queryLogin = useMemo(() => new URLSearchParams(window.location.search).get("login") ?? "", []);
   const [step, setStep] = useState<ConnectStep>(saved.nodeId && saved.token ? "connected" : "locate");
-  const [code, setCode] = useState(queryCode || saved.connectionCode || "");
+  const [code, setCode] = useState(queryLogin || queryCode || saved.connectionCode || "");
   const [connection, setConnection] = useState<PrivateNodeConnection>(saved);
   const [accounts, setAccounts] = useState<PrivateNodeAccount[]>([]);
   const [accountId, setAccountId] = useState(saved.accountId ?? "");
@@ -60,6 +69,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
   const [finding, setFinding] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [nodeOnline, setNodeOnline] = useState(Boolean(saved.nodeId));
+  const [loginUsername, setLoginUsername] = useState<string | null>(null);
 
   const selectedAccount = accounts.find((account) => account.accountId === accountId);
   const selectedAccountHasPassword = Boolean(selectedAccount?.hasPassword);
@@ -81,10 +91,11 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
 
   useEffect(() => {
     if (queryCode && normalizeNodeConnectionCode(queryCode)) void connect(queryCode);
-  }, [queryCode]);
+    else if (queryLogin && parsePrivateNodeLoginName(queryLogin)) void connect(queryLogin);
+  }, [queryCode, queryLogin]);
 
   useEffect(() => {
-    if (!queryCode && saved.connectionCode && !saved.token) void connect(saved.connectionCode);
+    if (!queryCode && !queryLogin && saved.connectionCode && !saved.token) void connect(saved.connectionCode);
   }, []);
 
   async function connect(value = code) {
@@ -98,9 +109,20 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
       ]));
       if (!status.auth?.privateAuthEnabled) throw new Error("This node has not finished private setup yet.");
       if (nextAccounts.length === 0) throw new Error("This node does not have a watcher account yet.");
-      const firstAccount = nextAccounts.find((account) => account.accountId === saved.accountId) ?? nextAccounts[0];
+      const requestedAccount = resolved.loginName
+        ? nextAccounts.find((account) => accountMatchesUsername(account, resolved.loginName!.username))
+        : undefined;
+      if (resolved.loginName && !requestedAccount) {
+        throw new Error(`This server has no viewing account named "${resolved.loginName.username}".`);
+      }
+      const firstAccount = requestedAccount
+        ?? nextAccounts.find((account) => account.accountId === saved.accountId)
+        ?? nextAccounts[0];
       const firstProfile = firstAccount.profiles.find((profile) => profile.profileId === saved.profileId) ?? firstAccount.profiles[0];
-      setCode(resolved.connection.connectionCode ?? value);
+      setCode(resolved.loginName
+        ? `${resolved.loginName.username}.${resolved.loginName.networkName}`
+        : resolved.connection.connectionCode ?? value);
+      setLoginUsername(resolved.loginName?.username ?? null);
       setConnection(resolved.connection);
       setAccounts(nextAccounts);
       setAccountId(firstAccount.accountId);
@@ -157,6 +179,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     setConnection(next);
     onConnected?.(next);
     setPassword("");
+    setLoginUsername(null);
     setStep("connected");
   }
 
@@ -207,6 +230,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     setAccountId("");
     setProfileId("");
     setPassword("");
+    setLoginUsername(null);
     setNodeOnline(false);
     setStep("locate");
     setMessage("Logged out.");
@@ -239,7 +263,7 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
               Your server.<br /><em className="font-normal text-white/48">No address hunt.</em>
             </h1>
             <p className="mt-3 max-w-md text-xs font-medium leading-5 text-white/46 sm:mt-6 sm:text-sm sm:leading-6">
-              The code only locates your server. Your password or passkey is checked inside your node, and the trip stays encrypted through the gateway.
+              Your short login only locates your server and viewing account. Your password or passkey is checked inside your node, and the trip stays encrypted through the gateway.
             </p>
           </div>
           <div className="hidden items-center gap-3 text-xs font-bold text-white/35 lg:flex">
@@ -254,22 +278,22 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.28em] text-white/35">Step 01 / Locate</p>
                 <h2 className="mt-3 text-2xl font-black tracking-[-0.035em] sm:text-5xl">Connect to your node</h2>
-                <p className="mt-3 text-sm leading-6 text-white/48">Copy the connection code shown by Spilled Server. Dashes and letter case do not matter.</p>
+                <p className="mt-3 text-sm leading-6 text-white/48">Enter the viewing username and network name chosen on your server PC. The long connection code still works for recovery.</p>
                 <label className="mt-9 block">
-                  <span className="sr-only">Server connection code</span>
+                  <span className="sr-only">Private node login</span>
                   <input
                     autoFocus
                     autoComplete="off"
                     inputMode="text"
-                    value={displayCode(code)}
-                    onChange={(event) => setCode(displayCode(event.target.value))}
+                    value={displayLocator(code)}
+                    onChange={(event) => setCode(event.target.value)}
                     onKeyDown={(event) => { if (event.key === "Enter") void connect(); }}
-                    placeholder="7A3F-19C2-88B4-D0E1"
-                    className="w-full border-b border-white/18 bg-transparent py-5 font-mono text-2xl font-bold uppercase tracking-[0.12em] text-white outline-none transition placeholder:text-white/16 focus:border-orange-300 sm:text-4xl"
+                    placeholder="kao.home-cinema"
+                    className="w-full border-b border-white/18 bg-transparent py-5 font-mono text-2xl font-bold tracking-[0.04em] text-white outline-none transition placeholder:text-white/16 focus:border-orange-300 sm:text-4xl"
                   />
                 </label>
                 <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-                  <button onClick={() => void connect()} disabled={busy || !normalizeNodeConnectionCode(code)} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[#f3eee5] px-7 text-sm font-black text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35">
+                  <button onClick={() => void connect()} disabled={busy || !(normalizeNodeConnectionCode(code) || parsePrivateNodeLoginName(code))} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[#f3eee5] px-7 text-sm font-black text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35">
                     {busy ? <LoaderCircle className="animate-spin" size={18} /> : <Server size={18} />} Connect securely
                   </button>
                   <button onClick={() => void findThisDevice()} disabled={finding || busy} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/12 bg-white/[0.035] px-6 text-sm font-black text-white/72 transition hover:border-white/25 hover:text-white disabled:opacity-40">
@@ -282,16 +306,16 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
             {step === "login" ? (
               <div>
                 <button onClick={() => setStep("locate")} className="mb-6 inline-flex items-center gap-2 text-xs font-black uppercase tracking-[0.2em] text-white/38 hover:text-white"><ArrowLeft size={14} /> Change node</button>
-                <p className="text-xs font-black uppercase tracking-[0.28em] text-emerald-300">Node verified · {connection.connectionCode}</p>
-                <h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">Who’s watching?</h2>
-                <div className="mt-7 grid gap-3 sm:grid-cols-2">
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-emerald-300">Node verified · {connection.networkName ?? connection.connectionCode}</p>
+                <h2 className="mt-3 text-3xl font-black tracking-[-0.035em] sm:text-5xl">{loginUsername ? `Sign in as ${loginUsername}` : "Who’s watching?"}</h2>
+                {!loginUsername ? <div className="mt-7 grid gap-3 sm:grid-cols-2">
                   {accounts.map((account) => (
                     <button key={account.accountId} onClick={() => chooseAccount(account.accountId)} className={`rounded-2xl border p-4 text-left transition ${accountId === account.accountId ? "border-orange-300/60 bg-orange-300/10" : "border-white/9 bg-white/[0.025] hover:border-white/20"}`}>
                       <div className="font-black">{account.displayName}</div>
                       <div className="mt-1 text-xs font-bold text-white/35">{account.profiles.length} {account.profiles.length === 1 ? "profile" : "profiles"}</div>
                     </button>
                   ))}
-                </div>
+                </div> : null}
                 {selectedAccount && selectedAccount.profiles.length > 1 ? (
                   <div className="mt-5 flex flex-wrap gap-2" aria-label="Profile">
                     {selectedAccount.profiles.map((profile) => (

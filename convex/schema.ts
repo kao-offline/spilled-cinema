@@ -192,6 +192,14 @@ export default defineSchema({
     .index("by_node_id", ["nodeId"])
     .index("by_connection_code", ["connectionCode"])
     .index("by_status", ["status"]),
+  nodeNetworkNames: defineTable({
+    networkName: v.string(),
+    nodeId: v.string(),
+    claimedAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_network_name", ["networkName"])
+    .index("by_node_id", ["nodeId"]),
   nodeHeartbeatsV2: defineTable({
     nodeId: v.string(),
     gatewayAttestedAt: v.number(),

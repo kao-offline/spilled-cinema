@@ -28,6 +28,7 @@ export type V2Candidate = {
   nodeId: string;
   endpointUrl?: string;
   connectionCode?: string;
+  networkName?: string;
   identity: {
     x25519PublicKey: string;
   };
@@ -348,6 +349,27 @@ export async function resolvePrivateGatewayCandidate(connectionCode: string) {
   );
   const payload = await response.json().catch(() => null) as {
     candidate?: V2Candidate & { connectionCode: string; online: boolean };
+    error?: string;
+  } | null;
+  if (!response.ok || !payload?.candidate) {
+    if (response.status >= 500) {
+      throw new Error("The private-node connection service is temporarily unavailable. Try again in a moment.");
+    }
+    throw new Error(payload?.error ?? `Private node lookup failed (${response.status}).`);
+  }
+  return payload.candidate;
+}
+
+export async function resolvePrivateGatewayCandidateByNetworkName(networkName: string) {
+  const response = await fetch(
+    `/api/server?path=v2%2Fprivate-nodes%2Fresolve&name=${encodeURIComponent(networkName)}`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    },
+  );
+  const payload = await response.json().catch(() => null) as {
+    candidate?: V2Candidate & { connectionCode: string; networkName: string; online: boolean };
     error?: string;
   } | null;
   if (!response.ok || !payload?.candidate) {

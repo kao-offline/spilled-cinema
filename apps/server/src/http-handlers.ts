@@ -7,6 +7,7 @@ import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { SpillshareSource } from "../../../packages/node-protocol/src";
+import { normalizeNodeNetworkName } from "../../../packages/node-protocol/src";
 import {
   cancelDownload,
   checkDownload,
@@ -1843,6 +1844,44 @@ export function createHttpHandlers() {
     }
   };
 
+  const localNetworkNameHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "PUT") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      if (!checkRateLimit(req, "local-network-name", 12)) {
+        return sendJson(res, 429, { error: "Too many server-name attempts. Try again in a few minutes." });
+      }
+      const body = await readJsonBody<{ token?: string; networkName?: string }>(req);
+      const networkName = normalizeNodeNetworkName(body.networkName ?? "");
+      if (!body.token || !networkName) {
+        return sendJson(res, 400, { error: "Use 3-32 lowercase letters, numbers, or single hyphens for the server name." });
+      }
+      runtime.assertLocalManagementToken(body.token);
+      const application = await runtime.createGatewayEnrollmentApplication({ networkName });
+      const controlPlaneUrl = (
+        process.env.SPILLED_CONTROL_PLANE_URL?.trim() ||
+        "https://spilled-control-plane.hrdykrystof.workers.dev/server"
+      ).replace(/\/$/, "");
+      const response = await fetch(`${controlPlaneUrl}/v2/nodes/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(application),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) {
+        return sendJson(res, response.status === 409 ? 409 : 502, {
+          error: payload?.error ?? "The network could not register that server name.",
+        });
+      }
+      sendJson(res, 200, await runtime.updateLocalNetworkName({
+        token: body.token,
+        networkName,
+      }));
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "The server name could not be updated." });
+    }
+  };
+
   const adminAuthHandler = async (req: RequestLike, res: JsonResponse) => {
     try {
       if (req.method === "GET") {
@@ -2339,6 +2378,7 @@ export function createHttpHandlers() {
     privateSetupStatusHandler,
     privateSetupCompleteHandler,
     localCredentialRecoveryHandler,
+    localNetworkNameHandler,
     adminAuthHandler,
     watcherAuthHandler,
     adminStatusHandler,

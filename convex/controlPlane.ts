@@ -426,9 +426,43 @@ export const enrollV2Node = internalMutation({
     enrollmentCredentialHash: v.string(),
     advertisedCapabilities: v.array(v.string()),
     endpointUrl: v.optional(v.string()),
+    networkName: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    let claimedNetworkName: string | null | undefined;
+    if (args.networkName !== undefined) {
+      const currentClaim = await ctx.db
+        .query("nodeNetworkNames")
+        .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
+        .unique();
+      if (args.networkName === null) {
+        if (currentClaim) await ctx.db.delete(currentClaim._id);
+        claimedNetworkName = null;
+      } else {
+        const targetClaim = await ctx.db
+          .query("nodeNetworkNames")
+          .withIndex("by_network_name", (q) => q.eq("networkName", args.networkName!))
+          .unique();
+        if (targetClaim && targetClaim.nodeId !== args.nodeId) {
+          throw new Error("NETWORK_NAME_TAKEN: That server name is already registered.");
+        }
+        if (currentClaim) {
+          await ctx.db.patch(currentClaim._id, {
+            networkName: args.networkName,
+            updatedAt: now,
+          });
+        } else if (!targetClaim) {
+          await ctx.db.insert("nodeNetworkNames", {
+            networkName: args.networkName,
+            nodeId: args.nodeId,
+            claimedAt: now,
+            updatedAt: now,
+          });
+        }
+        claimedNetworkName = args.networkName;
+      }
+    }
     const identity = await ctx.db
       .query("nodeIdentities")
       .withIndex("by_node_id", (q) => q.eq("nodeId", args.nodeId))
@@ -473,7 +507,12 @@ export const enrollV2Node = internalMutation({
         updatedAt: now,
       });
     }
-    return { ok: true, nodeId: args.nodeId, status: registration?.status ?? "pending" };
+    return {
+      ok: true,
+      nodeId: args.nodeId,
+      status: registration?.status ?? "pending",
+      ...(claimedNetworkName !== undefined ? { networkName: claimedNetworkName } : {}),
+    };
   },
 });
 
@@ -809,6 +848,40 @@ export const resolvePrivateV2NodeConnection = internalQuery({
     return {
       nodeId: registration.nodeId,
       connectionCode: registration.connectionCode ?? args.connectionCode,
+      online: Boolean(heartbeat && heartbeat.expiresAt > Date.now()),
+      identity: {
+        x25519PublicKey: identity.x25519PublicKey,
+      },
+    };
+  },
+});
+
+export const resolvePrivateV2NodeNetworkName = internalQuery({
+  args: { networkName: v.string() },
+  handler: async (ctx, args) => {
+    const claim = await ctx.db
+      .query("nodeNetworkNames")
+      .withIndex("by_network_name", (q) => q.eq("networkName", args.networkName))
+      .unique();
+    if (!claim) return null;
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", claim.nodeId))
+      .unique();
+    if (!registration || ["disabled", "quarantined"].includes(registration.status)) return null;
+    const heartbeat = await ctx.db
+      .query("nodeHeartbeatsV2")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId))
+      .unique();
+    const identity = await ctx.db
+      .query("nodeIdentities")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId))
+      .unique();
+    if (!identity || !registration.connectionCode) return null;
+    return {
+      nodeId: registration.nodeId,
+      connectionCode: registration.connectionCode,
+      networkName: claim.networkName,
       online: Boolean(heartbeat && heartbeat.expiresAt > Date.now()),
       identity: {
         x25519PublicKey: identity.x25519PublicKey,

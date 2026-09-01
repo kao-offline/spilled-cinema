@@ -27,6 +27,39 @@ function normalizeConnectionCode(value: string) {
   return compact.length === 16 ? compact.match(/.{1,4}/g)!.join("-") : null;
 }
 
+const RESERVED_NODE_NETWORK_NAMES = new Set([
+  "admin", "api", "app", "connect", "dashboard", "gateway", "help", "localhost",
+  "login", "node", "spilled", "support", "verifier", "www",
+]);
+
+function normalizeNetworkName(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized.length < 3 ||
+    normalized.length > 32 ||
+    RESERVED_NODE_NETWORK_NAMES.has(normalized) ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/.test(normalized) ||
+    normalized.includes("--")
+  ) return null;
+  return normalized;
+}
+
+function networkNameFromApplication(body: Record<string, unknown>) {
+  if (!("networkName" in body)) return undefined;
+  if (body.networkName === null) return null;
+  if (typeof body.networkName !== "string") return false;
+  const normalized = normalizeNetworkName(body.networkName);
+  return normalized === body.networkName ? normalized : false;
+}
+
+function nodeEnrollmentError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("NETWORK_NAME_TAKEN")) {
+    return json({ error: "That server name is already registered. Choose another one." }, { status: 409 });
+  }
+  return json({ error: "The node could not be registered." }, { status: 500 });
+}
+
 type PublicTicketCapability = keyof typeof PUBLIC_TICKET_ACTIONS;
 
 const LEGACY_CAPABILITY_FOR_TICKET: Record<PublicTicketCapability, NodeCapability> = {
@@ -284,6 +317,7 @@ http.route({
       return json({ error: "Unauthorized." }, { status: 401 });
     }
     const body = (await parseJson(req)) as Record<string, unknown>;
+    const networkName = networkNameFromApplication(body);
     const required = [
       "nodeId",
       "ed25519PublicKey",
@@ -297,23 +331,29 @@ http.route({
       body.protocolVersion !== 2 ||
       typeof body.keyVersion !== "number" ||
       !Array.isArray(body.advertisedCapabilities) ||
-      body.advertisedCapabilities.some((entry) => typeof entry !== "string")
+      body.advertisedCapabilities.some((entry) => typeof entry !== "string") ||
+      networkName === false
     ) {
       return json({ error: "Invalid v2 node enrollment." }, { status: 400 });
     }
-    const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
-      nodeId: body.nodeId as string,
-      connectionCode: await connectionCodeForEnrollmentCredential(body.enrollmentCredential as string),
-      ed25519PublicKey: body.ed25519PublicKey as string,
-      x25519PublicKey: body.x25519PublicKey as string,
-      transportKeySignature: body.transportKeySignature as string,
-      installIdHash: body.installIdHash as string,
-      protocolVersion: 2,
-      keyVersion: body.keyVersion as number,
-      enrollmentCredentialHash: await sha256Base64Url(body.enrollmentCredential as string),
-      advertisedCapabilities: body.advertisedCapabilities as string[],
-    });
-    return json(result);
+    try {
+      const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
+        nodeId: body.nodeId as string,
+        connectionCode: await connectionCodeForEnrollmentCredential(body.enrollmentCredential as string),
+        ed25519PublicKey: body.ed25519PublicKey as string,
+        x25519PublicKey: body.x25519PublicKey as string,
+        transportKeySignature: body.transportKeySignature as string,
+        installIdHash: body.installIdHash as string,
+        protocolVersion: 2,
+        keyVersion: body.keyVersion as number,
+        enrollmentCredentialHash: await sha256Base64Url(body.enrollmentCredential as string),
+        advertisedCapabilities: body.advertisedCapabilities as string[],
+        ...(networkName !== undefined ? { networkName } : {}),
+      });
+      return json(result);
+    } catch (error) {
+      return nodeEnrollmentError(error);
+    }
   }),
 });
 
@@ -322,6 +362,7 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     const body = (await parseJson(req)) as Record<string, unknown>;
+    const networkName = networkNameFromApplication(body);
     const required = [
       "nodeId",
       "ed25519PublicKey",
@@ -340,7 +381,8 @@ http.route({
       !Array.isArray(body.advertisedCapabilities) ||
       body.advertisedCapabilities.length > V2_CAPABILITIES.length ||
       body.advertisedCapabilities.some((entry) => typeof entry !== "string" || !V2_CAPABILITIES.includes(entry)) ||
-      (body.endpointUrl != null && (typeof body.endpointUrl !== "string" || body.endpointUrl.length > 2_000))
+      (body.endpointUrl != null && (typeof body.endpointUrl !== "string" || body.endpointUrl.length > 2_000)) ||
+      networkName === false
     ) {
       return json({ error: "Invalid v2 node application." }, { status: 400 });
     }
@@ -390,23 +432,28 @@ http.route({
     } catch {
       return json({ error: "Node application signature is invalid." }, { status: 401 });
     }
-    const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
-      nodeId: body.nodeId as string,
-      connectionCode: await connectionCodeForEnrollmentCredential(body.enrollmentCredential as string),
-      ed25519PublicKey: body.ed25519PublicKey as string,
-      x25519PublicKey: body.x25519PublicKey as string,
-      transportKeySignature: body.transportKeySignature as string,
-      installIdHash: body.installIdHash as string,
-      protocolVersion: 2,
-      keyVersion: body.keyVersion as number,
-      enrollmentCredentialHash: await sha256Base64Url(body.enrollmentCredential as string),
-      advertisedCapabilities: body.advertisedCapabilities as string[],
-      endpointUrl: typeof body.endpointUrl === "string" ? body.endpointUrl : undefined,
-    });
-    return json(result, {
-      status: 202,
-      headers: { "Cache-Control": "no-store" },
-    });
+    try {
+      const result = await ctx.runMutation(internal.controlPlane.enrollV2Node, {
+        nodeId: body.nodeId as string,
+        connectionCode: await connectionCodeForEnrollmentCredential(body.enrollmentCredential as string),
+        ed25519PublicKey: body.ed25519PublicKey as string,
+        x25519PublicKey: body.x25519PublicKey as string,
+        transportKeySignature: body.transportKeySignature as string,
+        installIdHash: body.installIdHash as string,
+        protocolVersion: 2,
+        keyVersion: body.keyVersion as number,
+        enrollmentCredentialHash: await sha256Base64Url(body.enrollmentCredential as string),
+        advertisedCapabilities: body.advertisedCapabilities as string[],
+        endpointUrl: typeof body.endpointUrl === "string" ? body.endpointUrl : undefined,
+        ...(networkName !== undefined ? { networkName } : {}),
+      });
+      return json(result, {
+        status: 202,
+        headers: { "Cache-Control": "no-store" },
+      });
+    } catch (error) {
+      return nodeEnrollmentError(error);
+    }
   }),
 });
 
@@ -756,12 +803,24 @@ http.route({
   path: "/server/v2/private-nodes/resolve",
   method: "GET",
   handler: httpAction(async (ctx, req) => {
-    const code = normalizeConnectionCode(new URL(req.url).searchParams.get("code") ?? "");
-    if (!code) return json({ error: "Enter a complete 16-character connection code." }, { status: 400 });
-    const candidate = await ctx.runQuery(internal.controlPlane.resolvePrivateV2NodeConnection, {
-      connectionCode: code,
-    });
-    if (!candidate) return json({ error: "No private node matches that connection code." }, { status: 404 });
+    const params = new URL(req.url).searchParams;
+    const requestedName = params.get("name");
+    const networkName = requestedName === null ? null : normalizeNetworkName(requestedName);
+    const code = normalizeConnectionCode(params.get("code") ?? "");
+    if (requestedName !== null && !networkName) {
+      return json({ error: "Enter a valid server name." }, { status: 400 });
+    }
+    if (!networkName && !code) {
+      return json({ error: "Enter a username.servername login or a complete connection code." }, { status: 400 });
+    }
+    const candidate = networkName
+      ? await ctx.runQuery(internal.controlPlane.resolvePrivateV2NodeNetworkName, { networkName })
+      : await ctx.runQuery(internal.controlPlane.resolvePrivateV2NodeConnection, { connectionCode: code! });
+    if (!candidate) {
+      return json({ error: networkName
+        ? "No private node has registered that server name."
+        : "No private node matches that connection code." }, { status: 404 });
+    }
     if (!candidate.online) return json({ error: "That private node is offline." }, { status: 409 });
     return json({ candidate }, { headers: { "Cache-Control": "no-store" } });
   }),

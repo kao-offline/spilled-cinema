@@ -1,8 +1,9 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
-import { normalizeNodeConnectionCode } from "../../../../packages/node-protocol/src";
+import { normalizeNodeConnectionCode, parsePrivateNodeLoginName } from "../../../../packages/node-protocol/src";
 import {
   requestPrivateGateway,
   resolvePrivateGatewayCandidate,
+  resolvePrivateGatewayCandidateByNetworkName,
   type V2Candidate,
 } from "./v2-gateway-client";
 import { adminCapabilitiesRpc, adminLoginRpc, adminStatusRpc, adminWatcherCreateRpc, type AdminGatewayRpc } from "./private-node-admin-rpc";
@@ -30,6 +31,7 @@ export type PrivateNodeConnection = {
   nodeUrl: string;
   nodeId?: string | null;
   connectionCode?: string | null;
+  networkName?: string | null;
   token: string | null;
   refreshToken: string | null;
   accountId: string | null;
@@ -106,6 +108,7 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
       nodeUrl: typeof parsed.nodeUrl === "string" ? parsed.nodeUrl : "",
       nodeId: typeof parsed.nodeId === "string" ? parsed.nodeId : null,
       connectionCode: typeof parsed.connectionCode === "string" ? parsed.connectionCode : null,
+      networkName: typeof parsed.networkName === "string" ? parsed.networkName : null,
       token: typeof parsed.token === "string" ? parsed.token : null,
       refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : null,
       accountId: typeof parsed.accountId === "string" ? parsed.accountId : null,
@@ -156,7 +159,7 @@ export function clearPrivateNodeConnection() {
   return next;
 }
 
-type ResolvedPrivateNode = V2Candidate & { connectionCode: string; online: boolean };
+type ResolvedPrivateNode = V2Candidate & { connectionCode: string; networkName?: string; online: boolean };
 
 async function resolveSavedPrivateNode(connection: Pick<PrivateNodeConnection, "nodeId" | "connectionCode">) {
   if (!connection.connectionCode) throw new Error("This saved connection is missing its connection code.");
@@ -169,14 +172,21 @@ async function resolveSavedPrivateNode(connection: Pick<PrivateNodeConnection, "
 
 export async function connectPrivateNodeWithCode(value: string) {
   const connectionCode = normalizeNodeConnectionCode(value);
-  if (!connectionCode) throw new Error("Enter all 16 letters and numbers from your server connection code.");
-  const candidate = await resolvePrivateGatewayCandidate(connectionCode);
+  const loginName = parsePrivateNodeLoginName(value);
+  if (!connectionCode && !loginName) {
+    throw new Error("Enter your username.servername login or the full recovery connection code.");
+  }
+  const candidate = connectionCode
+    ? await resolvePrivateGatewayCandidate(connectionCode)
+    : await resolvePrivateGatewayCandidateByNetworkName(loginName!.networkName);
   return {
     candidate,
+    loginName,
     connection: {
       nodeUrl: "",
       nodeId: candidate.nodeId,
-      connectionCode,
+      connectionCode: candidate.connectionCode ?? connectionCode,
+      networkName: candidate.networkName ?? loginName?.networkName ?? null,
       token: null,
       refreshToken: null,
       accountId: null,

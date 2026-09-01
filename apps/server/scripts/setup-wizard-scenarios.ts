@@ -17,17 +17,17 @@ const credentialRecovery = {
 const scenarios: Scenario[] = [
   {
     name: "configured server console",
-    html: renderSetupWizard({ setupCode: "", setupRequired: false, suggestedNodeName: "Cinema Server", connectionCode: permanentCode, credentialRecovery }),
+    html: renderSetupWizard({ setupCode: "", setupRequired: false, suggestedNodeName: "Cinema Server", connectionCode: permanentCode, networkName: "home-cinema", credentialRecovery }),
     expected: [permanentCode, 'data-console-tab="connect"', 'data-console-tab="accounts"', 'data-console-tab="manage"', 'data-console-tab="diagnostics"', "owner", "password not set", "/api/node/local-credentials", "openAdmin", "/api/status"],
   },
   {
     name: "fresh setup",
-    html: renderSetupWizard({ setupCode: "setup-once", setupRequired: true, suggestedNodeName: "Cinema Server", connectionCode: permanentCode, credentialRecovery: null }),
+    html: renderSetupWizard({ setupCode: "setup-once", setupRequired: true, suggestedNodeName: "Cinema Server", connectionCode: permanentCode, networkName: "", credentialRecovery: null }),
     expected: ["First run", "Finish setup", permanentCode, 'password:document.getElementById("password").value'],
   },
   {
     name: "script-safe bootstrap",
-    html: renderSetupWizard({ setupCode: "</script><script>alert(1)</script>", setupRequired: true, suggestedNodeName: "Safe", connectionCode: permanentCode, credentialRecovery: null }),
+    html: renderSetupWizard({ setupCode: "</script><script>alert(1)</script>", setupRequired: true, suggestedNodeName: "Safe", connectionCode: permanentCode, networkName: "", credentialRecovery: null }),
     expected: ["\\u003c/script>"],
     rejected: ["</script><script>alert(1)</script>"],
   },

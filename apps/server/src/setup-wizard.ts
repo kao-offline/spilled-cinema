@@ -3,6 +3,7 @@ type SetupWizardInput = {
   setupRequired: boolean;
   suggestedNodeName: string;
   connectionCode: string;
+  networkName: string;
   credentialRecovery: null | {
     token: string;
     expiresAt: number;
@@ -164,8 +165,15 @@ export function renderSetupWizard(input: SetupWizardInput) {
               <button class="console-tab" type="button" data-console-tab="diagnostics">Diagnostics</button>
             </nav>
             <section class="console-panel" data-console-panel="connect">
-              <p>Open Spilled Cinema with this node already selected. Only people you approve can use it.</p>
-              <div class="console-actions"><a class="primary" id="openCinema" href="#">Open Spilled Cinema</a></div>
+              <p>Choose the short, unique name people will use after their viewing username.</p>
+              <div class="recovery-card">
+                <div class="field"><label for="networkName">Network name</label><input id="networkName" autocomplete="off" maxlength="32" placeholder="home-cinema"></div>
+                <div class="fine">Use 3–32 lowercase letters, numbers, or single hyphens. Example: <strong id="loginExample">kao.home-cinema</strong></div>
+              </div>
+              <div class="error" id="networkNameError"></div>
+              <div class="recovery-status" id="networkNameStatus"></div>
+              <div class="console-actions"><button class="primary" id="saveNetworkName" type="button">Register network name</button><a class="secondary" id="openCinema" href="#">Open Spilled Cinema</a></div>
+              <div class="fine">The permanent code above remains available as a recovery option.</div>
             </section>
             <section class="console-panel" data-console-panel="accounts" hidden>
               <p>Reset passwords locally if sign-in is rejected. This works only on the server PC and does not enable sharing.</p>
@@ -217,7 +225,22 @@ export function renderSetupWizard(input: SetupWizardInput) {
     const connectionCode=bootstrap.connectionCode||"Unavailable";
     document.getElementById("connectionCode").textContent=connectionCode;
     const encodedCode=encodeURIComponent(bootstrap.connectionCode||"");
-    document.getElementById("openCinema").href="https://spilled.overload.studio/connect?code="+encodedCode;
+    const networkNameInput=document.getElementById("networkName");
+    const saveNetworkName=document.getElementById("saveNetworkName");
+    networkNameInput.value=bootstrap.networkName||"";
+    const viewerLogin=()=>{
+      const watcher=bootstrap.credentialRecovery?.watchers?.[0]?.watcherId||"watcher_owner";
+      return watcher.replace(/^watcher_/,"");
+    };
+    const refreshNetworkExample=()=>{
+      const name=networkNameInput.value.trim().toLowerCase()||"home-cinema";
+      document.getElementById("loginExample").textContent=viewerLogin()+"."+name;
+      document.getElementById("openCinema").href=bootstrap.networkName
+        ? "https://spilled.overload.studio/connect?login="+encodeURIComponent(viewerLogin()+"."+bootstrap.networkName)
+        : "https://spilled.overload.studio/connect?code="+encodedCode;
+    };
+    networkNameInput.oninput=refreshNetworkExample;
+    refreshNetworkExample();
     document.getElementById("openAdmin").href="https://spilled.overload.studio/node/admin?code="+encodedCode;
     const recovery=bootstrap.credentialRecovery;
     const recoveryForm=document.getElementById("recoveryForm");
@@ -234,7 +257,31 @@ export function renderSetupWizard(input: SetupWizardInput) {
       if(!recovery.watchers.length)document.getElementById("viewerRecoveryPassword").disabled=true;
     }else{
       recoveryForm.hidden=true;saveCredentials.hidden=true;
+      networkNameInput.disabled=true;saveNetworkName.disabled=true;
     }
+    saveNetworkName.onclick=async()=>{
+      const error=document.getElementById("networkNameError");
+      const status=document.getElementById("networkNameStatus");
+      const networkName=networkNameInput.value.trim().toLowerCase();
+      error.style.display="none";status.style.display="none";
+      if(!recovery){error.textContent="Reload this page after setup to choose a network name.";error.style.display="block";return}
+      if(!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/.test(networkName)||networkName.length<3||networkName.length>32||networkName.includes("--")){
+        error.textContent="Use 3–32 lowercase letters, numbers, or single hyphens.";error.style.display="block";return
+      }
+      saveNetworkName.disabled=true;saveNetworkName.textContent="Registering…";
+      try{
+        const response=await fetch("/api/node/network-name",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:recovery.token,networkName})});
+        const payload=await response.json();
+        if(!response.ok)throw new Error(payload.error||"The network name could not be registered.");
+        bootstrap.networkName=payload.networkName;
+        networkNameInput.value=payload.networkName;
+        status.textContent="Registered. Sign in as "+viewerLogin()+"."+payload.networkName+" in Spilled Cinema.";
+        status.style.display="block";saveNetworkName.textContent="Registered";refreshNetworkExample();
+      }catch(reason){
+        error.textContent=reason instanceof Error?reason.message:"The network name could not be registered.";
+        error.style.display="block";saveNetworkName.disabled=false;saveNetworkName.textContent="Register network name";
+      }
+    };
     document.getElementById("copyCode").onclick=async(event)=>{
       if(!bootstrap.connectionCode)return;
       await navigator.clipboard.writeText(bootstrap.connectionCode);

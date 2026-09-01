@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
+import { normalizeNodeNetworkName } from "../../../packages/node-protocol/src";
 
 export type SpilledNodeMode = "local" | "public-fetch" | "private" | "full";
 
@@ -33,6 +34,7 @@ export type PrivateNodeConfig = {
   privateNode: {
     enabled: boolean;
     nodeName?: string;
+    networkName?: string;
     setupSecretHash?: string;
     allowPublicFetch?: boolean;
     allowedOrigins?: string[];
@@ -168,12 +170,22 @@ function normalizeConfig(raw: unknown, configPath: string): LoadedPrivateNodeCon
     ? storage.root.trim()
     : "./spilled-data";
   const storageRoot = resolve(configPath ? resolve(configPath, "..") : process.cwd(), configuredRoot);
+  const requestedNetworkName = typeof raw.privateNode.networkName === "string"
+    ? raw.privateNode.networkName
+    : undefined;
+  let networkName: string | undefined;
+  if (requestedNetworkName !== undefined) {
+    const normalizedNetworkName = normalizeNodeNetworkName(requestedNetworkName);
+    if (!normalizedNetworkName) throw new Error("privateNode.networkName is invalid.");
+    networkName = normalizedNetworkName;
+  }
 
   return {
     configPath,
     privateNode: {
       enabled: raw.privateNode.enabled === true,
       nodeName: typeof raw.privateNode.nodeName === "string" ? raw.privateNode.nodeName : "Private Node",
+      networkName,
       setupSecretHash: typeof raw.privateNode.setupSecretHash === "string" ? raw.privateNode.setupSecretHash : undefined,
       allowPublicFetch: raw.privateNode.allowPublicFetch === true,
       allowedOrigins: Array.isArray(raw.privateNode.allowedOrigins)

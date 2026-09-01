@@ -194,6 +194,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/node/setup/status", handler: handlers.privateSetupStatusHandler },
   { path: "/api/node/setup/complete", handler: handlers.privateSetupCompleteHandler },
   { path: "/api/node/local-credentials", handler: handlers.localCredentialRecoveryHandler },
+  { path: "/api/node/network-name", handler: handlers.localNetworkNameHandler },
   { path: "/api/node/admin/auth/login", handler: handlers.adminAuthHandler },
   { path: "/api/node/admin/auth/logout", handler: handlers.adminAuthHandler },
   { path: "/api/node/admin/auth/me", handler: handlers.adminAuthHandler },
@@ -397,11 +398,12 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       setupRequired: Boolean(setup?.setupCode),
       suggestedNodeName: `${hostname() || "Home"} Server`,
       connectionCode: status.node.connectionCode ?? "",
+      networkName: status.node.networkName ?? "",
       credentialRecovery,
     }));
     return;
   }
-  if (pathname === "/api/node/local-credentials" && !isLoopbackRequest(req)) {
+  if (["/api/node/local-credentials", "/api/node/network-name"].includes(pathname ?? "") && !isLoopbackRequest(req)) {
     res.statusCode = 403;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Password recovery is available only from this computer." }));

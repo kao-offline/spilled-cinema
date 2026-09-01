@@ -12,6 +12,7 @@ import {
   decryptBrowserNodeResponse,
   requestPrivateGateway,
   resolvePrivateGatewayCandidate,
+  resolvePrivateGatewayCandidateByNetworkName,
 } from "../v2-gateway-client";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -107,6 +108,28 @@ describe("private gateway node resolution", () => {
         headers: { Accept: "application/json" },
         signal: expect.any(AbortSignal),
       }),
+    );
+  });
+
+  it("resolves a unique node by its registered network name", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      candidate: {
+        nodeId: "node_home",
+        connectionCode: "7A3F-19C2-88B4-D0E1",
+        networkName: "home-cinema",
+        online: true,
+        identity: { x25519PublicKey: "public-key" },
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    await expect(resolvePrivateGatewayCandidateByNetworkName("home-cinema")).resolves.toMatchObject({
+      nodeId: "node_home",
+      networkName: "home-cinema",
+      connectionCode: "7A3F-19C2-88B4-D0E1",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/server?path=v2%2Fprivate-nodes%2Fresolve&name=home-cinema",
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
     );
   });
 

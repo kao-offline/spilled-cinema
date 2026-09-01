@@ -12,7 +12,7 @@ import {
 } from "@simplewebauthn/server";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import { MemoryDiscoveryRegistry, MdnsService, verifyNodeRecord } from "../../../packages/discovery/src";
-import { formatNodeConnectionCode, NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, V2_CAPABILITIES, type AnonymousSessionGrant, type Capability, type CapabilityTicketV2, type CapabilityPolicy, type EncryptedRequestEnvelopeV2, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
+import { formatNodeConnectionCode, NODE_CAPABILITIES, NODE_PROTOCOL_VERSION, normalizeNodeNetworkName, V2_CAPABILITIES, type AnonymousSessionGrant, type Capability, type CapabilityTicketV2, type CapabilityPolicy, type EncryptedRequestEnvelopeV2, type NodeCapability, type NodeCapabilityMap, type NodeCompatibilityStatus, type NodeRecord, type PairingApproval, type PairingRequest, type PrivateNodeSessionToken, type PrivateSessionGrant, type SessionScope, type SpillshareSource } from "../../../packages/node-protocol/src";
 import { approvePairing, base64UrlDecode, base64UrlEncode, createPairingRequest, createPasskeyAuthenticationChallenge, createPasskeyRegistrationChallenge, createSignedToken, decryptNodeRequest, encryptNodeResponse, generateNodeIdentity, generateNodeTransportIdentity, hashPassword, issueAnonymousSession, issuePrivateSession, randomId, sha256, signPayload, TicketReplayWindow, verifyCapabilityTicket, verifyPassword, verifySignedToken, type NodeIdentity } from "../../../packages/security/src";
 import { DpapiSecretStore, JsonNodeStorage, MasterKeyFileSecretStore, SqliteNodeStorage, type AdminAccountRuntimeState, type NodeStateFile, type NodeStorage, type PrivateDownloadRecord, type PrivatePasskeyCredential, type PrivateProfileState, type RefreshSessionRecord, type StoredImportedShow, type WatcherAccountRuntimeState, type WatcherProfileRuntimeState } from "../../../packages/storage/src";
 import type { LoadedPrivateNodeConfig, PrivateNodeAccountConfig, PrivateNodeConfig, SpilledNodeMode } from "./private-config";
@@ -412,19 +412,42 @@ export class SpilledCinemaNodeRuntime {
     };
   }
 
+  assertLocalManagementToken(token: string) {
+    const recovery = this.localCredentialRecovery;
+    const suppliedHash = sha256(token || "");
+    const expected = recovery ? Buffer.from(recovery.tokenHash, "utf8") : Buffer.alloc(0);
+    const supplied = Buffer.from(suppliedHash, "utf8");
+    if (!recovery || recovery.expiresAt <= Date.now() || expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+      throw new Error("Local management session expired. Reload Server Settings and try again.");
+    }
+  }
+
+  async updateLocalNetworkName(input: { token: string; networkName: string }) {
+    this.assertLocalManagementToken(input.token);
+    const networkName = normalizeNodeNetworkName(input.networkName);
+    if (!networkName) {
+      throw new Error("Use 3-32 lowercase letters, numbers, or single hyphens for the server name.");
+    }
+    const config = this.requirePrivateConfig();
+    const nextConfig: PrivateNodeConfig = {
+      privateNode: { ...config.privateNode, networkName },
+      accounts: config.accounts,
+      publicCapabilities: config.publicCapabilities,
+      oidcProviders: config.oidcProviders,
+      storage: config.storage,
+    };
+    const loadedConfig = writePrivateNodeConfig(config.configPath, nextConfig);
+    this.configure({ privateConfig: loadedConfig, mode: "full" });
+    return { ok: true, networkName };
+  }
+
   async resetLocalCredentials(input: {
     token: string;
     adminPassword?: string;
     watcherId?: string;
     watcherPassword?: string;
   }) {
-    const recovery = this.localCredentialRecovery;
-    const suppliedHash = sha256(input.token || "");
-    const expected = recovery ? Buffer.from(recovery.tokenHash, "utf8") : Buffer.alloc(0);
-    const supplied = Buffer.from(suppliedHash, "utf8");
-    if (!recovery || recovery.expiresAt <= Date.now() || expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
-      throw new Error("Local recovery session expired. Reload Server Settings and try again.");
-    }
+    this.assertLocalManagementToken(input.token);
     const resetAdmin = typeof input.adminPassword === "string" && input.adminPassword.length > 0;
     const resetWatcher = typeof input.watcherPassword === "string" && input.watcherPassword.length > 0;
     if (!resetAdmin && !resetWatcher) {
@@ -842,6 +865,7 @@ export class SpilledCinemaNodeRuntime {
     enrollmentCredential?: string;
     advertisedCapabilities?: Capability[];
     issuedAt?: number;
+    networkName?: string | null;
   } = {}) {
     const identity = await this.ensureIdentity();
     const storedCredential = await this.ensureGatewayEnrollmentCredential();
@@ -858,6 +882,9 @@ export class SpilledCinemaNodeRuntime {
       enrollmentCredential,
       advertisedCapabilities,
       endpointUrl: this.options.endpointUrl ?? null,
+      networkName: input.networkName !== undefined
+        ? input.networkName
+        : this.options.privateConfig?.privateNode.networkName ?? null,
       issuedAt: input.issuedAt ?? Date.now(),
     };
     return {
@@ -1038,6 +1065,7 @@ export class SpilledCinemaNodeRuntime {
       node: {
         nodeId: record.nodeId,
         connectionCode: await this.getConnectionCode(),
+        networkName: privateConfig?.privateNode.networkName ?? null,
         mode: this.options.mode ?? "local",
         protocolVersion: record.protocolVersion,
         regionHint: record.regionHint ?? null,
