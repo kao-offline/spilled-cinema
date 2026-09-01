@@ -103,7 +103,10 @@ describe("private gateway node resolution", () => {
     });
     expect(fetch).toHaveBeenCalledWith(
       "/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=7A3F-19C2-88B4-D0E1",
-      { headers: { Accept: "application/json" } },
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -176,6 +179,75 @@ describe("private gateway node resolution", () => {
       connectionCode: "7A3F-19C2-88B4-D0E1",
       identity: { x25519PublicKey: transport.publicKey },
     }, "library.read", "status.retry-test", "node.status", {})).resolves.toEqual({ status: "ok" });
+    expect(socketAttempt).toBe(2);
+    expect(ticketAttempt).toBe(2);
+  });
+
+  it("retries immediately when a gateway closes cleanly before replying", async () => {
+    const identity = generateNodeIdentity();
+    const transport = generateNodeTransportIdentity(identity);
+    let socketAttempt = 0;
+    let ticketAttempt = 0;
+
+    class EarlyCloseSocket extends EventTarget {
+      constructor(_url: string, _protocols: string[]) {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(frame: string) {
+        socketAttempt += 1;
+        if (socketAttempt === 1) {
+          const close = new Event("close");
+          Object.defineProperties(close, {
+            code: { value: 1000 },
+            reason: { value: "" },
+          });
+          queueMicrotask(() => this.dispatchEvent(close));
+          return;
+        }
+        const opaque = JSON.parse(frame) as { body: string };
+        const request = JSON.parse(opaque.body);
+        const response = encryptNodeResponse({
+          request,
+          nodeTransportPrivateKey: transport.privateKey,
+          plaintext: JSON.stringify({ ok: true, result: { status: "recovered" } }),
+        });
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: JSON.stringify({ body: JSON.stringify(response) }),
+        })));
+      }
+
+      close() {}
+    }
+
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    vi.stubGlobal("WebSocket", EarlyCloseSocket);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      ticketAttempt += 1;
+      return new Response(JSON.stringify({
+        version: 2,
+        ticketId: `private-clean-close-ticket-${ticketAttempt}`,
+        nodeId: "node-private-clean-close",
+        principalKind: "private",
+        capability: "library.read",
+        action: "status.clean-close-test",
+        maxRequestBytes: 1024 * 1024,
+        maxResponseBytes: 1024 * 1024,
+        maxDurationMs: 30_000,
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        nonce: `nonce-${ticketAttempt}`,
+        keyId: "test-key",
+        signature: "test-signature",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+
+    await expect(requestPrivateGateway({
+      nodeId: "node-private-clean-close",
+      connectionCode: "7A3F-19C2-88B4-D0E1",
+      identity: { x25519PublicKey: transport.publicKey },
+    }, "library.read", "status.clean-close-test", "node.status", {})).resolves.toEqual({ status: "recovered" });
     expect(socketAttempt).toBe(2);
     expect(ticketAttempt).toBe(2);
   });

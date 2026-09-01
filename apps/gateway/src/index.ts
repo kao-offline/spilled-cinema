@@ -203,6 +203,7 @@ export class NodeLink extends DurableObject<Env> {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ nodeId }),
+        signal: AbortSignal.timeout(10_000),
       },
     );
     if (!response.ok) {
@@ -229,8 +230,19 @@ export class NodeLink extends DurableObject<Env> {
       server.serializeAttachment({ role: "node", nodeId, maxBytes });
       this.ctx.acceptWebSocket(server, ["node"]);
       await this.ctx.storage.put("nodeId", nodeId);
-      await this.sendHeartbeat(nodeId);
       await this.ctx.storage.setAlarm(Date.now() + NodeLink.HEARTBEAT_INTERVAL_MS);
+      // Authentication already succeeded before the request reached this
+      // object. Do not hold the WebSocket upgrade open on a second control-
+      // plane round trip: a slow heartbeat used to make otherwise healthy
+      // node connections fail their handshake. The alarm remains the durable
+      // retry path if this best-effort first heartbeat cannot be delivered.
+      this.ctx.waitUntil(this.sendHeartbeat(nodeId).catch((error) => {
+        console.warn(JSON.stringify({
+          event: "gateway_initial_heartbeat_failed",
+          nodeId,
+          reason: error instanceof Error ? error.message : "Unknown heartbeat failure.",
+        }));
+      }));
     } else {
       const clientId = crypto.randomUUID();
       server.serializeAttachment({ role: "client", clientId, maxBytes });
@@ -285,8 +297,17 @@ export class NodeLink extends DurableObject<Env> {
   }
 
   async webSocketClose(socket: WebSocket, code: number, reason: string) {
-    socket.close(code, reason);
     const attachment = this.attachment(socket);
+    console.info(JSON.stringify({
+      event: "gateway_socket_closed",
+      role: attachment?.role ?? "unknown",
+      code,
+      reason: reason || "No close reason.",
+    }));
+    // The 2026-07-26 compatibility date enables Cloudflare's automatic Close
+    // reply. Calling socket.close(1006, ...) here throws because 1006 is a
+    // reserved, unsendable code; that exception previously skipped cleanup
+    // after abnormal node disconnects and left a stale route behind.
     if (attachment?.role === "node" && !this.openSocket("node")) {
       await this.ctx.storage.delete("nodeId");
       await this.ctx.storage.deleteAlarm();
@@ -306,10 +327,15 @@ export class NodeLink extends DurableObject<Env> {
 
     try {
       await this.sendHeartbeat(nodeId);
-    } finally {
-      if (this.openSocket("node")) {
-        await this.ctx.storage.setAlarm(Date.now() + NodeLink.HEARTBEAT_INTERVAL_MS);
-      }
+    } catch (error) {
+      console.warn(JSON.stringify({
+        event: "gateway_heartbeat_failed",
+        nodeId,
+        reason: error instanceof Error ? error.message : "Unknown heartbeat failure.",
+      }));
+    }
+    if (this.openSocket("node")) {
+      await this.ctx.storage.setAlarm(Date.now() + NodeLink.HEARTBEAT_INTERVAL_MS);
     }
   }
 }

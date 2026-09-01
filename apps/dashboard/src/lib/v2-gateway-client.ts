@@ -67,6 +67,16 @@ const textDecoder = new TextDecoder();
 const X25519_SPKI_PREFIX = Uint8Array.from([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00]);
 const GATEWAY_URL = (import.meta.env?.VITE_SPILLED_GATEWAY_URL as string | undefined)
   ?? "https://spilled-node-gateway.hrdykrystof.workers.dev";
+const GATEWAY_HTTP_TIMEOUT_MS = 12_000;
+const FAST_GATEWAY_RPC_TIMEOUT_MS = 8_000;
+const FAST_GATEWAY_METHODS = new Set([
+  "node.status",
+  "auth.accounts",
+  "auth.refresh",
+  "auth.logout",
+  "auth.watcher.password.login",
+  "auth.admin.password.login",
+]);
 
 // Capability tickets are signed and scoped to a node/capability/action but are
 // not single-use. Reusing the last known node + still-valid ticket for the same
@@ -286,7 +296,10 @@ function gatewayWebSocketUrl(nodeId: string) {
 async function discoverCandidates(capability: PublicCapability) {
   const response = await fetch(
     `/api/server?path=v2%2Fdiscovery%2Fnodes&capability=${encodeURIComponent(capability)}&limit=12`,
-    { headers: { Accept: "application/json" } },
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    },
   );
   if (!response.ok) return [];
   const payload = await response.json() as { candidates?: V2Candidate[] };
@@ -297,6 +310,7 @@ async function issueTicket(candidate: V2Candidate, capability: PublicCapability,
   const response = await fetch("/api/server?path=v2%2Ftickets", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
     body: JSON.stringify({
       nodeId: candidate.nodeId,
       capability,
@@ -311,6 +325,7 @@ async function issuePrivateTicket(candidate: V2Candidate, capability: PrivateCap
   const response = await fetch("/api/server?path=v2%2Fprivate-tickets", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
     body: JSON.stringify({
       nodeId: candidate.nodeId,
       connectionCode: candidate.connectionCode,
@@ -326,7 +341,10 @@ async function issuePrivateTicket(candidate: V2Candidate, capability: PrivateCap
 export async function resolvePrivateGatewayCandidate(connectionCode: string) {
   const response = await fetch(
     `/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=${encodeURIComponent(connectionCode)}`,
-    { headers: { Accept: "application/json" } },
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    },
   );
   const payload = await response.json().catch(() => null) as {
     candidate?: V2Candidate & { connectionCode: string; online: boolean };
@@ -360,10 +378,21 @@ async function sendGatewayRpc(
   const ticketProtocol = `ticket.${bytesToBase64Url(textEncoder.encode(JSON.stringify(ticket)))}`;
   const socket = new WebSocket(gatewayWebSocketUrl(candidate.nodeId), ["spilled-v2", ticketProtocol]);
   const response = await new Promise<EncryptedResponseEnvelopeV2>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      callback();
+    };
+    const requestTimeoutMs = Math.min(
+      ticket.maxDurationMs + 5_000,
+      FAST_GATEWAY_METHODS.has(method) ? FAST_GATEWAY_RPC_TIMEOUT_MS : 95_000,
+    );
     const timeout = window.setTimeout(() => {
+      settle(() => reject(new Error("Gateway request timed out. The private node may be reconnecting.")));
       socket.close();
-      reject(new Error("Gateway request timed out."));
-    }, Math.min(ticket.maxDurationMs + 5_000, 95_000));
+    }, requestTimeoutMs);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({
         version: 2,
@@ -374,26 +403,24 @@ async function sendGatewayRpc(
       }));
     }, { once: true });
     socket.addEventListener("message", (event) => {
-      window.clearTimeout(timeout);
       try {
         const frame = JSON.parse(String(event.data)) as { body?: string };
         if (!frame.body) throw new Error("Gateway response body is missing.");
-        resolve(JSON.parse(frame.body) as EncryptedResponseEnvelopeV2);
+        const parsed = JSON.parse(frame.body) as EncryptedResponseEnvelopeV2;
+        settle(() => resolve(parsed));
       } catch (error) {
-        reject(error);
+        settle(() => reject(error));
       } finally {
         socket.close();
       }
     }, { once: true });
     socket.addEventListener("error", () => {
-      window.clearTimeout(timeout);
-      reject(new Error("Gateway connection failed."));
+      settle(() => reject(new Error("Gateway connection failed.")));
     }, { once: true });
     socket.addEventListener("close", (event) => {
-      if (event.code !== 1000 && event.code !== 1005) {
-        window.clearTimeout(timeout);
-        reject(new Error(event.reason || `Gateway closed the connection (${event.code}).`));
-      }
+      settle(() => reject(new Error(
+        event.reason || `Gateway closed before the node replied (${event.code || 1005}).`,
+      )));
     }, { once: true });
   });
   const payload = JSON.parse(await decodeBrowserNodeResponse({

@@ -17,6 +17,23 @@ import {
 import { normalizeNodeConnectionCode } from "../../../../packages/node-protocol/src";
 
 type ConnectStep = "locate" | "login" | "connected";
+const PRIVATE_NODE_BOOTSTRAP_TIMEOUT_MS = 20_000;
+
+async function waitForPrivateNodeBootstrap<T>(work: Promise<T>) {
+  let timeout: number | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timeout = window.setTimeout(() => reject(new Error(
+          "The private node did not answer within 20 seconds. It may be reconnecting; press Connect securely to retry.",
+        )), PRIVATE_NODE_BOOTSTRAP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) window.clearTimeout(timeout);
+  }
+}
 
 function displayCode(value: string) {
   const compact = value.toUpperCase().replace(/[^A-F0-9]/g, "").slice(0, 16);
@@ -75,10 +92,10 @@ export function PrivateNodeConnectView({ embedded = false, onClose, onConnected 
     setMessage(null);
     try {
       const resolved = await connectPrivateNodeWithCode(value);
-      const [status, nextAccounts] = await Promise.all([
+      const [status, nextAccounts] = await waitForPrivateNodeBootstrap(Promise.all([
         fetchPrivateNodeStatusViaGateway(resolved.connection, resolved.candidate),
         fetchPrivateNodeAccountsViaGateway(resolved.connection, resolved.candidate),
-      ]);
+      ]));
       if (!status.auth?.privateAuthEnabled) throw new Error("This node has not finished private setup yet.");
       if (nextAccounts.length === 0) throw new Error("This node does not have a watcher account yet.");
       const firstAccount = nextAccounts.find((account) => account.accountId === saved.accountId) ?? nextAccounts[0];

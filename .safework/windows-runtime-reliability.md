@@ -56,4 +56,14 @@
 
 ## Next action
 
-- Commit and publish tag `v0.2.0-beta.38` with the verified Windows artifacts.
+- Keep tag `v0.2.0-beta.38`, its published Windows artifacts, and the prior cloud deployment IDs available as rollback points while the production connect hotfix is validated.
+
+## Production connect follow-up (2026-09-01)
+
+- User symptom: entering the live Windows connection code on the hosted site could remain on the loading state instead of showing watcher login.
+- Live evidence: the Windows server was healthy on `127.0.0.1:8787`, but its gateway log contained repeated abnormal `1006` disconnects followed by reconnects.
+- Root cause: the Durable Object `webSocketClose` handler attempted to send the reserved `1006` close code back to the peer. Cloudflare's current runtime already replies to Close frames automatically; trying to send `1006` can throw before stale-node storage and alarm cleanup runs.
+- Gateway fix: let the runtime complete close handshakes, always clean stale node routes, bound heartbeat fetches, keep heartbeat failures from rejecting alarms, and move the initial heartbeat off the WebSocket upgrade critical path.
+- Dashboard fix: bound control-plane fetches and quick private RPC calls, reject any WebSocket close that occurs before a response, retry with a fresh ticket, cap the connect screen at 20 seconds with an actionable retry message, and prevent SPA HTML from retaining an obsolete release.
+- Pre-deploy checks: gateway TypeScript build passed; Wrangler dry run passed; dashboard production build passed; focused private gateway tests passed (10/10), including immediate recovery from a clean early close.
+- Previous production rollback handles: gateway version `268b2c6b-7d80-4441-ab1c-aba96e040c38`; Vercel deployment `dpl_4S4omq9eyyG9B3mgkAVH6vhws8x6`.
