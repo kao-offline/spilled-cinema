@@ -19,4 +19,9 @@
 - The server executor test confirms all three private provider aliases validate the node access token before invoking their handlers.
 - Dashboard and server production builds passed; dashboard output uses `assets/index-CFZJnBbz.js`.
 - Windows privacy-default and private-playback scenario checks passed unchanged.
-- Pending: beta.40 installer, remote installation, production dashboard deployment, and live tab verification.
+- Windows beta.40 installer built successfully with SHA-256 `A8E9BB9F82C452788836C47884A4499B89C073C86E0D6E8DDB86D39E5267F35A`.
+- Beta.40 installed silently on `DESKTOP-KOEDI91`; installer exited 0, scheduled runtime task is running, config hash was preserved, and all 12 post-install health probes retained node `node_b9909ae5609efe5f05d5d53d` / network name `kao-home`.
+- A second post-install check passed 5/5 status probes. Bombuj `latest-movies` returned 4 live items in 686 ms and SvetSerialu `new-episodes` returned 4 live items in 180 ms.
+- Vercel preview deployment: `EvMLf3FYZmxzkKLYoLKhCUoZiFnc`.
+- Vercel production deployment: `4Hg9y4JPF9yxPiD16KkeECxGSSTk`, aliased to `https://spilled.overload.studio`, serving `assets/index-CJKmC6dU.js`.
+- Production browser verification confirmed that the visible SvetSerialu and Bombuj homepage controls switch to the correct feed/search surfaces. The shared verification browser has no private-node login, so authenticated feed contents were verified through the encrypted private-RPC integration tests and the live post-install provider probes instead of accessing the user's private session.
