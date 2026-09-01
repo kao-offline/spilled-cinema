@@ -298,12 +298,14 @@ export class NodeLink extends DurableObject<Env> {
 
   async webSocketClose(socket: WebSocket, code: number, reason: string) {
     const attachment = this.attachment(socket);
-    console.info(JSON.stringify({
-      event: "gateway_socket_closed",
-      role: attachment?.role ?? "unknown",
-      code,
-      reason: reason || "No close reason.",
-    }));
+    if (attachment?.role === "node" || (code !== 1000 && code !== 1005)) {
+      console.info(JSON.stringify({
+        event: "gateway_socket_closed",
+        role: attachment?.role ?? "unknown",
+        code,
+        reason: reason || "No close reason.",
+      }));
+    }
     // The 2026-07-26 compatibility date enables Cloudflare's automatic Close
     // reply. Calling socket.close(1006, ...) here throws because 1006 is a
     // reserved, unsendable code; that exception previously skipped cleanup
