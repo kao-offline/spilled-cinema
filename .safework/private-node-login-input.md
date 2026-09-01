@@ -16,4 +16,9 @@
 - Dashboard TypeScript and production Vite build passed; local output uses `assets/index-B-Yg8eSX.js`.
 - Collaborative-browser local test passed with actual individual key presses: the first `k` remained visible, the completed value was `kao.kao-home`, and the Connect button became enabled.
 - The isolated local Vite process chain was stopped and port 4176 was verified free after the test.
-- Pending: Vercel preview, preview connection verification, production deployment, and production connection verification.
+- Vercel preview `5tRDfWuo4wFxHzS8mvtUooE9urb7` built successfully. Its UI was protected by Vercel preview access, so the shared browser could not enter it; no production traffic was routed there.
+- Production deployment `5RuBgT2TB1eWoU4cgCqGMuYPXzyL` built successfully and was aliased to `https://spilled.overload.studio`; the deployed application bundle is `assets/index-D_Utg5r3.js`.
+- Live production key-by-key test passed: after pressing only `k`, the input value remained `k`; after the remaining individual key presses it contained `kao.kao-home`, and Connect securely was enabled.
+- The first production connection attempt coincided with a transient node-offline response. Read-only checks confirmed both Windows runtime tasks running, the control plane ready, and the public resolver returning `kao-home` online. Retrying the unchanged form succeeded immediately.
+- Final production connection verification passed: the deployed site showed `NODE VERIFIED · KAO-HOME`, `Sign in as kao`, and the viewing-password input.
+- Branch commit deployed: `802c37b`. Previous production deployment `ELELuQ3CuMiWhiuFo8Kpi98Rh4bg` remains the rollback handle.
