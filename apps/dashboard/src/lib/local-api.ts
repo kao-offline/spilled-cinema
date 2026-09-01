@@ -1,6 +1,7 @@
 import { readPrivateNodeConnection, refreshPrivateNodeSessionViaGateway } from "./private-node-client";
 import { requestPrivateGateway, requestPublicGateway, resolvePrivateGatewayCandidate } from "./v2-gateway-client";
 import { getPrivatePlaybackOperation } from "./private-playback-operation";
+import { getPrivateRuntimeOperation } from "./private-runtime-operation";
 import {
   isLocalhostProbeOnCooldown,
   markLocalhostProbeAttempted,
@@ -466,8 +467,8 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     ? init.body as Record<string, unknown>
     : {};
 
-  const privatePlayback = getPrivatePlaybackOperation(path, body);
-  if (privatePlayback) {
+  const privateOperation = getPrivateRuntimeOperation(path, body);
+  if (privateOperation) {
     let connection = readPrivateNodeConnection();
     if (connection.nodeId && connection.connectionCode && connection.token) {
       const request = async () => {
@@ -477,8 +478,8 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
         }
         return {
           candidate,
-          data: await requestPrivateGateway(candidate, "player.resolve", privatePlayback.action, privatePlayback.method, {
-            ...privatePlayback.params,
+          data: await requestPrivateGateway(candidate, privateOperation.capability, privateOperation.action, privateOperation.method, {
+            ...privateOperation.params,
             accessToken: connection.token,
             ...(connection.profileId ? { profileId: connection.profileId } : {}),
           }),
@@ -656,7 +657,7 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
       return gateway;
     }
   } catch (error) {
-    if (getPrivatePlaybackOperation(path, {}) && readPrivateNodeConnection().token) throw error;
+    if (getPrivateRuntimeOperation(path, {}) && readPrivateNodeConnection().token) throw error;
     // Fall through to legacy public fetch servers.
   }
 

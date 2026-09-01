@@ -2,12 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 import { createV2RpcExecutor } from "../../../../server/src/v2-rpc";
 
 function executorFixture() {
+  const providerSearchHandler = vi.fn(async (_request: unknown, response: { end: (body: string) => void }) => {
+    response.end(JSON.stringify({ results: [{ id: "search-result" }] }));
+  });
+  const providerFeedHandler = vi.fn(async (_request: unknown, response: { end: (body: string) => void }) => {
+    response.end(JSON.stringify({ items: [{ id: "feed-result" }] }));
+  });
+  const providerImportHandler = vi.fn(async (_request: unknown, response: { end: (body: string) => void }) => {
+    response.end(JSON.stringify({ show: { slug: "imported" } }));
+  });
   const runtime = {
     getStatus: vi.fn(async () => ({ status: "ok" })),
     listPrivateAccounts: vi.fn(async () => [{ accountId: "watcher" }]),
     loginWatcherPassword: vi.fn(async (input: unknown) => ({ token: "node-session", input })),
+    validatePrivateSession: vi.fn(async () => ({ accountId: "watcher" })),
   };
-  const execute = createV2RpcExecutor({} as never, {} as never, runtime as never);
+  const execute = createV2RpcExecutor({
+    providerSearchHandler,
+    providerFeedHandler,
+    providerImportHandler,
+  } as never, {} as never, runtime as never);
   const call = (method: string, params: Record<string, unknown>, capability: "library.read" | "library.write") => execute({
     method,
     params,
@@ -24,7 +38,7 @@ function executorFixture() {
     ticketId: "ticket-verifier",
     limits: { maxResponseBytes: 1024 * 1024, maxDurationMs: 30_000 },
   });
-  return { runtime, call, verifierCall, execute };
+  return { runtime, call, verifierCall, execute, providerSearchHandler, providerFeedHandler, providerImportHandler };
 }
 
 describe("private node gateway RPC surface", () => {
@@ -48,6 +62,22 @@ describe("private node gateway RPC surface", () => {
       password: "not-sent-to-control-plane",
       profileId: "main",
     });
+  });
+
+  it("serves provider tabs through an authenticated private session", async () => {
+    const { runtime, call, providerSearchHandler, providerFeedHandler, providerImportHandler } = executorFixture();
+    await expect(call("library.provider.search", { accessToken: "session", moduleId: "bombuj" }, "library.read"))
+      .resolves.toEqual({ results: [{ id: "search-result" }] });
+    await expect(call("library.provider.feed", { accessToken: "session", moduleId: "bombuj" }, "library.read"))
+      .resolves.toEqual({ items: [{ id: "feed-result" }] });
+    await expect(call("library.provider.import", { accessToken: "session", moduleId: "bombuj" }, "library.write"))
+      .resolves.toEqual({ show: { slug: "imported" } });
+
+    expect(runtime.validatePrivateSession).toHaveBeenCalledTimes(3);
+    expect(runtime.validatePrivateSession).toHaveBeenCalledWith("session", "library");
+    expect(providerSearchHandler).toHaveBeenCalledOnce();
+    expect(providerFeedHandler).toHaveBeenCalledOnce();
+    expect(providerImportHandler).toHaveBeenCalledOnce();
   });
 
   it("answers capability-scoped verifier probes without contacting an upstream provider", async () => {

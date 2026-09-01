@@ -78,7 +78,7 @@ export function createV2RpcExecutor(
     if (request.method.startsWith("verifier.") && request.principalKind === "verifier") {
       return { ok: true, capability: request.capability };
     }
-    if (request.principalKind === "private" && isPlayerResolveMethod(request.method)) {
+    if (request.principalKind === "private" && (isPlayerResolveMethod(request.method) || isPrivateProviderMethod(request.method))) {
       await runtime.validatePrivateSession(
         typeof params.accessToken === "string" ? params.accessToken : undefined,
         "library",
@@ -86,14 +86,17 @@ export function createV2RpcExecutor(
     }
     switch (request.method) {
       case "provider.search":
+      case "library.provider.search":
         return await invokeJsonHandler(
           typeof params.moduleId === "string" ? handlers.providerSearchHandler : handlers.searchHandler,
           "POST",
           params,
         );
       case "provider.feed":
+      case "library.provider.feed":
         return await invokeJsonHandler(handlers.providerFeedHandler, "POST", params);
       case "provider.import":
+      case "library.provider.import":
         return await invokeJsonHandler(handlers.providerImportHandler, "POST", params);
       case "player.embed.resolve":
         return await invokeJsonHandler(handlers.playerResolveHandler, "POST", params);
@@ -341,4 +344,10 @@ export function isPlayerResolveMethod(method: string) {
     method === "player.clean.resolve" ||
     method === "player.playback.resolve" ||
     method === "player.resolve";
+}
+
+export function isPrivateProviderMethod(method: string) {
+  return method === "library.provider.search" ||
+    method === "library.provider.feed" ||
+    method === "library.provider.import";
 }

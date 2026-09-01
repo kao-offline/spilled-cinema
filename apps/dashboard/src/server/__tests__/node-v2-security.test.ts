@@ -220,6 +220,49 @@ describe("node v2 transport security", () => {
       result: { echoed: { query: "Silo" } },
     });
 
+    const privateUnsigned = {
+      ...unsigned,
+      ticketId: "ticket-private-provider-feed",
+      principalKind: "private" as const,
+      capability: "library.read" as const,
+      action: "provider.feed",
+      nonce: "ticket-private-provider-feed-nonce",
+    };
+    const privateTicket: CapabilityTicketV2 = {
+      ...privateUnsigned,
+      signature: signPayload(privateUnsigned, signerPrivate),
+    };
+    const privateRequest = createEncryptedNodeRequest({
+      nodeTransportPublicKey: identity.x25519PublicKey,
+      requestId: "request-private-provider-feed",
+      ticketId: privateTicket.ticketId,
+      issuedAt: now,
+      expiresAt: now + 10_000,
+      plaintext: JSON.stringify({
+        method: "library.provider.feed",
+        params: { moduleId: "bombuj", accessToken: "node-session" },
+      }),
+    });
+    const privateResponse = await runtime.handleEncryptedRemoteRequest({
+      ticket: privateTicket,
+      envelope: privateRequest.envelope,
+      controlPlanePublicKey: signerPublic,
+      execute: async ({ method, params, principalKind }) => ({ method, params, principalKind }),
+    });
+    expect(JSON.parse(decryptNodeResponse({
+      response: privateResponse,
+      request: privateRequest.envelope,
+      clientEphemeralPrivateKey: privateRequest.clientEphemeralPrivateKey,
+      nodeTransportPublicKey: identity.x25519PublicKey,
+    }).toString("utf8"))).toEqual({
+      ok: true,
+      result: {
+        method: "library.provider.feed",
+        params: { moduleId: "bombuj", accessToken: "node-session" },
+        principalKind: "private",
+      },
+    });
+
     const largeUnsigned = {
       ...unsigned,
       ticketId: "ticket-rpc-large",
