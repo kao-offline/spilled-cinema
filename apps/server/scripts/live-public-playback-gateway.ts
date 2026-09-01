@@ -6,7 +6,7 @@ import {
 } from "../../dashboard/src/lib/v2-gateway-client";
 
 const dashboardUrl = process.env.SPILLED_LIVE_DASHBOARD_URL ?? "https://spilled.overload.studio";
-const gatewayUrl = process.env.SPILLED_LIVE_GATEWAY_URL ?? "https://spilled-node-gateway.4thsj85ywn.workers.dev";
+const gatewayUrl = process.env.SPILLED_LIVE_GATEWAY_URL ?? "https://spilled-node-gateway.hrdykrystof.workers.dev";
 
 type Ticket = {
   version: 2;

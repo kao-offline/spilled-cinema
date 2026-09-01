@@ -50,7 +50,8 @@
 - Full process-tree kill test passed: the repeating task watchdog restored the verifier in about one minute and the server/readiness in about two minutes, despite Windows not honoring its ordinary restart-on-failure setting for a forced kill.
 - Gateway uses a direct Cloudflare service binding to the control-plane edge. Production gateway version: `268b2c6b-7d80-4441-ab1c-aba96e040c38`.
 - The canary gateway link is connected, the control plane reports one online node, and the verifier reports one verified live node plus seven offline imported nodes as degraded, with zero pass errors.
-- Vercel production deployment `4ZiTaMBxn6tnY7kvJmTkV2cdiBgS` is aliased to `https://spilled.overload.studio`; browser verification loaded the dashboard and returned the verified node through `/api/server/v2/discovery/nodes?capability=provider.feed`.
+- Vercel production deployment `4S4omq9eyyG9B3mgkAVH6vhws8x6` is aliased to `https://spilled.overload.studio`; browser verification loaded the dashboard and returned the verified node through `/api/server/v2/discovery/nodes?capability=provider.feed`.
+- The production browser resolved connection code `15DB-F67A-DA86-5792`, opened an authenticated `spilled-v2` WebSocket to the current gateway, listed both watcher accounts, and carried a password-login attempt through encrypted RPC to the node's credential rejection. This verifies the private login transport and node-local authentication boundary without changing user credentials.
 - Release artifact SHA-256 values: server installer `6024EE412C881B1C85CD8D470FEAC288C30812F65628AA30F5E676834C6B2AF5`; verifier installer `FAA0DCD02819119B675F2F1DDF251BE3F4D29BAC748A1F4D77AAA8DA3FBCE0F8`.
 
 ## Next action

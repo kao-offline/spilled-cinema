@@ -66,7 +66,7 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const X25519_SPKI_PREFIX = Uint8Array.from([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00]);
 const GATEWAY_URL = (import.meta.env?.VITE_SPILLED_GATEWAY_URL as string | undefined)
-  ?? "https://spilled-node-gateway.4thsj85ywn.workers.dev";
+  ?? "https://spilled-node-gateway.hrdykrystof.workers.dev";
 
 // Capability tickets are signed and scoped to a node/capability/action but are
 // not single-use. Reusing the last known node + still-valid ticket for the same
