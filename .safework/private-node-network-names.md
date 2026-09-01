@@ -37,5 +37,5 @@
 - Pre-install inspection found the live beta.38 process returning a DPAPI CLR initialization error from `/api/status`. The old store launched PowerShell for every secret read and permanently cached a rejected initialization promise.
 - DPAPI storage now decrypts its master key once per process, shares concurrent initialization, keeps the key only in memory, retries transient PowerShell/CLR failures, times out hung helpers, and clears rejected initialization for later recovery.
 - DPAPI stress scenarios passed: 12 serialized writes, 120 concurrent reads, restart decryption, and no plaintext `.active` key file.
-- The initial beta.39 installer hash was superseded before deployment; a rebuilt artifact is pending.
+- The initial beta.39 installer hash was superseded before deployment. Final rebuilt installer SHA-256: `6629D7E9EACFE8BBCA31E0BCFF65661E3A4B50790BEC8105693DD7CC1BEFB3BC`.
 - Windows/dashboard deployment and live `username.servername` verification are pending.
