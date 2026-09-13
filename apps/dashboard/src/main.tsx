@@ -8,19 +8,13 @@ if (window.spilledNative?.kind === "native") {
   document.body.classList.add("native-shell");
 }
 
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
-      .getRegistrations()
-      .then(async (registrations) => {
-        if (registrations.length === 0) {
-          return;
-        }
-
-        await Promise.all(registrations.map((registration) => registration.unregister()));
-      })
+      .register("/sw.js", { scope: "/", updateViaCache: "none" })
+      .then((registration) => registration.update())
       .catch(() => {
-        // Ignore service worker cleanup failures and keep app startup resilient.
+        // Offline support is progressive; registration failure must not block startup.
       });
   });
 }

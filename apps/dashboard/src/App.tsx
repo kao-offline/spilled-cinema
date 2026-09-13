@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { scheduleEpisodeRefresh } from "./lib/episode-refresh";
 import { RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
@@ -25,6 +26,8 @@ import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
 import { ToastHost } from "./components/ToastHost";
+import { showToast } from "./lib/toast";
+import { queuePrivatePlaybackProgress, startPrivatePlaybackSync } from "./lib/private-playback-sync";
 import { TvModeToggle } from "./components/TvModeToggle";
 import { ImportActivityPopup, type ImportActivity } from "./components/ImportActivityPopup";
 import { RemoteImportPreview } from "./components/RemoteImportPreview";
@@ -687,12 +690,20 @@ function AppContent() {
   useEffect(() => {
     const refreshPrivateNodeConnection = () => setPrivateNodeConnection(readPrivateNodeConnection());
     window.addEventListener("storage", refreshPrivateNodeConnection);
+    window.addEventListener("spilled:private-connection", refreshPrivateNodeConnection);
     window.addEventListener("focus", refreshPrivateNodeConnection);
     return () => {
       window.removeEventListener("storage", refreshPrivateNodeConnection);
+      window.removeEventListener("spilled:private-connection", refreshPrivateNodeConnection);
       window.removeEventListener("focus", refreshPrivateNodeConnection);
     };
   }, []);
+
+  useEffect(() => startPrivatePlaybackSync(privateNodeConnection, {
+    getState: () => stateRef.current,
+    onState: (next) => { writeLibraryState(next); stateRef.current = next; setState(next); },
+    onError: (message) => showToast(message, "info"),
+  }), [privateNodeConnection.nodeUrl, privateNodeConnection.token, privateNodeConnection.accountId, privateNodeConnection.profileId]);
 
   useEffect(() => {
     let canceled = false;
@@ -730,6 +741,7 @@ function AppContent() {
       return { skipped: true, checkedFeeds: 0, refreshedTitles: 0, changedTitles: [] as string[], failures: [] as string[] };
     }
     libraryWatcherActiveRef.current = true;
+    setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
       const result = await scanProviderFeeds(
         stateRef.current,
@@ -764,6 +776,13 @@ function AppContent() {
         });
       }
 
+      setNewEpisodeCheckState({
+        checking: false,
+        error: result.failures.length > 0,
+        message: result.failures.length > 0
+          ? "Some sources could not be checked. Your saved episodes are still available."
+          : result.changedTitles.length > 0 ? `Updated ${result.changedTitles.length} titles.` : "Your saved series are up to date.",
+      });
       return {
         skipped: false,
         checkedFeeds: result.checkedFeeds,
@@ -771,12 +790,16 @@ function AppContent() {
         changedTitles: result.changedTitles,
         failures: result.failures,
       };
+    } catch (error) {
+      setNewEpisodeCheckState({ checking: false, message: "Updates could not be checked. Check your connection and retry.", error: true });
+      throw error;
     } finally {
       libraryWatcherActiveRef.current = false;
     }
   };
 
   const handleCheckNewEpisodes = async (forSlug?: string) => {
+    if (libraryWatcherActiveRef.current) return;
     setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
       const result = await performLibraryWatcherScan(providerModules);
@@ -867,47 +890,10 @@ function AppContent() {
 
   useEffect(() => {
     if (providerModules.length === 0) return;
-    let canceled = false;
-    let timer: number | null = null;
-
-    const poll = async () => {
-      if (canceled) return;
-      let retrySoon = false;
-      try {
-        const result = await performLibraryWatcherScan(providerModules);
-        if (canceled) return;
-        retrySoon = result.failures.length > 0 && result.checkedFeeds === 0;
-      } catch {
-        retrySoon = true;
-      } finally {
-        if (!canceled) {
-          const delay = retrySoon
-            ? 15_000
-            : document.visibilityState === "visible"
-              ? 2 * 60_000
-              : 5 * 60_000;
-          timer = window.setTimeout(() => void poll(), delay);
-        }
-      }
-    };
-
-    const runNow = () => {
-      if (canceled || document.visibilityState === "hidden") return;
-      if (timer !== null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => void poll(), 0);
-    };
-
-    runNow();
-    window.addEventListener("focus", runNow);
-    window.addEventListener("online", runNow);
-    document.addEventListener("visibilitychange", runNow);
-    return () => {
-      canceled = true;
-      if (timer !== null) window.clearTimeout(timer);
-      window.removeEventListener("focus", runNow);
-      window.removeEventListener("online", runNow);
-      document.removeEventListener("visibilitychange", runNow);
-    };
+    return scheduleEpisodeRefresh(async () => {
+      const result = await performLibraryWatcherScan(providerModules);
+      return result.failures.length === 0;
+    });
   }, [providerModules]);
 
   async function refreshVaultState() {
@@ -3488,9 +3474,11 @@ function AppContent() {
     setState(nextState);
   }
 
-  function handlePlaybackProgress(episodeId: string, progress: { currentTime: number; duration: number }) {
+  function handlePlaybackProgress(episodeId: string, progress: { currentTime: number; duration: number; flush?: boolean }) {
     const nextState = updateEpisodePlaybackProgress(episodeId, progress);
+    stateRef.current = nextState;
     setState(nextState);
+    queuePrivatePlaybackProgress(nextState, episodeId, progress.flush);
   }
 
   function handleGoHomeFromPlayer() {
@@ -3506,11 +3494,17 @@ function AppContent() {
   }
 
   function handleEpisodeEnded(episodeId: string) {
-    setState(markEpisodeWatched(episodeId));
+    const next = markEpisodeWatched(episodeId);
+    stateRef.current = next;
+    setState(next);
+    queuePrivatePlaybackProgress(next, episodeId, true);
   }
 
   function handleSetEpisodeWatched(episodeId: string, watched: boolean) {
-    setState(setEpisodeWatched(episodeId, watched));
+    const next = setEpisodeWatched(episodeId, watched);
+    stateRef.current = next;
+    setState(next);
+    queuePrivatePlaybackProgress(next, episodeId, true);
   }
 
   function handleCloseWelcome() {
@@ -3611,6 +3605,7 @@ function AppContent() {
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
           }}
+          privateNodeConnection={privateNodeConnection}
           onOpenShow={handleOpenShow}
           onPlayShow={(show) => {
           const episode = show.episodes[show.episodes.length - 1];
@@ -3620,6 +3615,11 @@ function AppContent() {
             handleOpenShow(show.slug);
           }
           }}
+          onPlayEpisode={handleSelectEpisode}
+          onCheckNewEpisodes={() => {
+            void handleCheckNewEpisodes();
+          }}
+          newEpisodeCheckState={newEpisodeCheckState}
           onImportRemote={async (platform, slug, mediaType, context) => {
             await handleImport(platform, slug, mediaType, context);
           }}

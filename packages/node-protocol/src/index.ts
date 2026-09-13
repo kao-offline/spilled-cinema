@@ -17,6 +17,73 @@ export type NodeCapability = (typeof NODE_CAPABILITIES)[number];
 export type NodeVisibility = (typeof NODE_VISIBILITY)[number];
 export type NodeMode = (typeof NODE_MODES)[number];
 
+const NODE_CONNECTION_CODE_HEX_LENGTH = 16;
+export const NODE_NETWORK_NAME_MIN_LENGTH = 3;
+export const NODE_NETWORK_NAME_MAX_LENGTH = 32;
+
+const RESERVED_NODE_NETWORK_NAMES = new Set([
+  "admin",
+  "api",
+  "app",
+  "connect",
+  "dashboard",
+  "gateway",
+  "help",
+  "localhost",
+  "login",
+  "node",
+  "spilled",
+  "support",
+  "verifier",
+  "www",
+]);
+
+/** A connection code is an opaque locator, never an authentication factor. */
+export function formatNodeConnectionCode(hexDigest: string) {
+  const prefix = hexDigest.trim().slice(0, NODE_CONNECTION_CODE_HEX_LENGTH);
+  if (!/^[a-f0-9]{16}$/i.test(prefix)) {
+    throw new Error("Connection-code digest is invalid.");
+  }
+  return prefix.toUpperCase().match(/.{1,4}/g)!.join("-");
+}
+
+export function normalizeNodeConnectionCode(value: string) {
+  const compact = value.trim().toUpperCase().replace(/^SPILL(?:ED)?/, "").replace(/[^A-F0-9]/g, "");
+  if (compact.length !== NODE_CONNECTION_CODE_HEX_LENGTH) return null;
+  return compact.match(/.{1,4}/g)!.join("-");
+}
+
+/** Returns the canonical network name, or null when the requested name is unsafe. */
+export function normalizeNodeNetworkName(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized.length < NODE_NETWORK_NAME_MIN_LENGTH ||
+    normalized.length > NODE_NETWORK_NAME_MAX_LENGTH ||
+    RESERVED_NODE_NETWORK_NAMES.has(normalized) ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])$/.test(normalized) ||
+    normalized.includes("--")
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+export type PrivateNodeLoginName = {
+  username: string;
+  networkName: string;
+};
+
+/** Parses a viewer locator such as `kao.home-cinema`. */
+export function parsePrivateNodeLoginName(value: string): PrivateNodeLoginName | null {
+  const normalized = value.trim().toLowerCase();
+  const separator = normalized.lastIndexOf(".");
+  if (separator <= 0 || separator === normalized.length - 1) return null;
+  const username = normalized.slice(0, separator);
+  const networkName = normalizeNodeNetworkName(normalized.slice(separator + 1));
+  if (!networkName || !/^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/.test(username)) return null;
+  return { username, networkName };
+}
+
 export const V2_CAPABILITIES = [
   "provider.search",
   "provider.feed",

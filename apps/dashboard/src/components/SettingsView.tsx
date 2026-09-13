@@ -1,5 +1,6 @@
 import type { ChangeEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { PrivateWatcherSignIn } from "./PrivateWatcherSignIn";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -633,6 +634,7 @@ export function SettingsView({
       const next = writePrivateNodeConnection({
         ...privateNode,
         nodeUrl,
+        ...(nodeUrl !== privateNode.nodeUrl ? { token: null, accountId: null, profileId: null, accountName: null, profileName: null } : {}),
       });
       setPrivateNode(next);
       if (status.auth?.setupRequired) {
@@ -668,7 +670,7 @@ export function SettingsView({
       setPrivateNodeStatus(candidate.status);
       setPrivateAccounts(accounts);
       setPrivateAccountId((current) => current || accounts[0]?.accountId || "");
-      setPrivateNode(writePrivateNodeConnection({ ...privateNode, nodeUrl: candidate.nodeUrl }));
+      setPrivateNode(writePrivateNodeConnection({ ...privateNode, nodeUrl: candidate.nodeUrl, ...(candidate.nodeUrl !== privateNode.nodeUrl ? { token: null, accountId: null, profileId: null, accountName: null, profileName: null } : {}) }));
       if (candidate.status.auth?.setupRequired) {
         setShowPrivateSetup(false);
         setPrivateNodeMessage("Found a server waiting for setup. Open Setup to enter the terminal verification code.");
@@ -685,6 +687,7 @@ export function SettingsView({
   function persistPrivateLogin(input: {
     nodeUrl: string;
     token: string;
+    refreshToken?: string | null;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -694,6 +697,7 @@ export function SettingsView({
     const next = writePrivateNodeConnection({
       nodeUrl: input.nodeUrl,
       token: input.token,
+      refreshToken: input.refreshToken ?? null,
       accountId: input.account.accountId,
       profileId,
       accountName: input.account.displayName,
@@ -1230,7 +1234,7 @@ export function SettingsView({
                   ) : null}
                 </div>
               </PreferenceRow>
-              {privateNodeMessage ? (
+              {privateNodeMessage && !(privateAccounts.length > 0 && !privateNode.token && !privateNodeStatus?.auth?.setupRequired) ? (
                 <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 text-sm text-white/55">
                   {privateNodeMessage}
                 </div>
@@ -1344,38 +1348,7 @@ export function SettingsView({
 
             {privateAccounts.length > 0 && !privateNode.token && !privateNodeStatus?.auth?.setupRequired ? (
               <Panel title="Watcher sign in" hint="Watcher accounts are for profiles, library state, and private downloads. Admin management is separate.">
-                <PreferenceRow title="Watcher" hint="Choose the account that owns your profiles.">
-                  <select
-                    value={privateAccountId}
-                    onChange={(event) => setPrivateAccountId(event.target.value)}
-                    className="h-10 rounded-full border border-white/10 bg-black/40 px-4 text-sm text-white outline-none"
-                  >
-                    {privateAccounts.map((account) => (
-                      <option key={account.accountId} value={account.accountId}>
-                        {account.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </PreferenceRow>
-                <PreferenceRow title="Password" hint="Use the watcher password set during setup or in the Admin page.">
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <input
-                      type="password"
-                      value={privateWatcherPassword}
-                      onChange={(event) => setPrivateWatcherPassword(event.target.value)}
-                      placeholder="Watcher password"
-                      className="h-10 rounded-full border border-white/10 bg-black/20 px-4 text-sm text-white outline-none placeholder:text-white/28"
-                    />
-                    <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePassword()}>
-                      Sign in
-                    </ActionButton>
-                  </div>
-                </PreferenceRow>
-                <PreferenceRow title="Passkey login" hint="Use an enrolled passkey for this account.">
-                  <ActionButton disabled={privateNodeBusy} variant="primary" onClick={() => void handleLoginPrivatePasskey()}>
-                    Sign in with passkey
-                  </ActionButton>
-                </PreferenceRow>
+                <PrivateWatcherSignIn accounts={privateAccounts} accountId={privateAccountId} password={privateWatcherPassword} busy={privateNodeBusy} message={privateNodeMessage} onAccountChange={(value) => { setPrivateAccountId(value); setPrivateWatcherPassword(""); setPrivateNodeMessage(null); }} onPasswordChange={setPrivateWatcherPassword} onPasswordLogin={() => void handleLoginPrivatePassword()} onPasskeyLogin={() => void handleLoginPrivatePasskey()} />
                 <PreferenceRow title="Enroll passkey" hint="Requires the setup secret from the private server config. The app never stores it.">
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input

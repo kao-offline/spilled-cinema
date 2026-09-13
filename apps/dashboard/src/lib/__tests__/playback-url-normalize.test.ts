@@ -44,9 +44,11 @@ describe("normalizePlaybackUrlForClient", () => {
     )).toBe(`${DASHBOARD_ORIGIN}/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1`);
   });
 
-  it("keeps reachable node-tunnel playback URLs on desktop (node origin is reachable)", () => {
+  it("routes localtunnel playback URLs through the node proxy (video tags cannot send the bypass header)", () => {
     const url = "https://node-abc.loca.lt/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1";
-    expect(normalizePlaybackUrlForClient(url)).toBe(url);
+    expect(normalizePlaybackUrlForClient(url)).toBe(
+      `/api/node-proxy?node=${encodeURIComponent("https://node-abc.loca.lt")}&path=${encodeURIComponent("/api/download-full/browser-file?url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8&playback=1")}`,
+    );
   });
 
   it("keeps reachable node-tunnel playback URLs on mobile (do not reroute tunneled media through the Vercel proxy)", () => {

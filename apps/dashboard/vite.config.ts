@@ -1,6 +1,7 @@
 import { createLogger, defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { pwaShellPlugin } from "./scripts/pwa-plugin";
 import { createDashboardApiPlugin } from "../../packages/node-client/src/vite-plugin";
 
 function createDashboardLogger() {
@@ -42,6 +43,6 @@ export default defineConfig(({ mode }) => {
         ignored: ["**/.spilledcinema/**", "**/downloads/**", "**/dist/**"],
       },
     },
-    plugins: [react(), tailwindcss(), createDashboardApiPlugin()],
+    plugins: [react(), tailwindcss(), createDashboardApiPlugin(), pwaShellPlugin()],
   };
 });

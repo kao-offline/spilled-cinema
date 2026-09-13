@@ -50,6 +50,18 @@ export function normalizePlaybackUrlForClient(url: string) {
 
   const localRuntimeHost = ["127.0.0.1", "localhost"].includes(parsed.hostname);
   if (isCanonicalPath && !localRuntimeHost) {
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "loca.lt" || hostname.endsWith(".loca.lt")) {
+      // Localtunnel serves a 511 interstitial ("Network Authentication Required")
+      // to browser-navigated/media requests that lack the bypass-tunnel-reminder
+      // header. A <video> tag cannot send that header, so route localtunnel
+      // media through the same-origin /api/node-proxy, which adds the header
+      // server-side. (trycloudflare.com has no interstitial and stays direct.)
+      const proxy = new URL("/api/node-proxy", window.location.origin);
+      proxy.searchParams.set("node", parsed.origin);
+      proxy.searchParams.set("path", `${BROWSER_FILE_PATH}${segment.search}`);
+      return `${proxy.pathname}${proxy.search}`;
+    }
     // A reachable node endpoint (e.g. a public fetch tunnel) proxies media from
     // the source IP and rewrites the playlist to its own origin, so it works on
     // every device, including Apple mobile. Keep it as-is.

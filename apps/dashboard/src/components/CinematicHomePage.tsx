@@ -9,6 +9,7 @@ import { fetchExplorePeopleSuggestions, fetchTrendingFeed } from "../lib/discove
 import { checkVidkingAvailability, HOMEPAGE_ARTWORK_VERSION } from "../lib/import-client";
 import { buildHomepageRails, type HomepageRailItem } from "../lib/homepage-rails";
 import type { ExploreItem, ImportedShow, LibraryState, UserTasteProfile } from "../lib/types";
+import type { PrivateNodeConnection } from "../lib/private-node-client";
 import type { IntegrationId } from "../lib/integrations";
 import { CommandMenu } from "./CommandMenu";
 import { readHomepageTab, writeHomepageTab, type HomepageTab } from "../lib/provider-home-preferences";
@@ -19,6 +20,9 @@ import { HomeTopChrome } from "./HomeTopChrome";
 import { MobileHomePage } from "./MobileHomePage";
 import { ProviderHomeSurface } from "./ProviderHomeSurface";
 import type { ImportActivity } from "./ImportActivityPopup";
+import { buildContinueWatchingItems, buildNewEpisodeItems } from "../lib/home-personalization";
+import { HomePersonalizedRail } from "./HomePersonalizedRail";
+import { HomeAccountSheet } from "./HomeAccountSheet";
 
 type CinematicHomePageProps = {
   state: LibraryState;
@@ -30,8 +34,12 @@ type CinematicHomePageProps = {
   onOpenFavorites: () => void;
   onOpenExplore: () => void;
   onOpenSettings: () => void;
+  privateNodeConnection: PrivateNodeConnection;
   onOpenShow: (slug: string) => void;
   onPlayShow: (show: ImportedShow) => void;
+  onPlayEpisode: (episode: ImportedShow["episodes"][number]) => void;
+  onCheckNewEpisodes: () => void;
+  newEpisodeCheckState: { checking: boolean; message: string | null; error: boolean };
   onImportRemote: (platform: IntegrationId, slug: string, mediaType?: "movie" | "serial", context?: { title?: string; posterUrl?: string | null }) => Promise<unknown>;
   onEnsureHomepageTextArtwork: (slug: string) => void;
   importActivity?: ImportActivity | null;
@@ -83,8 +91,12 @@ export function CinematicHomePage({
   onOpenFavorites,
   onOpenExplore,
   onOpenSettings,
+  privateNodeConnection,
   onOpenShow,
   onPlayShow,
+  onPlayEpisode,
+  onCheckNewEpisodes,
+  newEpisodeCheckState,
   onImportRemote,
   onEnsureHomepageTextArtwork,
   importActivity,
@@ -98,6 +110,7 @@ export function CinematicHomePage({
   const [busyResultId, setBusyResultId] = useState<string | null>(null);
   const [trendingItems, setTrendingItems] = useState<ExploreItem[]>([]);
   const [homeTab, setHomeTab] = useState<HomepageTab>(() => readHomepageTab());
+  const [accountOpen, setAccountOpen] = useState(false);
   const requestedArtworkSlugs = useRef(new Set<string>());
   const availabilityRequestKey = useRef<string>("");
 
@@ -274,6 +287,8 @@ export function CinematicHomePage({
       return { ...item, importStatus: importActivity.status };
     }),
   })), [baseRails, importActivity]);
+  const newEpisodeItems = useMemo(() => buildNewEpisodeItems(state.shows), [state.shows]);
+  const continueWatchingItems = useMemo(() => buildContinueWatchingItems(state.shows), [state.shows]);
 
   useEffect(() => {
     const missingArtworkSlugs = rails
@@ -395,19 +410,27 @@ export function CinematicHomePage({
         onOpenFavorites={onOpenFavorites}
         onOpenExplore={onOpenExplore}
         onOpenSettings={onOpenSettings}
+        onOpenAccount={() => setAccountOpen(true)}
+        accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName}
+        motionPaused={accountOpen || commandOpen}
         onOpenLocal={handleOpenRailLocal}
         onImportRemote={handleImportRailRemote}
         onPlayFeatured={() => {
           if (featuredShow && latestFeaturedEpisode) onPlayShow(featuredShow);
           else openSearch();
         }}
+        newEpisodeItems={newEpisodeItems}
+        continueWatchingItems={continueWatchingItems}
+        newEpisodeCheckState={newEpisodeCheckState}
+        onCheckNewEpisodes={onCheckNewEpisodes}
+        onPlayEpisode={onPlayEpisode}
         activeTab={homeTab}
         onTabChange={setHomeTab}
         providerContent={providerSurface}
       />
 
       <div className="hidden lg:block">
-        <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} activeTab={homeTab} onTabChange={setHomeTab} />
+        <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 
         {homeTab === "home" ? <><HomeHero
           featuredShow={featuredShow}
@@ -427,6 +450,18 @@ export function CinematicHomePage({
         />
 
         <main className="relative z-10 -mt-8 pb-24">
+          <HomePersonalizedRail
+            kind="continue-watching"
+            items={continueWatchingItems}
+            onPlay={(item) => onPlayEpisode(item.episode)}
+          />
+          <HomePersonalizedRail
+            kind="new-episodes"
+            items={newEpisodeItems}
+            freshness={newEpisodeCheckState}
+            onRetry={onCheckNewEpisodes}
+            onPlay={(item) => onPlayEpisode(item.episode)}
+          />
           {rails.length > 0 ? (
             rails.map((rail) => (
               <HomeRail key={rail.id} rail={rail} onOpenLocal={handleOpenRailLocal} onImportRemote={handleImportRailRemote} />
@@ -443,6 +478,8 @@ export function CinematicHomePage({
           )}
         </main></> : providerSurface}
       </div>
+
+      <HomeAccountSheet open={accountOpen} connection={privateNodeConnection} onClose={() => setAccountOpen(false)} onOpenSettings={onOpenSettings} />
 
       <CommandMenu
         open={commandOpen}

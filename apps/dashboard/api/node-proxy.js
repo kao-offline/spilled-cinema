@@ -38,7 +38,7 @@ export function isAllowedNodePath(path) {
     path === "/api/explore/feed" ||
     path === "/api/explore/people" ||
     path === "/api/trending/feed" ||
-    path === "/api/subtitle-proxy" ||
+    (path === "/api/subtitle-proxy" || path.startsWith("/api/subtitle-proxy?")) ||
     path === "/api/player/resolve" ||
     path === "/api/player/clean-resolve" ||
     path === "/api/player/playback-resolve" ||

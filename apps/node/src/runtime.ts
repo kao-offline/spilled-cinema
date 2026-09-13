@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { mergePlaybackProgress, type PlaybackProgressRecord } from "../../../packages/storage/src/playback-progress";
 import { relative, resolve } from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { hash as hashArgon2, verify as verifyArgon2 } from "@node-rs/argon2";
@@ -32,6 +33,9 @@ const REMOTE_METHOD_CAPABILITIES: Record<string, Capability> = {
   "provider.search": "provider.search",
   "provider.feed": "provider.feed",
   "provider.import": "provider.import",
+  "library.provider.search": "library.read",
+  "library.provider.feed": "library.read",
+  "library.provider.import": "library.write",
   "player.embed.resolve": "player.resolve",
   "player.clean.resolve": "player.resolve",
   "player.playback.resolve": "player.resolve",
@@ -2117,7 +2121,7 @@ export class SpilledCinemaNodeRuntime {
     });
   }
 
-  async getPrivateLibrary(token: string | undefined, profileId: string) {
+  async getPrivateLibrary(token: string | undefined, profileId: string): Promise<PrivateProfileState> {
     const session = await this.validatePrivateSession(token, "library", profileId);
     const state = await this.loadState();
     return state.privateProfiles.find((entry) => entry.accountId === session.accountId && entry.profileId === profileId) ?? {
@@ -2131,26 +2135,50 @@ export class SpilledCinemaNodeRuntime {
     } satisfies PrivateProfileState;
   }
 
+  private profileWriteQueue: Promise<unknown> = Promise.resolve();
+
+  private enqueueProfileWrite<T>(operation: () => Promise<T>) {
+    const write = this.profileWriteQueue.catch(() => undefined).then(operation);
+    this.profileWriteQueue = write;
+    return write;
+  }
+
   async putPrivateLibrary(token: string | undefined, profileId: string, patch: Partial<PrivateProfileState>) {
-    const session = await this.validatePrivateSession(token, "library", profileId);
-    const existing = await this.getPrivateLibrary(token, profileId);
-    const nextProfile: PrivateProfileState = {
-      accountId: session.accountId,
-      profileId,
-      libraryState: patch.libraryState ?? existing.libraryState,
-      settings: patch.settings ?? existing.settings,
-      enabledProviderFeeds: patch.enabledProviderFeeds ?? existing.enabledProviderFeeds,
-      downloadedLanguages: patch.downloadedLanguages ?? existing.downloadedLanguages,
-      updatedAt: Date.now(),
-    };
-    const state = await this.loadState();
-    await this.saveState({
-      ...state,
-      privateProfiles: state.privateProfiles
-        .filter((entry) => !(entry.accountId === session.accountId && entry.profileId === profileId))
-        .concat(nextProfile),
+    return this.enqueueProfileWrite(async () => {
+      const session = await this.validatePrivateSession(token, "library", profileId);
+      const existing = await this.getPrivateLibrary(token, profileId);
+      const nextProfile: PrivateProfileState = {
+        accountId: session.accountId,
+        profileId,
+        libraryState: patch.libraryState ?? existing.libraryState,
+        settings: patch.settings ?? existing.settings,
+        enabledProviderFeeds: patch.enabledProviderFeeds ?? existing.enabledProviderFeeds,
+        downloadedLanguages: patch.downloadedLanguages ?? existing.downloadedLanguages,
+        playbackProgress: existing.playbackProgress,
+        updatedAt: Date.now(),
+      };
+      const state = await this.loadState();
+      await this.saveState({
+        ...state,
+        privateProfiles: state.privateProfiles
+          .filter((entry) => !(entry.accountId === session.accountId && entry.profileId === profileId))
+          .concat(nextProfile),
+      });
+      return nextProfile;
     });
-    return nextProfile;
+  }
+
+  async putPrivatePlaybackProgress(token: string | undefined, profileId: string, updates: PlaybackProgressRecord[]) {
+    // Serialize all profile writes so progress cannot race a full profile update.
+    return this.enqueueProfileWrite(async () => {
+      const session = await this.validatePrivateSession(token, "library", profileId);
+      const existing = await this.getPrivateLibrary(token, profileId);
+      const playbackProgress = mergePlaybackProgress(existing.playbackProgress ?? {}, updates);
+      const state = await this.loadState();
+      const next = { ...existing, playbackProgress, updatedAt: Date.now() };
+      await this.saveState({ ...state, privateProfiles: state.privateProfiles.filter((entry) => !(entry.accountId === session.accountId && entry.profileId === profileId)).concat(next) });
+      return playbackProgress;
+    });
   }
 
   async getPrivateStorageSummary(token: string | undefined) {

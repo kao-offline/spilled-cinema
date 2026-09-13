@@ -413,7 +413,7 @@ export async function startBrowserResolvedDownload(episode: LibraryEpisode): Pro
 
     if (response.ok && response.data?.downloadUrl && response.data?.resolvedUrl && response.data?.refererUrl) {
       return {
-        downloadUrl: resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport)),
+        downloadUrl: normalizePlaybackUrlForClient(resolveRuntimeUrl(response.data.downloadUrl, mediaOriginFromRuntime(response.origin, response.transport))),
         resolvedUrl: response.data.resolvedUrl,
         refererUrl: response.data.refererUrl,
       };

@@ -26,7 +26,9 @@ function extractIdsFromUrl(url: string): SkipTitleIds {
     const parsed = new URL(url);
     const tmdbParam = parsed.searchParams.get("tmdb") ?? parsed.searchParams.get("tmdb_id");
     if (tmdbParam && /^\d{3,9}$/.test(tmdbParam)) ids.tmdb = tmdbParam;
-  } catch {}
+  } catch {
+    // A provider URL without a standard URL shape can still contain an IMDb id.
+  }
   const tmdbMatch = url.match(/\/(?:movie|tv|watch|title\/(?:tv|movie))\/(\d{3,9})(?:[/?#]|$)/i);
   if (tmdbMatch && !ids.tmdb) ids.tmdb = tmdbMatch[1];
   return ids;
@@ -117,7 +119,9 @@ function writeCache(imdbId: string, season: number, episode: number, segments: S
       segments,
       savedAt: Date.now(),
     }));
-  } catch {}
+  } catch {
+    // Cache storage is optional in private browsing and restricted contexts.
+  }
 }
 
 async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -390,5 +394,7 @@ export async function prewarmSkipTarget(
       const response = await fetch(playbackUrl, { cache: "force-cache", credentials: "same-origin" });
       if (response.ok) await response.arrayBuffer().catch(() => undefined);
     }
-  } catch {}
+  } catch {
+    // Prewarming is opportunistic and must never affect playback startup.
+  }
 }

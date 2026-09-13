@@ -377,6 +377,7 @@ export type SearchScoreBreakdown = {
 export function explainUnifiedSearchResultScore(query: string, item: UnifiedSearchRankingItem, index = 0): SearchScoreBreakdown {
   const rankingQuery = trimWeakSearchEdges(query);
   const normalizedQuery = normalizeSearchText(rankingQuery);
+  const normalizedRawQuery = normalizeSearchText(query);
   const normalizedTitle = normalizeSearchText(item.title);
   const normalizedAliases = (item.alternateTitles ?? []).map(normalizeSearchText).filter(Boolean);
   const displayExact = normalizedTitle === normalizedQuery;
@@ -387,7 +388,7 @@ export function explainUnifiedSearchResultScore(query: string, item: UnifiedSear
   const text = scoreSearchCandidate(rankingQuery, [item.title, ...(item.alternateTitles ?? []), item.year], index);
   const identity = displayExact ? 50_000 : aliasExact ? 48_000 : displayPrefix ? 24_000 : aliasPrefix ? 22_000 :
     hasRequiredSearchTokenCoverage(query, [item.title, ...(item.alternateTitles ?? []), item.year]) ? 12_000 : 0;
-  const noise = !canonicalExact && !SEARCH_NOISE_PATTERN.test(normalizedQuery) && SEARCH_NOISE_PATTERN.test(normalizedTitle) ? -18_000 : 0;
+  const noise = !canonicalExact && !SEARCH_NOISE_PATTERN.test(normalizedRawQuery) && SEARCH_NOISE_PATTERN.test(normalizedTitle) ? -18_000 : 0;
 
   const signals = item.searchSignals;
   const popularityValue = Math.max(0, signals?.popularity ?? 0);

@@ -5,7 +5,7 @@ import { fetchProviderFeed, searchProviderModuleItems } from "../lib/provider-mo
 import type { ExploreItem, ProviderFeedResponse } from "../lib/types";
 import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import { HomeRail } from "./HomeRail";
-import { showToast } from "./ToastHost";
+import { showToast } from "../lib/toast";
 import { balancedBackgroundImage } from "../lib/image-resolution";
 import { readProviderHomePreference, writeProviderHomePreference, type ProviderHomeAnimeFilter, type ProviderHomeAudioFilter } from "../lib/provider-home-preferences";
 import { importSourceKey } from "../lib/import-guard";

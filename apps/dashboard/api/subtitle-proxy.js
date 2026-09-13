@@ -3,6 +3,7 @@ const USER_AGENT =
 
 function normalizeSubtitleText(body) {
   const trimmed = String(body || "").replace(/^\uFEFF/, "").trimStart();
+  if (!/\d{2}:\d{2}(?::\d{2})?[.,]\d{3}\s+-->\s+\d{2}:\d{2}(?::\d{2})?[.,]\d{3}/.test(trimmed)) throw new Error("Subtitle source returned an empty or incompatible file.");
   if (/^WEBVTT\b/i.test(trimmed)) {
     return trimmed;
   }
@@ -79,11 +80,12 @@ export default async function handler(req, res) {
       return [parsed.toString()];
     })();
 
-    const fetchBody = async (url) => {
+    const signal = AbortSignal.timeout(15_000);
+    const fetchBody = async () => {
       let lastStatus = 0;
       for (const candidate of targetCandidates) {
         for (const headers of headerStrategies) {
-          const response = await fetch(candidate, { method: "GET", headers, redirect: "follow" });
+          const response = await fetch(candidate, { method: "GET", headers, redirect: "follow", signal });
           lastStatus = response.status;
           if (response.ok || !isRetryable403(response.status)) {
             if (!response.ok) return { status: response.status, body: "" };
@@ -95,20 +97,22 @@ export default async function handler(req, res) {
                 if (entry && typeof entry.file === "string") {
                   let safeFile = null;
                   try {
-                    safeFile = new URL(entry.file).toString();
+                    const fileUrl = new URL(entry.file, response.url || candidate);
+                    safeFile = /^https?:$/.test(fileUrl.protocol) ? fileUrl.href : null;
                   } catch {
                     safeFile = null;
                   }
                   if (safeFile) {
                     let vtt;
                     for (const vttHeaders of headerStrategies) {
-                      vtt = await fetch(safeFile, { method: "GET", headers: vttHeaders, redirect: "follow" });
+                      vtt = await fetch(safeFile, { method: "GET", headers: vttHeaders, redirect: "follow", signal });
                       if (vtt.ok || !isRetryable403(vtt.status)) break;
                     }
                     return { status: vtt.ok ? vtt.status : 502, body: vtt.ok ? await vtt.text() : "" };
                   }
                 }
               }
+              return { status: 422, body: "" };
             }
             return { status: response.status, body: await response.text() };
           }
@@ -117,7 +121,7 @@ export default async function handler(req, res) {
       return { status: lastStatus || 502, body: "" };
     };
 
-    const { status, body } = await fetchBody(parsed.toString());
+    const { status, body } = await fetchBody();
     if (status !== 200) {
       res.statusCode = status || 502;
       res.setHeader("Content-Type", "application/json");

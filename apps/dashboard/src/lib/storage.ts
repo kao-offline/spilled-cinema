@@ -604,15 +604,16 @@ function mergeImportedEpisode(existingEpisode: LibraryEpisode, nextEpisode: Libr
   return {
     ...nextEpisode,
     id: existingEpisode.id,
+    importedAt: existingEpisode.importedAt,
     showSlug: existingEpisode.showSlug,
     showTitle: existingEpisode.showTitle,
     posterUrl: nextEpisode.posterUrl ?? existingEpisode.posterUrl,
     episodeTitle: shouldKeepExistingTitle ? existingEpisode.episodeTitle : nextEpisode.episodeTitle,
     durationSeconds: existingEpisode.durationSeconds ?? nextEpisode.durationSeconds ?? existingEpisode.playbackDurationSeconds ?? nextEpisode.playbackDurationSeconds,
-    playbackPositionSeconds: existingEpisode.playbackPositionSeconds,
-    playbackDurationSeconds: existingEpisode.playbackDurationSeconds,
-    playbackUpdatedAt: existingEpisode.playbackUpdatedAt,
-    watched: existingEpisode.watched ?? nextEpisode.watched,
+    playbackPositionSeconds: (nextEpisode.playbackUpdatedAt ?? 0) > (existingEpisode.playbackUpdatedAt ?? 0) ? nextEpisode.playbackPositionSeconds : existingEpisode.playbackPositionSeconds,
+    playbackDurationSeconds: (nextEpisode.playbackUpdatedAt ?? 0) > (existingEpisode.playbackUpdatedAt ?? 0) ? nextEpisode.playbackDurationSeconds : existingEpisode.playbackDurationSeconds,
+    playbackUpdatedAt: Math.max(existingEpisode.playbackUpdatedAt ?? 0, nextEpisode.playbackUpdatedAt ?? 0) || undefined,
+    watched: (nextEpisode.playbackUpdatedAt ?? 0) > (existingEpisode.playbackUpdatedAt ?? 0) ? nextEpisode.watched : existingEpisode.watched ?? nextEpisode.watched,
     players,
     selectedPlayerAlias,
   };
@@ -1020,7 +1021,7 @@ export function setEpisodeWatched(episodeId: string, watched: boolean) {
     ...state,
     shows: state.shows.map((show) => ({
       ...show,
-      episodes: show.episodes.map((episode) => episode.id === episodeId ? { ...episode, watched, playbackUpdatedAt: Date.now() } : episode),
+      episodes: show.episodes.map((episode) => episode.id === episodeId ? { ...episode, watched, playbackPositionSeconds: watched ? episode.playbackPositionSeconds : 0, playbackUpdatedAt: Date.now() } : episode),
     })),
   };
   writeLibraryState(nextState);

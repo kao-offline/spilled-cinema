@@ -7,8 +7,10 @@ import { balanceImageResolution } from "../lib/image-resolution";
 import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
 import type { SkipSegment } from "../lib/intro-skip";
 import { findActiveSkipSegment, prewarmSkipTarget } from "../lib/intro-skip";
+import { loadSubtitleTrack } from "../lib/subtitle-track";
 
-type SubtitleTrack = {
+export type SubtitleTrack = {
+  id: string;
   src: string;
   label: string;
   srclang: string;
@@ -121,9 +123,12 @@ type UniversalVideoPlayerProps = {
   initialTime?: number | null;
   skipSegments?: SkipSegment[];
   onSkipIntro?: (segment: SkipSegment) => void;
-  onProgress?: (progress: { currentTime: number; duration: number }) => void;
+  onProgress?: (progress: { currentTime: number; duration: number; flush?: boolean }) => void;
   onEnded?: () => void;
   onError?: (message: string) => void;
+  preferredSubtitleId?: string | null;
+  onSubtitleSelectionChange?: (subtitleId: string | null) => void;
+  onSubtitleError?: (message: string) => void;
 };
 
 function getSourceType(src: string) {
@@ -198,6 +203,9 @@ export function UniversalVideoPlayer({
   onProgress,
   onEnded,
   onError,
+  preferredSubtitleId,
+  onSubtitleSelectionChange,
+  onSubtitleError,
 }: UniversalVideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
@@ -205,6 +213,7 @@ export function UniversalVideoPlayer({
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const initialTimeRef = useRef(initialTime);
   const onErrorRef = useRef(onError);
+  const onSubtitleErrorRef = useRef(onSubtitleError);
   const onProgressRef = useRef(onProgress);
   const onEndedRef = useRef(onEnded);
   const hlsRef = useRef<Hls | null>(null);
@@ -227,8 +236,13 @@ export function UniversalVideoPlayer({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
   const [qualityLevel, setQualityLevel] = useState(-1);
-  const [captionsEnabled, setCaptionsEnabled] = useState(subtitleTracks.some((track) => track.default));
-  const [selectedSubtitleTrack, setSelectedSubtitleTrack] = useState(() => Math.max(0, subtitleTracks.findIndex((track) => track.default)));
+  const initialSubtitle = subtitleTracks.find((track) => track.id === preferredSubtitleId)
+    ?? subtitleTracks.find((track) => track.default)
+    ?? subtitleTracks[0];
+  const [captionsEnabled, setCaptionsEnabled] = useState(Boolean(initialSubtitle) && preferredSubtitleId !== null);
+  const [selectedSubtitleId, setSelectedSubtitleId] = useState<string | null>(initialSubtitle?.id ?? null);
+  const [subtitleError, setSubtitleError] = useState<string | null>(null);
+  const [subtitleRetry, setSubtitleRetry] = useState(0);
   const [subtitleAppearance, setSubtitleAppearance] = useState<SubtitleAppearance>(readSubtitleAppearance);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [autoplay, setAutoplay] = useState(true);
@@ -242,7 +256,7 @@ export function UniversalVideoPlayer({
   const sourceType = useMemo(() => getSourceType(src), [src]);
   const subtitleTrackSignature = useMemo(
     () => subtitleTracks
-      .map((track) => [track.src, track.label, track.srclang, track.default ? "1" : "0"].join("\u001f"))
+      .map((track) => [track.id, track.src, track.label, track.srclang].join("\u001f"))
       .join("\u001e"),
     [subtitleTracks],
   );
@@ -265,6 +279,10 @@ export function UniversalVideoPlayer({
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
+
+  useEffect(() => {
+    onSubtitleErrorRef.current = onSubtitleError;
+  }, [onSubtitleError]);
 
   useEffect(() => {
     onProgressRef.current = onProgress;
@@ -307,6 +325,7 @@ export function UniversalVideoPlayer({
   useEffect(() => {
     const host = videoHostRef.current;
     if (!host) return undefined;
+    const reportFinalProgress = onProgressRef.current;
 
     host.replaceChildren();
     playbackErrorSentRef.current = false;
@@ -321,16 +340,6 @@ export function UniversalVideoPlayer({
     videoElement.preload = "auto";
     videoElement.playbackRate = playbackRate;
     if (poster) videoElement.poster = poster;
-
-    for (const track of subtitleTracks) {
-      const trackElement = document.createElement("track");
-      trackElement.kind = "subtitles";
-      trackElement.src = track.src;
-      trackElement.label = track.label;
-      trackElement.srclang = track.srclang;
-      trackElement.default = Boolean(track.default);
-      videoElement.appendChild(trackElement);
-    }
 
     host.appendChild(videoElement);
     videoRef.current = videoElement;
@@ -475,7 +484,7 @@ export function UniversalVideoPlayer({
       setVolume(videoElement.volume || 1);
       setMuted(videoElement.muted);
       setPlaybackRate(videoElement.playbackRate || 1);
-      onProgressRef.current?.({
+      if (playbackStartedRef.current || videoElement.currentTime > 0) onProgressRef.current?.({
         currentTime: videoElement.currentTime || 0,
         duration: videoElement.duration || 0,
       });
@@ -513,12 +522,21 @@ export function UniversalVideoPlayer({
       playbackErrorSentRef.current = true;
       onErrorRef.current?.("The resolved stream could not be played.");
     };
+    let initialTimeRestored = false;
     const restoreInitialTime = () => {
       const resumeTime = initialTimeRef.current;
-      if (!resumeTime || resumeTime <= 3 || !Number.isFinite(videoElement.duration)) return;
-      const targetTime = Math.min(resumeTime, Math.max(0, videoElement.duration - 5));
-      if (targetTime > 3) seekTo(targetTime);
+      if (initialTimeRestored || !resumeTime || resumeTime <= 0 || !Number.isFinite(videoElement.duration) || videoElement.duration <= 0) return;
+      const targetTime = Math.min(resumeTime, Math.max(0, videoElement.duration - 0.1));
+      try {
+        // fastSeek is keyframe-based and can resume several seconds early.
+        videoElement.currentTime = targetTime;
+        initialTimeRestored = true;
+      } catch { /* Retry when the stream's duration/seekable range becomes available. */ }
     };
+    const flushProgress = () => {
+      if (playbackStartedRef.current || videoElement.currentTime > 0) reportFinalProgress?.({ currentTime: videoElement.currentTime || 0, duration: videoElement.duration || 0, flush: true });
+    };
+    const flushWhenHidden = () => { if (document.visibilityState === "hidden") flushProgress(); };
 
     const syncNow = () => sync(true);
     const syncThrottled = () => sync(false);
@@ -532,11 +550,16 @@ export function UniversalVideoPlayer({
     };
     videoElement.addEventListener("play", syncNow);
     videoElement.addEventListener("pause", syncNow);
+    videoElement.addEventListener("pause", flushProgress);
+    window.addEventListener("pagehide", flushProgress);
+    document.addEventListener("visibilitychange", flushWhenHidden);
     videoElement.addEventListener("timeupdate", syncThrottled);
     videoElement.addEventListener("durationchange", syncNow);
     videoElement.addEventListener("progress", syncProgress);
     videoElement.addEventListener("loadedmetadata", syncNow);
-    videoElement.addEventListener("loadedmetadata", restoreInitialTime, { once: true });
+    videoElement.addEventListener("loadedmetadata", restoreInitialTime);
+    videoElement.addEventListener("durationchange", restoreInitialTime);
+    videoElement.addEventListener("canplay", restoreInitialTime);
     videoElement.addEventListener("volumechange", syncNow);
     videoElement.addEventListener("ratechange", syncNow);
     videoElement.addEventListener("ended", markEnded);
@@ -549,6 +572,10 @@ export function UniversalVideoPlayer({
 
     return () => {
       disposed = true;
+      flushProgress();
+      videoElement.removeEventListener("pause", flushProgress);
+      window.removeEventListener("pagehide", flushProgress);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
       videoElement.pause();
       hlsRef.current?.destroy();
       hlsRef.current = null;
@@ -559,54 +586,31 @@ export function UniversalVideoPlayer({
       videoRef.current = null;
       host.replaceChildren();
     };
-  }, [poster, sourceType, src, subtitleTrackSignature]);
+  }, [sourceType, src]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return undefined;
-    const createdUrls: string[] = [];
-    let canceled = false;
-    const trackElements = Array.from(video.querySelectorAll("track"));
-    trackElements.forEach((trackElement, index) => {
-      const definition = subtitleTracks[index];
-      if (!definition || definition.src.startsWith("blob:")) return;
-      void fetch(definition.src, { credentials: "omit" })
-        .then((response) => {
-          if (!response.ok) throw new Error(`Subtitle track failed (${response.status}).`);
-          return response.text();
-        })
-        .then((text) => {
-          if (canceled || !trackElement.isConnected) return;
-          const url = URL.createObjectURL(new Blob([text], { type: "text/vtt" }));
-          createdUrls.push(url);
-          trackElement.src = url;
-        })
-        .catch(() => {
-          // Keep the original URL; the browser may still attempt to load it.
-        });
+    const definition = subtitleTracks.find((track) => track.id === selectedSubtitleId);
+    setSubtitleError(null);
+    if (!video || !definition || !captionsEnabled) return;
+    return loadSubtitleTrack(video, definition, {
+      onError: (message) => {
+        setSubtitleError(message);
+        onSubtitleErrorRef.current?.(message);
+      },
     });
-    return () => {
-      canceled = true;
-      for (const url of createdUrls) URL.revokeObjectURL(url);
-    };
-  }, [subtitleTrackSignature, src]);
+  }, [captionsEnabled, selectedSubtitleId, subtitleTrackSignature, src, subtitleRetry]);
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    for (const [index, track] of Array.from(video.textTracks).entries()) {
-      track.mode = captionsEnabled && index === selectedSubtitleTrack ? "showing" : "disabled";
+    if (preferredSubtitleId === null) {
+      setCaptionsEnabled(false);
+      return;
     }
-  }, [captionsEnabled, selectedSubtitleTrack, subtitleTrackSignature]);
-
-  useEffect(() => {
-    if (subtitleTracks.length === 0) return;
-    const defaultIndex = subtitleTracks.findIndex((track) => track.default);
-    setSelectedSubtitleTrack(Math.max(0, defaultIndex));
-    if (defaultIndex >= 0) {
-      setCaptionsEnabled(true);
-    }
-  }, [subtitleTrackSignature, subtitleTracks]);
+    const preferred = subtitleTracks.find((track) => track.id === preferredSubtitleId);
+    const fallback = preferred ?? (preferredSubtitleId === undefined ? subtitleTracks.find((track) => track.default) ?? subtitleTracks[0] : undefined);
+    setSelectedSubtitleId(fallback?.id ?? null);
+    setCaptionsEnabled(Boolean(fallback));
+  }, [preferredSubtitleId, subtitleTrackSignature]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -764,6 +768,21 @@ export function UniversalVideoPlayer({
     setMuted(video.muted);
   }
 
+  function toggleCaptions() {
+    if (subtitleTracks.length === 0) return;
+    const nextEnabled = !captionsEnabled;
+    setCaptionsEnabled(nextEnabled);
+    setSubtitleError(null);
+    onSubtitleSelectionChange?.(nextEnabled ? selectedSubtitleId ?? subtitleTracks[0]?.id ?? null : null);
+  }
+
+  function selectSubtitle(subtitleId: string) {
+    setSelectedSubtitleId(subtitleId);
+    setCaptionsEnabled(true);
+    setSubtitleError(null);
+    onSubtitleSelectionChange?.(subtitleId);
+  }
+
   function setPlayerVolume(value: number) {
     const video = videoRef.current;
     if (!video) return;
@@ -897,7 +916,7 @@ export function UniversalVideoPlayer({
       } else if (event.key.toLowerCase() === "m") {
         toggleMute();
       } else if (event.key.toLowerCase() === "c") {
-        setCaptionsEnabled((value) => !value);
+        toggleCaptions();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -970,6 +989,14 @@ export function UniversalVideoPlayer({
       {waiting ? (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
           <div className="h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+        </div>
+      ) : null}
+
+      {subtitleError ? (
+        <div data-player-control role="alert" className="absolute bottom-28 left-1/2 z-40 w-[min(92vw,32rem)] -translate-x-1/2 rounded-xl border border-amber-200/20 bg-black/88 px-4 py-3 text-center text-xs font-semibold text-amber-100 shadow-2xl backdrop-blur-md sm:bottom-32">
+          <p>{subtitleError} Video playback is unaffected.</p>
+          <button type="button" onClick={() => setSubtitleRetry((value) => value + 1)} className="mt-2 min-h-11 rounded-lg bg-white/15 px-4 focus-visible:outline-2">Retry subtitles</button>
+          <button type="button" onClick={toggleCaptions} className="ml-2 min-h-11 rounded-lg px-4 focus-visible:outline-2">Turn off</button>
         </div>
       ) : null}
 
@@ -1078,7 +1105,7 @@ export function UniversalVideoPlayer({
           </button>
           <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(event) => setPlayerVolume(Number(event.target.value))} className="hidden h-1 w-24 accent-white sm:block" aria-label="Volume" />
           <div className="ml-auto flex items-center gap-0 sm:gap-2">
-            <button type="button" onClick={() => setCaptionsEnabled((value) => !value)} disabled={subtitleTracks.length === 0} className={clsx("flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10", captionsEnabled ? "text-white" : "text-white/55", subtitleTracks.length === 0 && "cursor-not-allowed opacity-35")} aria-label="Captions">
+            <button type="button" onClick={toggleCaptions} disabled={subtitleTracks.length === 0} className={clsx("flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-white/10", captionsEnabled ? "text-white" : "text-white/55", subtitleTracks.length === 0 && "cursor-not-allowed opacity-35")} aria-label={captionsEnabled ? "Turn subtitles off" : "Turn subtitles on"} aria-pressed={captionsEnabled}>
               <Captions className="h-5 w-5" />
             </button>
             <button type="button" onClick={() => setSettingsOpen((value) => !value)} className={clsx("flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10 hover:text-white", settingsOpen ? "bg-white/12 text-white" : "text-white/86")} aria-label="Settings" aria-expanded={settingsOpen}>
@@ -1206,7 +1233,7 @@ export function UniversalVideoPlayer({
                   </button>
 
                   <div className="glass-section-header">Subtitles</div>
-                  <button type="button" onClick={() => setCaptionsEnabled((v) => !v)} disabled={subtitleTracks.length === 0} className={clsx("glass-settings-item w-full", captionsEnabled && "bg-white/15")}>
+                  <button type="button" onClick={toggleCaptions} disabled={subtitleTracks.length === 0} className={clsx("glass-settings-item w-full", captionsEnabled && "bg-white/15")} aria-pressed={captionsEnabled}>
                     <div className="glass-settings-label">
                       <Captions className="h-4 w-4 text-white/50" />
                       <span>Subtitles</span>
@@ -1218,8 +1245,8 @@ export function UniversalVideoPlayer({
                     <div className="px-3 py-2">
                       <div className="mb-2 text-xs text-white/50">Track</div>
                       <div className="grid grid-cols-2 gap-1">
-                        {subtitleTracks.map((track, index) => (
-                          <button key={`${track.src}:${index}`} type="button" onClick={() => { setSelectedSubtitleTrack(index); setCaptionsEnabled(true); }} className={clsx("rounded-lg px-2 py-1.5 text-xs font-semibold transition", captionsEnabled && selectedSubtitleTrack === index ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")}>
+                        {subtitleTracks.map((track) => (
+                          <button key={track.id} type="button" onClick={() => selectSubtitle(track.id)} className={clsx("min-h-11 rounded-lg px-2 py-1.5 text-xs font-semibold transition", captionsEnabled && selectedSubtitleId === track.id ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/15")} aria-pressed={captionsEnabled && selectedSubtitleId === track.id}>
                             {track.label}
                           </button>
                         ))}

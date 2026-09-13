@@ -36,19 +36,24 @@ async function loadPreviewIntoVault(sourceUrl: string): Promise<string> {
   if (pending) return pending;
 
   const load = (async () => {
+    // Stills live on third-party CDNs (e.g. TMDB) that do not send CORS
+    // headers. no-cors yields an opaque response with no headers and status 0,
+    // which is still cacheable and perfectly displayable through <img> — while
+    // a cors fetch only litters the console with blocked-by-CORS errors.
+    const fetchOpaque = () => fetch(sourceUrl, { mode: "no-cors", credentials: "omit", referrerPolicy: "no-referrer" });
     let response: Response | undefined;
     if ("caches" in window) {
       const vault = await caches.open(EPISODE_PREVIEW_VAULT);
       response = await vault.match(sourceUrl) ?? undefined;
       if (!response) {
-        const fetched = await fetch(sourceUrl, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer" });
-        if (!fetched.ok) throw new Error(`Episode preview returned ${fetched.status}.`);
+        const fetched = await fetchOpaque();
+        if (!fetched.ok && fetched.type !== "opaque") throw new Error(`Episode preview returned ${fetched.status}.`);
         response = fetched;
         await vault.put(sourceUrl, fetched.clone());
       }
     } else {
-      response = await fetch(sourceUrl, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer" });
-      if (!response.ok) throw new Error(`Episode preview returned ${response.status}.`);
+      response = await fetchOpaque();
+      if (!response.ok && response.type !== "opaque") throw new Error(`Episode preview returned ${response.status}.`);
     }
     const objectUrl = remember(sourceUrl, URL.createObjectURL(await response.blob()));
     await decodeImage(objectUrl);

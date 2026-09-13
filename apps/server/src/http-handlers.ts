@@ -449,6 +449,7 @@ function rewriteHlsPlaylistUrls(playlist: string, playlistUrl: URL, fileName: st
 
 function normalizeSubtitleText(body: string) {
   const trimmed = body.replace(/^\uFEFF/, "").trimStart();
+  if (!/\d{2}:\d{2}(?::\d{2})?[.,]\d{3}\s+-->\s+\d{2}:\d{2}(?::\d{2})?[.,]\d{3}/.test(trimmed)) throw new Error("Subtitle source returned an empty or incompatible file.");
   if (/^WEBVTT\b/i.test(trimmed)) {
     return trimmed;
   }
@@ -1668,11 +1669,12 @@ export function createHttpHandlers() {
         return [target];
       })();
 
+      const signal = AbortSignal.timeout(15_000);
       const fetchBody = async (): Promise<{ status: number; body: string }> => {
         let lastStatus = 0;
         for (const candidate of targetCandidates) {
           for (const h of headerStrategies) {
-            const response = await fetch(candidate, { redirect: "follow", headers: h });
+            const response = await fetch(candidate, { redirect: "follow", headers: h, signal });
             lastStatus = response.status;
             if (response.ok || !isRetryable403(response.status)) {
               if (!response.ok) return { status: response.status, body: "" };
@@ -1683,12 +1685,15 @@ export function createHttpHandlers() {
                   const entry = payload.find((item: any) => item && item.default) ?? payload[0];
                   if (entry && typeof entry.file === "string") {
                     const safeFile = (() => {
-                      try { return new URL(entry.file).toString(); } catch { return null; }
+                      try {
+                        const fileUrl = new URL(entry.file, response.url || candidate);
+                        return /^https?:$/.test(fileUrl.protocol) ? fileUrl.href : null;
+                      } catch { return null; }
                     })();
                     if (safeFile) {
                       let vtt: Response | undefined;
                       for (const vh of headerStrategies) {
-                        vtt = await fetch(safeFile, { redirect: "follow", headers: vh });
+                        vtt = await fetch(safeFile, { redirect: "follow", headers: vh, signal });
                         if (vtt.ok || !isRetryable403(vtt.status)) break;
                       }
                       if (vtt?.ok) return { status: vtt.status, body: await vtt.text() };
@@ -1696,6 +1701,7 @@ export function createHttpHandlers() {
                     }
                   }
                 }
+                return { status: 422, body: "" };
               }
               return { status: response.status, body: await response.text() };
             }
@@ -2075,8 +2081,13 @@ export function createHttpHandlers() {
     const profileId = getQueryParams(req.url).get("profileId");
     if (!profileId) return sendJson(res, 400, { error: "Missing profileId." });
     try {
+      if (req.method === "POST") {
+        const body = await readJsonBody<{ playbackProgress: import("../../../packages/storage/src/playback-progress").PlaybackProgressRecord[] }>(req);
+        sendJson(res, 200, { playbackProgress: await runtime.putPrivatePlaybackProgress(getBearerToken(req), profileId, body.playbackProgress) });
+        return;
+      }
       if (req.method === "GET") {
-        sendJson(res, 200, { profile: await runtime.getPrivateLibrary(getBearerToken(req), profileId) });
+        sendJson(res, 200, { profile: await runtime.getPrivateLibrary(getBearerToken(req), profileId), playbackProgressSupported: true });
         return;
       }
       if (req.method === "PUT") {
