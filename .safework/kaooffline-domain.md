@@ -12,7 +12,8 @@
 - Worktree: `C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema-kao-domain`
 - Base branch/commit: `feat/home-playback-mobile` at `6eae196b901bacd221261876ea96a88738ab65cf`
 - Task branch: `feat/kaooffline-domain`
-- Remote branch/PR: not pushed
+- Current source checkpoint: `ea50435b0587543aa8f06e4c3c05064d68aad74d`
+- Remote branch: `origin/feat/kaooffline-domain`
 
 ## Environment
 
@@ -35,8 +36,12 @@
 - Server, extension, and dashboard production builds passed locally on 2026-09-15.
 - CORS smoke check returned `200` and the matching allow-origin header for both dashboard domains; an unrelated origin returned `403`.
 - Vercel preview `dpl_6R8gHzg9rJosrokAFEbimJcQEtF2` reached `READY`.
-- Cloudflare DNS write is pending interactive account authentication; the Wrangler OAuth scope is read-only for zones.
+- All workspace build scripts passed on 2026-09-15.
+- All 299 dashboard tests passed across 54 test files.
+- Original production domain checks passed for the app shell, PWA manifest/service worker, generic API health, TMDB lookup, artwork metadata/search, library navigation, settings tabs, support content, and 430px mobile layout without horizontal overflow.
+- Production control-plane health responds, but reports zero active nodes. Runtime-backed provider feeds/search/import/playback are therefore unavailable independently of the domain change.
+- `spilled.kaooffline.top` currently resolves through Cloudflare proxy addresses and serves an unrelated Quickhost login response. The existing `spilled` record must be replaced with Vercel's DNS-only record by the domain owner.
 
 ## Next action
 
-- Complete Cloudflare dashboard authentication, create the DNS-only record, verify Vercel SSL/domain status, then promote the tested deployment.
+- In Cloudflare DNS, replace the existing `spilled` record with DNS-only `A spilled 76.76.21.21`, then verify Vercel domain/SSL status. No dashboard promotion is required because the custom domain is attached to the existing production project.
