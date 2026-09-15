@@ -34,7 +34,7 @@ curl http://127.0.0.1:8787/api/status
 
 5. Open the dashboard:
    - local dev: `npm run dev:dashboard`
-   - deployed app: `https://spilled.overload.studio`
+   - deployed app: `https://spilled.overload.studio` or `https://spilled.kaooffline.top`
 
 6. In `Settings -> General -> Local runtime`, confirm transport `extension`.
 

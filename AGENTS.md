@@ -118,6 +118,7 @@ Full route table in `apps/server/src/standalone.ts:144-230`. Highlights:
 - `http://localhost:5173`, `http://127.0.0.1:5173`
 - `http://localhost:4173`, `http://127.0.0.1:4173`
 - `https://spilled.overload.studio`
+- `https://spilled.kaooffline.top`
 - Any `http://localhost:{port}` or `http://127.0.0.1:{port}` dynamically
 
 **Two CORS functions:**
@@ -169,7 +170,7 @@ This is the most complex route. It proxies HLS streams and serves as the playbac
 `apps/dashboard/src/server/full-download.ts:143-158` → `buildPlaybackProxyPath`:
 - Builds relative URL: `/api/download-full/browser-file?url=<stream>&name=<id>.m3u8&referer=<origin>&playback=1`
 - If `SPILLED_NODE_ENDPOINT_URL` is set (auto-tunnel URL), prepends it to make absolute URL.
-- **The browser plays from the node's tunnel origin**, not from Vercel. This is why CORS on the node must allow `https://spilled.overload.studio`.
+- **The browser plays from the node's tunnel origin**, not from Vercel. This is why CORS on the node must allow both dashboard origins: `https://spilled.overload.studio` and `https://spilled.kaooffline.top`.
 
 ---
 
@@ -240,7 +241,7 @@ Browser-side offline storage for downloaded media using the **File System Access
 ```bash
 # From apps/dashboard/
 npx vercel deploy --prod --yes
-# Alias: https://spilled.overload.studio
+# Aliases: https://spilled.overload.studio and https://spilled.kaooffline.top
 ```
 - Vite build, output to `dist/`.
 - Serverless functions: `api/artwork/*.ts`, `api/node-proxy.js`, `api/subtitle-proxy.js`.

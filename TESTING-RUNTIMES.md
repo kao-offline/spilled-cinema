@@ -49,6 +49,7 @@ Use this when testing the public site with a local runtime.
 Open:
 
 - `https://spilled.overload.studio`
+- `https://spilled.kaooffline.top`
 
 Then either:
 

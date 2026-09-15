@@ -479,18 +479,23 @@ export class SpilledCinemaNodeRuntime {
   private async getPasskeyContext(origin: string) {
     const parsed = new URL(origin);
     const identity = await this.ensureIdentity();
-    const expectedRemoteOrigin = this.options.passkeyOrigin?.replace(/\/$/, "")
-      ?? `https://${identity.nodeId}.nodes.spilled.overload.studio`;
+    const configuredRemoteOrigins = this.options.passkeyOrigin
+      ?.split(",")
+      .map((candidate) => candidate.trim().replace(/\/$/, ""))
+      .filter(Boolean) ?? [];
+    const defaultRemoteOrigin = `https://${identity.nodeId}.nodes.spilled.overload.studio`;
+    const expectedRemoteOrigin = configuredRemoteOrigins.find((candidate) => candidate === parsed.origin)
+      ?? (configuredRemoteOrigins.length === 0 ? defaultRemoteOrigin : null);
     const localSetupAllowed =
       this.options.privateSetupEnabled === true &&
       parsed.protocol === "http:" &&
       ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
-    if (!localSetupAllowed && parsed.origin !== expectedRemoteOrigin) {
+    if (!localSetupAllowed && !expectedRemoteOrigin) {
       throw new Error("Passkey origin does not match this node's stable origin.");
     }
     return {
-      expectedOrigin: localSetupAllowed ? parsed.origin : expectedRemoteOrigin,
-      rpID: localSetupAllowed ? parsed.hostname : "nodes.spilled.overload.studio",
+      expectedOrigin: localSetupAllowed ? parsed.origin : expectedRemoteOrigin!,
+      rpID: localSetupAllowed || configuredRemoteOrigins.length > 0 ? parsed.hostname : "nodes.spilled.overload.studio",
     };
   }
 

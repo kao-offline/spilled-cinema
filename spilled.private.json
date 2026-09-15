@@ -5,7 +5,8 @@
     "setupSecretHash": "sha256:ceee85b156397cebec1f057e6a0421550e80f91a2bf89a44d0143f539d2f79f3",
     "allowPublicFetch": true,
     "allowedOrigins": [
-      "https://spilled.overload.studio"
+      "https://spilled.overload.studio",
+      "https://spilled.kaooffline.top"
     ]
   },
   "publicCapabilities": {

@@ -80,7 +80,7 @@ function startServer() {
       SPILLED_OPEN_SETUP_BROWSER: "0",
       SPILLED_DASHBOARD_URL: "https://spilled.overload.studio",
       SPILLED_GATEWAY_URL: "https://spilled-node-gateway.hrdykrystof.workers.dev",
-      SPILLED_PASSKEY_ORIGIN: "https://spilled.overload.studio",
+      SPILLED_PASSKEY_ORIGIN: "https://spilled.overload.studio,https://spilled.kaooffline.top",
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,

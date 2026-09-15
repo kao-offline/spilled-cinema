@@ -236,6 +236,7 @@ const DEFAULT_DASHBOARD_ORIGINS = [
   "http://localhost:4173",
   "http://127.0.0.1:4173",
   "https://spilled.overload.studio",
+  "https://spilled.kaooffline.top",
 ];
 
 function configuredDashboardOrigins() {
