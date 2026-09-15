@@ -1,0 +1,31 @@
+[receiver]
+# Use the LAN address of the Windows/Linux desktop running the receiver.
+url = "http://192.168.1.50:8765"
+token = "replace-with-the-same-long-random-token-used-on-the-desktop"
+timeout_seconds = 2.0
+
+# "auto" searches input-device names. Set /dev/input/eventN if discovery is
+# ambiguous. event numbers can change after reboot, so name matching is preferred.
+device = "auto"
+device_name_contains = ["gpio_ir", "gpio-ir", "ir receiver", "argon"]
+
+[keys]
+KEY_UP = "up"
+KEY_DOWN = "down"
+KEY_LEFT = "left"
+KEY_RIGHT = "right"
+KEY_OK = "enter"
+KEY_ENTER = "enter"
+KEY_BACK = "back"
+KEY_MENU = "back"
+KEY_HOME = "home"
+KEY_HOMEPAGE = "home"
+KEY_PLAYPAUSE = "play_pause"
+KEY_PLAY = "play_pause"
+KEY_VOLUMEUP = "volume_up"
+KEY_VOLUMEDOWN = "volume_down"
+
+# Optional choices for spare remote buttons:
+# KEY_SUBTITLE = "captions"
+# KEY_INFO = "fullscreen"
+# KEY_MUTE = "mute"

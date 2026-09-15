@@ -1,0 +1,12 @@
+[Unit]
+Description=Load Argon IR keymap for Spilled remote prototype
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# Change rc0 if `ir-keytable` reports a different receiver.
+ExecStart=/usr/bin/ir-keytable -s rc0 -p nec -w /etc/rc_keymaps/argon-spilled.toml
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

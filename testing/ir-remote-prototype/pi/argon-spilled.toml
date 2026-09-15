@@ -1,0 +1,18 @@
+[[protocols]]
+name = "argon-spilled-prototype"
+protocol = "nec"
+
+# These are commonly reported full NEC codes for the Argon IR Remote.
+# Verify every value with `sudo ir-keytable -t` because drivers and revisions
+# can expose different forms of the same code.
+[protocols.scancodes]
+0xff53ac = "KEY_UP"
+0xff4bb4 = "KEY_DOWN"
+0xff9966 = "KEY_LEFT"
+0xff837c = "KEY_RIGHT"
+0xff738c = "KEY_OK"
+0xffd32c = "KEY_HOME"
+0xffb946 = "KEY_MENU"
+0xff09f6 = "KEY_BACK"
+0xff01fe = "KEY_VOLUMEUP"
+0xff817e = "KEY_VOLUMEDOWN"

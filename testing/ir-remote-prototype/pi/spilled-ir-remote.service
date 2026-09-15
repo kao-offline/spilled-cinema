@@ -1,0 +1,26 @@
+[Unit]
+Description=Spilled IR remote prototype bridge
+After=network-online.target spilled-ir-keymap.service
+Wants=network-online.target
+Requires=spilled-ir-keymap.service
+
+[Service]
+Type=simple
+User=spilledremote
+Group=spilledremote
+SupplementaryGroups=input
+WorkingDirectory=/opt/spilled-ir-remote-prototype
+EnvironmentFile=-/etc/spilled-ir-remote/environment
+ExecStart=/opt/spilled-ir-remote-prototype/.venv/bin/spilled-ir-bridge --config /etc/spilled-ir-remote/config.toml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
