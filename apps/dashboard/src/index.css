@@ -37,6 +37,12 @@ body {
   min-height: 100vh;
 }
 
+html.spatial-navigation-active :is(button, a, input, select, textarea, [tabindex], [role="button"]):focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.96) !important;
+  outline-offset: 4px !important;
+  box-shadow: 0 0 0 7px rgba(5, 6, 10, 0.72), 0 0 28px rgba(255, 255, 255, 0.22) !important;
+}
+
 .text-serif {
   font-family: var(--font-serif);
 }

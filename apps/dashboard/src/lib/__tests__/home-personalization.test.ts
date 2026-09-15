@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildContinueWatchingItems, buildNewEpisodeItems, getPlaybackProgressColor, PLAYBACK_PROVIDER_COLORS } from "../home-personalization";
+import { buildContinueWatchingItems, buildNewEpisodeItems, buildRecommendedWatchItems, getPlaybackProgressColor, PLAYBACK_PROVIDER_COLORS } from "../home-personalization";
 import type { ImportedShow, LibraryEpisode } from "../types";
 
 function episode(id: string, number: number | null, input: Partial<LibraryEpisode> = {}): LibraryEpisode {
@@ -127,5 +127,50 @@ describe("home personalization", () => {
       episode("done", 1, { watched: true, playbackUpdatedAt: 30_000 }),
     ], { slug: "done" });
     expect(buildContinueWatchingItems([completed])).toEqual([]);
+  });
+
+  it("filters accidental starts shorter than a minute", () => {
+    const accidental = show([
+      episode("e1", 1, { playbackPositionSeconds: 20, playbackDurationSeconds: 1_800, playbackUpdatedAt: 20_000 }),
+      episode("e2", 2),
+    ]);
+
+    expect(buildRecommendedWatchItems([accidental], { now: 100_000, maxNewSeriesAgeMs: 1_000 })).toEqual([]);
+  });
+
+  it("ranks a recently completed episode ahead of a half-watched title", () => {
+    const halfWatched = show([
+      episode("half-e1", 1, { playbackPositionSeconds: 1_000, playbackDurationSeconds: 1_800, playbackUpdatedAt: 30_000 }),
+    ], { slug: "half", title: "Half watched" });
+    const completedLastNight = show([
+      episode("finished-e1", 1, { watched: true, playbackUpdatedAt: 20_000 }),
+      episode("finished-e2", 2),
+    ], { slug: "finished", title: "Finished last night" });
+
+    const items = buildRecommendedWatchItems([halfWatched, completedLastNight], { now: 40_000 });
+
+    expect(items.map((item) => item.show.slug)).toEqual(["finished", "half"]);
+    expect(items[0]).toMatchObject({ reason: "recently-finished", episode: { id: "finished-e2" } });
+    expect(items[1]).toMatchObject({ reason: "deep-progress", episode: { id: "half-e1" } });
+  });
+
+  it("resumes the earlier episode instead of jumping to the newest one", () => {
+    const items = buildRecommendedWatchItems([show([
+      episode("e1", 1, { watched: true, playbackUpdatedAt: 10_000 }),
+      episode("e2", 2, { playbackPositionSeconds: 900, playbackDurationSeconds: 1_800, playbackUpdatedAt: 20_000 }),
+      episode("e3", 3, { importedAt: 30_000 }),
+    ])], { now: 40_000 });
+
+    expect(items[0]).toMatchObject({ reason: "deep-progress", episode: { id: "e2" }, resumeAtSeconds: 900 });
+  });
+
+  it("ignores a tiny start after a completed episode but keeps the series next", () => {
+    const items = buildRecommendedWatchItems([show([
+      episode("e1", 1, { watched: true, playbackUpdatedAt: 10_000 }),
+      episode("e2", 2, { playbackPositionSeconds: 20, playbackDurationSeconds: 1_800, playbackUpdatedAt: 20_000 }),
+      episode("e3", 3),
+    ])], { now: 30_000 });
+
+    expect(items[0]).toMatchObject({ reason: "recently-finished", episode: { id: "e2" }, resumeAtSeconds: 0, progressPercent: 0 });
   });
 });

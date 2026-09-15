@@ -1,6 +1,7 @@
 import type { ImportedShow, LibraryEpisode } from "./types";
 
 const DEFAULT_NEW_EPISODE_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
+export const MINIMUM_MEANINGFUL_PLAYBACK_SECONDS = 60;
 
 export type NewEpisodeItem = {
   kind: "new-episode";
@@ -13,6 +14,16 @@ export type NewEpisodeItem = {
 
 export type ContinueWatchingItem = {
   kind: "next-episode" | "resume-film";
+  show: ImportedShow;
+  episode: LibraryEpisode;
+  resumeAtSeconds: number;
+  progressPercent: number;
+  updatedAt: number;
+};
+
+export type RecommendedWatchItem = {
+  kind: "recommended-watch";
+  reason: "recently-finished" | "deep-progress" | "in-progress" | "new-series";
   show: ImportedShow;
   episode: LibraryEpisode;
   resumeAtSeconds: number;
@@ -109,6 +120,95 @@ export function buildNewEpisodeItems(
       || right.lastInteractionAt - left.lastInteractionAt
       || right.addedAt - left.addedAt)
     .slice(0, Math.max(0, limit));
+}
+
+function playbackUpdatedAt(episode: LibraryEpisode, show: ImportedShow) {
+  return episode.playbackUpdatedAt ?? episode.importedAt ?? show.importedAt;
+}
+
+/**
+ * Produces one story-safe recommendation per title. Tiny accidental starts are
+ * ignored, and a series can never skip over the episode the viewer was
+ * actually watching just because a newer episode has been imported.
+ */
+export function buildRecommendedWatchItems(
+  shows: ImportedShow[],
+  options: { now?: number; maxNewSeriesAgeMs?: number; limit?: number } = {},
+): RecommendedWatchItem[] {
+  const now = options.now ?? Date.now();
+  const maxNewSeriesAgeMs = options.maxNewSeriesAgeMs ?? DEFAULT_NEW_EPISODE_WINDOW_MS;
+  const limit = options.limit ?? 16;
+  const recommendations: Array<RecommendedWatchItem & { priority: number }> = [];
+
+  for (const show of shows) {
+    const ordered = [...show.episodes].sort(episodeOrder);
+    if (ordered.length === 0) continue;
+
+    if (isMovie(show)) {
+      const movie = ordered[0];
+      const position = playbackPosition(movie);
+      if (position < MINIMUM_MEANINGFUL_PLAYBACK_SECONDS || isCompleted(movie)) continue;
+      const progress = progressPercent(movie);
+      recommendations.push({
+        kind: "recommended-watch",
+        reason: progress >= 50 ? "deep-progress" : "in-progress",
+        show,
+        episode: movie,
+        resumeAtSeconds: position,
+        progressPercent: progress,
+        updatedAt: playbackUpdatedAt(movie, show),
+        priority: progress >= 50 ? 1 : 2,
+      });
+      continue;
+    }
+
+    const latestMeaningful = ordered
+      .map((episode, index) => ({ episode, index }))
+      .filter(({ episode }) => isCompleted(episode) || playbackPosition(episode) >= MINIMUM_MEANINGFUL_PLAYBACK_SECONDS)
+      .sort((left, right) => playbackUpdatedAt(right.episode, show) - playbackUpdatedAt(left.episode, show) || right.index - left.index)[0];
+
+    if (latestMeaningful) {
+      const partial = !isCompleted(latestMeaningful.episode);
+      const candidate = partial
+        ? latestMeaningful.episode
+        : ordered.slice(latestMeaningful.index + 1).find((episode) => !isCompleted(episode));
+      if (!candidate) continue;
+
+      const progress = progressPercent(candidate);
+      const completedLast = !partial;
+      recommendations.push({
+        kind: "recommended-watch",
+        reason: completedLast ? "recently-finished" : progress >= 50 ? "deep-progress" : "in-progress",
+        show,
+        episode: candidate,
+        resumeAtSeconds: playbackPosition(candidate) >= MINIMUM_MEANINGFUL_PLAYBACK_SECONDS ? playbackPosition(candidate) : 0,
+        progressPercent: playbackPosition(candidate) >= MINIMUM_MEANINGFUL_PLAYBACK_SECONDS ? progress : 0,
+        updatedAt: playbackUpdatedAt(latestMeaningful.episode, show),
+        priority: completedLast ? 0 : progress >= 50 ? 1 : 2,
+      });
+      continue;
+    }
+
+    const firstEpisode = ordered.find((episode) => !isCompleted(episode));
+    if (!firstEpisode) continue;
+    const addedAt = firstEpisode.importedAt || show.importedAt;
+    if (addedAt <= 0 || addedAt > now + 5 * 60_000 || now - addedAt > maxNewSeriesAgeMs) continue;
+    recommendations.push({
+      kind: "recommended-watch",
+      reason: "new-series",
+      show,
+      episode: firstEpisode,
+      resumeAtSeconds: 0,
+      progressPercent: 0,
+      updatedAt: addedAt,
+      priority: 3,
+    });
+  }
+
+  return recommendations
+    .sort((left, right) => left.priority - right.priority || right.updatedAt - left.updatedAt)
+    .slice(0, Math.max(0, limit))
+    .map(({ priority: _priority, ...item }) => item);
 }
 
 export function buildContinueWatchingItems(shows: ImportedShow[], limit = 12): ContinueWatchingItem[] {

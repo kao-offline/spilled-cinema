@@ -10,7 +10,7 @@ import { CommandResultRow } from "./CommandResultRow";
 import { MobileBrandSearch } from "./MobileBrandSearch";
 import { HomeSourceTabs } from "./HomeSourceTabs";
 import type { HomepageTab } from "../lib/provider-home-preferences";
-import type { ContinueWatchingItem, NewEpisodeItem } from "../lib/home-personalization";
+import type { RecommendedWatchItem } from "../lib/home-personalization";
 import { HomePersonalizedRail } from "./HomePersonalizedRail";
 
 type MobileHomePageProps = {
@@ -38,8 +38,7 @@ type MobileHomePageProps = {
   activeTab: HomepageTab;
   onTabChange: (tab: HomepageTab) => void;
   providerContent?: ReactNode;
-  newEpisodeItems: NewEpisodeItem[];
-  continueWatchingItems: ContinueWatchingItem[];
+  recommendedWatchItems: RecommendedWatchItem[];
   newEpisodeCheckState: { checking: boolean; message: string | null; error: boolean };
   onCheckNewEpisodes: () => void;
   onPlayEpisode: (episode: ImportedShow["episodes"][number]) => void;
@@ -93,8 +92,7 @@ export function MobileHomePage({
   activeTab,
   onTabChange,
   providerContent,
-  newEpisodeItems,
-  continueWatchingItems,
+  recommendedWatchItems,
   newEpisodeCheckState,
   onCheckNewEpisodes,
   onPlayEpisode,
@@ -220,15 +218,7 @@ export function MobileHomePage({
 
         <HomePersonalizedRail
           compact
-          kind="continue-watching"
-          items={continueWatchingItems}
-          onPlay={(item) => onPlayEpisode(item.episode)}
-        />
-
-        <HomePersonalizedRail
-          compact
-          kind="new-episodes"
-          items={newEpisodeItems}
+          items={recommendedWatchItems}
           freshness={newEpisodeCheckState}
           onRetry={onCheckNewEpisodes}
           onPlay={(item) => onPlayEpisode(item.episode)}

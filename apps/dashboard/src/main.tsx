@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { SpatialNavigationController } from './components/SpatialNavigationController.tsx'
 
 if (window.spilledNative?.kind === "native") {
   document.documentElement.classList.add("native-shell");
@@ -21,6 +22,8 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <SpatialNavigationController>
+      <App />
+    </SpatialNavigationController>
   </StrictMode>,
 )

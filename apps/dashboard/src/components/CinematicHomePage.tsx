@@ -20,7 +20,7 @@ import { HomeTopChrome } from "./HomeTopChrome";
 import { MobileHomePage } from "./MobileHomePage";
 import { ProviderHomeSurface } from "./ProviderHomeSurface";
 import type { ImportActivity } from "./ImportActivityPopup";
-import { buildContinueWatchingItems, buildNewEpisodeItems } from "../lib/home-personalization";
+import { buildRecommendedWatchItems } from "../lib/home-personalization";
 import { HomePersonalizedRail } from "./HomePersonalizedRail";
 import { HomeAccountSheet } from "./HomeAccountSheet";
 
@@ -287,8 +287,7 @@ export function CinematicHomePage({
       return { ...item, importStatus: importActivity.status };
     }),
   })), [baseRails, importActivity]);
-  const newEpisodeItems = useMemo(() => buildNewEpisodeItems(state.shows), [state.shows]);
-  const continueWatchingItems = useMemo(() => buildContinueWatchingItems(state.shows), [state.shows]);
+  const recommendedWatchItems = useMemo(() => buildRecommendedWatchItems(state.shows), [state.shows]);
 
   useEffect(() => {
     const missingArtworkSlugs = rails
@@ -419,8 +418,7 @@ export function CinematicHomePage({
           if (featuredShow && latestFeaturedEpisode) onPlayShow(featuredShow);
           else openSearch();
         }}
-        newEpisodeItems={newEpisodeItems}
-        continueWatchingItems={continueWatchingItems}
+        recommendedWatchItems={recommendedWatchItems}
         newEpisodeCheckState={newEpisodeCheckState}
         onCheckNewEpisodes={onCheckNewEpisodes}
         onPlayEpisode={onPlayEpisode}
@@ -451,13 +449,7 @@ export function CinematicHomePage({
 
         <main className="relative z-10 -mt-8 pb-24">
           <HomePersonalizedRail
-            kind="continue-watching"
-            items={continueWatchingItems}
-            onPlay={(item) => onPlayEpisode(item.episode)}
-          />
-          <HomePersonalizedRail
-            kind="new-episodes"
-            items={newEpisodeItems}
+            items={recommendedWatchItems}
             freshness={newEpisodeCheckState}
             onRetry={onCheckNewEpisodes}
             onPlay={(item) => onPlayEpisode(item.episode)}
