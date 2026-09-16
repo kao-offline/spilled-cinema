@@ -9,10 +9,13 @@
 ## Git state
 
 - Repository: `C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema`
-- Worktree: `C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema-ir-remote-prototype`
+- Integration worktree: `C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema`
+- Source worktree: `C:/Users/hrdyk/Documents/PROJEKTY-MOJE/SpilledCinema-ir-remote-prototype`
 - Base branch/commit: `feat/home-playback-mobile` at `93c4b778738834e717a7318e1cc1100898c0200c`
-- Task branch: `feat/ir-remote-prototype`
+- Integration branch: `feat/home-playback-mobile`
+- Source branch: `feat/ir-remote-prototype`
 - Prototype checkpoint commit: `ec23d628d032fb256891825ed0e2211226ee82bf`
+- Integration commits: `42172fd`, `8ce5d27`
 - Initial status: clean
 - Remote branch/PR: none
 
@@ -38,7 +41,7 @@
 - Changed dashboard files ESLint: passed.
 - Pi installer `bash -n`: passed.
 - Full dashboard build: blocked by existing dependency/type errors in Noble hash imports, existing `RequestInit.cache` usage, and existing `node:sqlite` typings.
-- Browser visual QA: blocked by the same pre-existing Noble hash export mismatch before the React app mounts.
+- Live original-worktree dev-server QA: passed; search footer, binding dialog, and TV Mode state toggle verified.
 - Hardware verification: pending physical Raspberry Pi, Argon case, and remote.
 
 ## Next action
