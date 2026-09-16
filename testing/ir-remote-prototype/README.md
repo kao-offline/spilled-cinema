@@ -76,8 +76,7 @@ focus.
 
 ### One-command local-TV setup
 
-After this branch is merged into the repository's default branch, this command
-can be run from any directory on Raspberry Pi OS:
+Run this from any directory on Raspberry Pi OS (copy-paste):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash
@@ -94,7 +93,7 @@ The installer enables the keymap service for startup and verifies it with
 
 ### One-command bridge setup (Pi forwards to a desktop over the LAN/web)
 
-If the dashboard runs on another computer, install the bridge as well. It is
+If the dashboard runs on another computer, install the bridge as well (copy-paste, replacing the address and token). It is
 enabled for startup and the installer probes the receiver's `/health`
 endpoint to confirm the Pi can reach it:
 
