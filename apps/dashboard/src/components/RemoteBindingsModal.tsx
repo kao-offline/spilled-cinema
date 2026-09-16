@@ -140,10 +140,10 @@ export function RemoteBindingsModal({ open, onClose }: RemoteBindingsModalProps)
                 {remoteInfoState === "checking" || remoteInfoState === "idle"
                   ? "Checking…"
                   : remoteInfoState === "unavailable"
-                    ? "Spilled Server not reachable — start it to check the receiver."
+                    ? "No local server — not needed. Direct IR and phone pairing work without one."
                     : remoteInfo?.receiver.reachable
                       ? `Connected on :${remoteInfo.receiver.port}${remoteInfo.receiver.latencyMs != null ? ` · ${remoteInfo.receiver.latencyMs}ms` : ""}`
-                      : `Nothing on :${remoteInfo?.receiver.port ?? 8765} — start spilled-remote-receiver --bind 0.0.0.0`}
+                      : `Nothing on :${remoteInfo?.receiver.port ?? 8765} — only needed for the optional PC relay`}
               </div>
             </div>
             <button
