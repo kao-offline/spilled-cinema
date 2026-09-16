@@ -80,7 +80,7 @@ export function CommandMenu({
       <div className="pointer-events-none absolute -left-20 top-8 h-72 w-72 rounded-full bg-orange-400/10 blur-3xl" />
       <div className="pointer-events-none absolute right-0 top-1/4 h-96 w-96 rounded-full bg-cyan-300/8 blur-3xl" />
       <div
-        className="relative w-full max-w-[560px] animate-command-panel overflow-hidden rounded-[1.4rem] border border-white/[0.11] bg-white/[0.055] shadow-[0_30px_90px_rgba(0,0,0,0.72)] ring-1 ring-black/40 backdrop-blur-2xl"
+        className={`relative w-full animate-command-panel overflow-hidden rounded-[1.4rem] border border-white/[0.11] bg-white/[0.055] shadow-[0_30px_90px_rgba(0,0,0,0.72)] ring-1 ring-black/40 backdrop-blur-2xl ${tvModeEnabled ? "tv-search max-w-[560px]" : "max-w-[560px]"}`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3">

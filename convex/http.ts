@@ -52,6 +52,61 @@ function json(data: unknown, init: ResponseInit = {}) {
   });
 }
 
+async function remoteBody(request: Request) {
+  return await request.json().catch(() => ({})) as Record<string, unknown>;
+}
+
+function remoteArgs(body: Record<string, unknown>) {
+  return {
+    sessionId: typeof body.sessionId === "string" ? body.sessionId : "",
+    secret: typeof body.secret === "string" ? body.secret : "",
+  };
+}
+
+http.route({
+  path: "/server/phone-remote/start",
+  method: "POST",
+  handler: httpAction(async (ctx) => json(await ctx.runMutation(internal.phoneRemote.create, {}))),
+});
+
+http.route({
+  path: "/server/phone-remote/close",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const args = remoteArgs(await remoteBody(request));
+    try { return json(await ctx.runMutation(internal.phoneRemote.close, args)); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : "Remote session unavailable." }, { status: 401 }); }
+  }),
+});
+
+http.route({
+  path: "/server/phone-remote/command",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await remoteBody(request);
+    const kind = body.kind;
+    if (kind !== "action" && kind !== "text" && kind !== "key") return json({ error: "Invalid remote command." }, { status: 400 });
+    try {
+      return json(await ctx.runMutation(internal.phoneRemote.command, {
+        ...remoteArgs(body), kind, action: typeof body.action === "string" ? body.action : undefined,
+        text: typeof body.text === "string" ? body.text : undefined, key: typeof body.key === "string" ? body.key : undefined,
+        code: typeof body.code === "string" ? body.code : undefined,
+      }));
+    } catch (error) { return json({ error: error instanceof Error ? error.message : "Remote session unavailable." }, { status: 401 }); }
+  }),
+});
+
+http.route({
+  path: "/server/phone-remote/poll",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await remoteBody(request);
+    try {
+      return json(await ctx.runQuery(internal.phoneRemote.poll, { ...remoteArgs(body), after: typeof body.after === "number" ? body.after : 0 }));
+    } catch (error) { return json({ error: error instanceof Error ? error.message : "Remote session unavailable." }, { status: 401 }); }
+  }),
+});
+
 function toHex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
 }
@@ -736,6 +791,21 @@ http.route({
     return json({ ...unsignedTicket, signature }, {
       headers: { "Cache-Control": "no-store" },
     });
+  }),
+});
+
+http.route({
+  path: "/server/v2/private-nodes/resolve",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const networkName = new URL(req.url).searchParams.get("name")?.trim().toLowerCase() ?? "";
+    if (!/^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$/.test(networkName)) {
+      return json({ error: "Enter a valid server name." }, { status: 400 });
+    }
+    const candidate = await ctx.runQuery(internal.controlPlane.resolvePrivateV2NodeNetworkName, { networkName });
+    if (!candidate) return json({ error: "No private node has registered that server name." }, { status: 404 });
+    if (!candidate.online) return json({ error: "That private node is offline." }, { status: 409 });
+    return json({ candidate }, { headers: { "Cache-Control": "no-store" } });
   }),
 });
 

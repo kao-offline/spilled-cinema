@@ -13,6 +13,7 @@ import { getIntegrationById, type IntegrationId } from "./integrations";
 import { balanceImageResolution } from "./image-resolution";
 
 const STORAGE_KEY = "spilled-library.state.v1";
+const STORAGE_META_KEY = "spilled-library.state-meta.v1";
 const DOWNLOADED_LANGUAGE_KEY = "spilled-library.downloaded-languages.v1";
 const WELCOME_DISMISSED_KEY = "spilled-library.welcome-dismissed.v2";
 
@@ -291,12 +292,54 @@ export function readLibraryState(): LibraryState {
   }
 }
 
-export function writeLibraryState(state: LibraryState) {
+export function writeLibraryState(state: LibraryState, updatedAt?: number) {
   if (!canUseStorage()) {
     return;
   }
 
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const stamp = typeof updatedAt === "number" && Number.isFinite(updatedAt) && updatedAt > 0
+    ? Math.floor(updatedAt)
+    : Date.now();
+  try {
+    window.localStorage.setItem(STORAGE_META_KEY, JSON.stringify({ updatedAt: stamp }));
+  } catch {
+    // Metadata is best-effort; the library itself is already persisted.
+  }
+}
+
+export function readLibraryUpdatedAt(): number {
+  if (!canUseStorage()) {
+    return 0;
+  }
+  try {
+    const raw = window.localStorage.getItem(STORAGE_META_KEY);
+    if (!raw) {
+      return 0;
+    }
+    const parsed = JSON.parse(raw) as { updatedAt?: unknown };
+    return typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) && parsed.updatedAt > 0
+      ? Math.floor(parsed.updatedAt)
+      : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function hasLibraryState(): boolean {
+  if (!canUseStorage()) {
+    return false;
+  }
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<LibraryState>;
+    return Array.isArray(parsed?.shows) && parsed.shows.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function exportLibraryState() {

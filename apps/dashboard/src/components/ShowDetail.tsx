@@ -11,6 +11,8 @@ import { fetchExploreFeed } from "../lib/discovery-client";
 import { getProviderLabel } from "../lib/command-search";
 import { getOverlayBannerArtwork, getShowArtwork, getShowMetadata, getStandaloneBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 import { getEpisodeAudioAvailability } from "../lib/episode-audio";
+import { readTvMode } from "../lib/tv-mode";
+import { TvShowDetail } from "./TvShowDetail";
 
 type ShowDetailProps = {
   show: ImportedShow | null;
@@ -157,6 +159,9 @@ export function ShowDetail({
   const [actorCatalog, setActorCatalog] = useState<ExploreItem[]>([]);
   const [actorCatalogLoading, setActorCatalogLoading] = useState(false);
   const [actorCatalogError, setActorCatalogError] = useState<string | null>(null);
+  // TV mode renders the dedicated lean-back surface below: no cast fetch,
+  // no actors, no recommendations. Desktop path is untouched.
+  const tvMode = readTvMode();
 
   const sortedEpisodes = useMemo(() => {
     if (!show) return [];
@@ -256,7 +261,7 @@ export function ShowDetail({
 
   useEffect(() => {
     let canceled = false;
-    if (!show || actors.length) return;
+    if (tvMode || !show || actors.length) return;
     setCastLoading(true);
     void fetchCastForShow(show)
       .then((cast) => {
@@ -274,7 +279,7 @@ export function ShowDetail({
     return () => {
       canceled = true;
     };
-  }, [show, actors.length, onUpdateCast]);
+  }, [tvMode, show, actors.length, onUpdateCast]);
 
   useEffect(() => {
     let canceled = false;
@@ -349,6 +354,19 @@ export function ShowDetail({
         </button>
         <div className="mt-10 text-sm font-bold text-white/70">Show not found.</div>
       </section>
+    );
+  }
+
+  if (tvMode) {
+    return (
+      <TvShowDetail
+        show={show}
+        onBack={onBack}
+        onPlayLatest={() => {
+          if (latestEpisode) onSelectEpisode(latestEpisode);
+        }}
+        onSelectEpisode={onSelectEpisode}
+      />
     );
   }
 

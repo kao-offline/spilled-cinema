@@ -29,10 +29,15 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
 
   return (
     <div className={layout === "grid" ? "animate-grid-scroll-reveal group min-w-0 text-left" : isBanner ? "group w-[78vw] max-w-[420px] shrink-0 text-left sm:w-[31rem]" : "group w-36 shrink-0 text-left sm:w-44"}>
+      {/* Single remote/keyboard stop per card: the artwork button owns focus
+        (with a full aria-label). Title text and the overflow dots are
+        mouse-only affordances running the same primary action, so the D-pad
+        walks card → card instead of bouncing inside one card. */}
       <button
         type="button"
         onClick={primaryAction}
         disabled={importing}
+        aria-label={`${item.kind === "local" ? "Open" : "Add"} ${item.title}`}
         className={isBanner ? "relative block aspect-[16/7] w-full overflow-hidden rounded-2xl bg-white/8 text-left" : "relative block aspect-[2/3] w-full overflow-hidden rounded-xl bg-white/8 text-left"}
       >
         {balancedImageUrl ? (
@@ -65,7 +70,10 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
       </button>
       {!isBanner ? (
         <div className="mt-3 flex min-w-0 items-start gap-2">
-          <button type="button" onClick={primaryAction} disabled={importing} className="min-w-0 flex-1 text-left disabled:cursor-wait">
+          <div
+            onClick={() => { if (!importing) primaryAction(); }}
+            className={clsx("min-w-0 flex-1 text-left", importing ? "cursor-wait" : "cursor-pointer")}
+          >
             <div className="line-clamp-1 text-sm font-black tracking-normal text-white sm:text-base">{item.title}</div>
             <div className="mt-1 flex min-w-0 max-w-full items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] font-semibold text-white/45 sm:text-xs">
               {visibleMetadata.map((part, index) => (
@@ -75,9 +83,10 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
                 </span>
               ))}
             </div>
-          </button>
+          </div>
           <button
             type="button"
+            tabIndex={-1}
             onClick={primaryAction}
             disabled={importing}
             className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white/40 transition hover:bg-white/8 hover:text-white/78"

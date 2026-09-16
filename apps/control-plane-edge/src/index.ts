@@ -4,6 +4,11 @@ type Env = {
 
 const UNAVAILABLE = JSON.stringify({ error: "Control plane is temporarily unavailable." });
 
+function phoneRemoteCors(request: Request) {
+  const origin = request.headers.get("Origin") ?? "*";
+  return { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Vary": "Origin" };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -15,6 +20,8 @@ export default {
         headers: { "Content-Type": "application/json" },
       });
     }
+    const isPhoneRemote = url.pathname.startsWith("/server/phone-remote/");
+    if (isPhoneRemote && request.method === "OPTIONS") return new Response(null, { status: 204, headers: phoneRemoteCors(request) });
     const target = `${env.UPSTREAM_BASE.replace(/\/$/, "")}${url.pathname}${url.search}`;
     const headers = new Headers(request.headers);
     headers.delete("host");
@@ -30,9 +37,11 @@ export default {
         body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
         redirect: "manual",
       });
+      const responseHeaders = new Headers(upstream.headers);
+      if (isPhoneRemote) for (const [name, value] of Object.entries(phoneRemoteCors(request))) responseHeaders.set(name, value);
       return new Response(upstream.body, {
         status: upstream.status,
-        headers: upstream.headers,
+        headers: responseHeaders,
       });
     } catch (error) {
       console.error(JSON.stringify({

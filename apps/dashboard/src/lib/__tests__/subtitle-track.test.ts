@@ -88,6 +88,26 @@ describe("selected subtitle lifecycle", () => {
     expect(onReady).toHaveBeenCalledOnce();
   });
 
+  it("retries a transient subtitle response before reporting an error", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response("warming up", { status: 503 }))
+      .mockResolvedValueOnce(new Response(valid));
+    vi.stubGlobal("fetch", fetcher);
+
+    cleanup = loadSubtitleTrack(video, definition, { onError, onReady });
+    await vi.advanceTimersByTimeAsync(0);
+    // The failed fetch settles after the first timer flush, then schedules
+    // the bounded retry delay.
+    await vi.advanceTimersByTimeAsync(700);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1]?.[0])).toContain("spilled_subtitle_retry=1");
+    expect(appendChild).toHaveBeenCalledWith(track);
+    track.dispatchEvent(new Event("load"));
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("reports native parsing failures and revokes blob URLs on cleanup", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(valid)));
     cleanup = loadSubtitleTrack(video, definition, { onError });

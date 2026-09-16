@@ -13,6 +13,7 @@ import type * as http from "../http.js";
 import type * as integrations from "../integrations.js";
 import type * as migrations from "../migrations.js";
 import type * as operators from "../operators.js";
+import type * as phoneRemote from "../phoneRemote.js";
 import type * as providerModules from "../providerModules.js";
 
 import type {
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   integrations: typeof integrations;
   migrations: typeof migrations;
   operators: typeof operators;
+  phoneRemote: typeof phoneRemote;
   providerModules: typeof providerModules;
 }>;
 

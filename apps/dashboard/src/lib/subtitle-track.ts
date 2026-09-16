@@ -1,5 +1,34 @@
 import { normalizeSubtitlePayload } from "./media-selection";
 
+const MAX_TRANSIENT_SUBTITLE_ATTEMPTS = 3;
+const SUBTITLE_RETRY_DELAY_MS = 350;
+
+function isRetryableStatus(status: number) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function retryUrl(source: string, attempt: number) {
+  if (attempt === 0 || source.startsWith("blob:")) return source;
+  try {
+    const url = new URL(source, typeof window === "undefined" ? "http://localhost/" : window.location.href);
+    // A failed proxy response must not be reused while the upstream is warming up.
+    url.searchParams.set("spilled_subtitle_retry", String(attempt));
+    return url.href;
+  } catch {
+    return source;
+  }
+}
+
+function waitForRetry(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, SUBTITLE_RETRY_DELAY_MS);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
+}
+
 /** Owns one selected native track. Caption failures never touch the media source. */
 export function loadSubtitleTrack(
   video: HTMLVideoElement,
@@ -43,8 +72,27 @@ export function loadSubtitleTrack(
 
   void (async () => {
     try {
-      const response = await fetch(definition.src, { credentials: "omit", signal: controller.signal });
-      if (!response.ok) throw new Error(`Subtitle source returned ${response.status}. Try again or select another track.`);
+      let response: Response | null = null;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < MAX_TRANSIENT_SUBTITLE_ATTEMPTS; attempt += 1) {
+        try {
+          const candidate = await fetch(retryUrl(definition.src, attempt), { credentials: "omit", signal: controller.signal });
+          if (candidate.ok || !isRetryableStatus(candidate.status) || attempt === MAX_TRANSIENT_SUBTITLE_ATTEMPTS - 1) {
+            response = candidate;
+            break;
+          }
+          lastError = new Error(`Subtitle source returned ${candidate.status}.`);
+        } catch (error) {
+          lastError = error;
+          if (controller.signal.aborted || attempt === MAX_TRANSIENT_SUBTITLE_ATTEMPTS - 1) throw error;
+        }
+        await waitForRetry(controller.signal);
+      }
+      if (!response?.ok) {
+        throw lastError instanceof Error
+          ? lastError
+          : new Error(`Subtitle source returned ${response?.status ?? "an unknown error"}. Try again or select another track.`);
+      }
       const payload = await response.text();
       if (disposed || failed) return;
       const normalized = normalizeSubtitlePayload(payload);

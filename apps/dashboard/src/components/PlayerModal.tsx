@@ -19,6 +19,8 @@ import { prefetchEpisodePreviewImages } from "../lib/episode-preview-cache";
 import type { FullDownloadJob } from "../lib/full-download-client";
 import { getEpisodeAudioAvailability } from "../lib/episode-audio";
 import { buildAudioOptions, buildSubtitleOptions, buildSubtitleProxyUrl, getAudioLanguageKey, getSubtitleLanguageKey } from "../lib/media-selection";
+import { readTvMode } from "../lib/tv-mode";
+import { TvEpisodePicker } from "./TvEpisodePicker";
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -315,6 +317,13 @@ export function PlayerModal({
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
+  // TV mode swaps the 3D episode carousel for the lean-back picker below.
+  // Desktop path is untouched.
+  const tvMode = readTvMode();
+  const handleTvEpisodePick = (entry: LibraryEpisode) => {
+    setEpisodeTransitioning(true);
+    window.setTimeout(() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); window.setTimeout(() => setEpisodeTransitioning(false), 80); }, 280);
+  };
   const [seasonMenuOpen, setSeasonMenuOpen] = useState(false);
   const [episodeTransitioning, setEpisodeTransitioning] = useState(false);
   const [focusedEpisodeIndex, setFocusedEpisodeIndex] = useState<number>(0);
@@ -322,6 +331,7 @@ export function PlayerModal({
   const [episodePreviewsLoading, setEpisodePreviewsLoading] = useState(false);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
+  const failedPlaybackAliasesRef = useRef<Set<string>>(new Set());
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
   const lastProgressSaveRef = useRef(0);
   const onEpisodeEndedRef = useRef(onEpisodeEnded);
@@ -415,6 +425,7 @@ export function PlayerModal({
     setExpandedPlayers([]);
     setDiscoveredSubtitles([]);
     setSubtitleError(null);
+    failedPlaybackAliasesRef.current = new Set();
     const preference = readMediaSelectionPreference().audioLanguage;
     const selected = episode?.players.find((player) => player.alias === episode.selectedPlayerAlias);
     const preferred = buildAudioOptions(episode?.players ?? []).find((group) => group.key === preference);
@@ -816,11 +827,33 @@ export function PlayerModal({
     if (!activePlayer || activeIsLocal) return;
     const key = playbackCacheKey(activePlayer);
     removeCachedPlayerUrl("playback", key);
+    failedPlaybackAliasesRef.current.add(activePlayer.alias);
+    setPlayerStatuses((current) => ({
+      ...current,
+      [activePlayer.alias]: { status: "failed", error: message },
+    }));
+
+    const fallback = effectiveEpisode?.players.find((player) =>
+      !isLocalPlayer(player) &&
+      player.alias !== activePlayer.alias &&
+      !failedPlaybackAliasesRef.current.has(player.alias),
+    );
+    if (fallback) {
+      // A resolved URL can still be rejected by the final media host. Keep the
+      // saved preference intact, but continue playback with the next source.
+      setLocalSelectedAlias(fallback.alias);
+      setPlayback(null);
+      setPlaybackError(null);
+      setPlaybackFailures([]);
+      setPlaybackRetryNonce((value) => value + 1);
+      return;
+    }
+
     if (playbackErrorRetryRef.current === key) return;
     playbackErrorRetryRef.current = key;
     setPlayback(null);
     setPlaybackRetryNonce((value) => value + 1);
-  }, [activeIsLocal, activePlayer, playback]);
+  }, [activeIsLocal, activePlayer, effectiveEpisode, playback]);
 
   const previewSeason = selectedSelectorSeason ?? episode?.seasonNumber ?? null;
   useEffect(() => {
@@ -1012,6 +1045,18 @@ export function PlayerModal({
       </div>
 
       {episodeSelectorOpen ? (
+        tvMode ? (
+          <>
+            <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
+            <TvEpisodePicker
+              seasons={selectorSeasons}
+              initialSeason={activeSelectorSeason}
+              currentEpisodeId={effectiveEpisode.id}
+              onClose={() => setEpisodeSelectorOpen(false)}
+              onPick={handleTvEpisodePick}
+            />
+          </>
+        ) : (
         <>
         <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
         <aside className="player-episode-selector pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)", touchAction: "pan-y" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }} onTouchStart={(event) => { selectorTouchStartRef.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={(event) => { const start = selectorTouchStartRef.current; selectorTouchStartRef.current = null; const end = event.changedTouches[0]?.clientY; if (start == null || end == null || Math.abs(end - start) < 28) return; setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (end < start ? 1 : -1)))); }}>
@@ -1094,6 +1139,7 @@ export function PlayerModal({
           </div>
         </aside>
         </>
+        )
       ) : null}
 
       {episodeTransitioning ? (

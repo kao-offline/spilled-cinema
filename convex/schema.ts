@@ -182,6 +182,9 @@ export default defineSchema({
     status: nodeVerificationStatusValidator,
     enrollmentCredentialHash: v.optional(v.string()),
     advertisedCapabilities: v.optional(v.array(v.string())),
+    // Existing production registrations predate the stricter schema and
+    // retain their user-facing pairing code.
+    connectionCode: v.optional(v.string()),
     endpointUrl: v.optional(v.string()),
     gatewayConnectionId: v.optional(v.string()),
     region: v.optional(v.string()),
@@ -189,7 +192,16 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_node_id", ["nodeId"])
+    .index("by_connection_code", ["connectionCode"])
     .index("by_status", ["status"]),
+  nodeNetworkNames: defineTable({
+    networkName: v.string(),
+    nodeId: v.string(),
+    claimedAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_network_name", ["networkName"])
+    .index("by_node_id", ["nodeId"]),
   nodeHeartbeatsV2: defineTable({
     nodeId: v.string(),
     gatewayAttestedAt: v.number(),
@@ -285,4 +297,24 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_token_identifier", ["tokenIdentifier"]),
+  phoneRemoteSessions: defineTable({
+    sessionId: v.string(),
+    secret: v.string(),
+    nextSequence: v.number(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_session_id", ["sessionId"])
+    .index("by_expires_at", ["expiresAt"]),
+  phoneRemoteCommands: defineTable({
+    sessionId: v.string(),
+    sequence: v.number(),
+    kind: v.union(v.literal("action"), v.literal("text"), v.literal("key")),
+    action: v.optional(v.string()),
+    text: v.optional(v.string()),
+    key: v.optional(v.string()),
+    code: v.optional(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  }).index("by_session_id_and_sequence", ["sessionId", "sequence"])
+    .index("by_expires_at", ["expiresAt"]),
 });

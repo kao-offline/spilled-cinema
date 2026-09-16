@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import {
+  normalizeLocalLibraryInput,
+  readLocalLibrarySnapshot,
+  writeLocalLibrarySnapshot,
+} from "./local-library-store";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
@@ -47,6 +52,20 @@ import {
   findEpisodeDownloadFast,
   findSubtitleFilePath,
 } from "../../dashboard/src/server/full-download";
+import {
+  enqueueRemoteCommand,
+  isLanReachable,
+  issuePairingToken,
+  isPairedToken,
+  readRemoteCommands,
+  RemoteCommandError,
+  renderPhoneRemotePage,
+  revokePairingToken,
+  probeRemoteReceiver,
+  publicRemoteUrl,
+  serverLanIp,
+  serverPort,
+} from "./remote-control";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -1443,7 +1462,7 @@ export function createHttpHandlers() {
       const isRetryable403 = (status: number) => status === 403 || status === 401;
 
       function buildBrowserUpstreamHeaders(override: { stripReferer?: boolean; userAgent?: string; extra?: Record<string, string> } = {}) {
-        return {
+  return {
           "user-agent": override.userAgent ?? USER_AGENT,
           accept: "*/*",
           ...(referer && !override.stripReferer ? { referer } : {}),
@@ -2272,6 +2291,147 @@ export function createHttpHandlers() {
     sendJson(res, 200, { records: await runtime.listKnownNodeRecords() });
   };
 
+  function isLoopbackHostHeader(value: string | string[] | undefined) {
+    const raw = Array.isArray(value) ? value[0] : value;
+    if (!raw) {
+      // Native pipe / in-process calls carry no Host header; allow them.
+      return true;
+    }
+    const host = raw.trim().toLowerCase().split(",")[0]?.trim() ?? "";
+    const withoutPort = host.startsWith("[")
+      ? host.slice(0, host.indexOf("]") + 1)
+      : host.split(":")[0] ?? "";
+    return withoutPort === "127.0.0.1" || withoutPort === "localhost" || withoutPort === "::1" || withoutPort === "[::1]";
+  }
+
+  function isLocalLibraryRequestAllowed(req: RequestLike) {
+    const headers = req.headers ?? {};
+    // Tunnel / proxy markers must never reach this local-only endpoint, even
+    // though the TCP connection itself arrives via loopback forwarding.
+    const forwarded = headers["x-forwarded-for"] ?? headers["cf-connecting-ip"] ?? headers["cf-ray"] ?? headers["x-forwarded-host"];
+    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    if (typeof forwardedValue === "string" && forwardedValue.trim()) {
+      return false;
+    }
+    return isLoopbackHostHeader(headers.host);
+  }
+
+  const localLibraryHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (!isLocalLibraryRequestAllowed(req)) {
+      return sendJson(res, 403, { error: "Local library sync is available only from this computer." });
+    }
+    try {
+      if (req.method === "GET") {
+        sendJson(res, 200, { snapshot: await readLocalLibrarySnapshot() });
+        return;
+      }
+      if (req.method === "PUT" || req.method === "POST") {
+        const body = await readJsonBody<{ snapshot?: unknown } & Record<string, unknown>>(req);
+        const input = (body as { snapshot?: unknown }).snapshot ?? body;
+        const snapshot = await writeLocalLibrarySnapshot(normalizeLocalLibraryInput(input));
+        sendJson(res, 200, { ok: true, snapshot });
+        return;
+      }
+      return sendJson(res, 405, { error: "Method not allowed." });
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Failed to sync local library." });
+    }
+  };
+
+  // Phone-as-remote: pairing token + validated command queue the dashboard
+  // polls through the runtime cascade. The token is the only auth; commands
+  // are replayed as local key/text input by the dashboard, never executed.
+  const remotePairHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") {
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+    try {
+      const body = await readJsonBody<{ fresh?: unknown }>(req).catch(() => ({}));
+      const token = issuePairingToken((body as { fresh?: unknown })?.fresh === true);
+      return sendJson(res, 200, { token });
+    } catch {
+      return sendJson(res, 400, { error: "Could not pair this remote." });
+    }
+  };
+
+  const remoteUnpairHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") {
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+    revokePairingToken();
+    return sendJson(res, 200, { ok: true });
+  };
+
+  const remoteInfoHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") {
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+    const port = serverPort();
+    const lanIp = serverLanIp();
+    const tunnelRemoteUrl = publicRemoteUrl();
+    const receiver = await probeRemoteReceiver();
+    return sendJson(res, 200, {
+      ok: true,
+      port,
+      lanIp,
+      lanReachable: isLanReachable() && lanIp !== "",
+      remotePath: "/remote",
+      // An active tunnel makes pairing work from any network. Fall back to
+      // LAN only for servers deliberately running without a public endpoint.
+      remoteUrl: tunnelRemoteUrl || (lanIp ? `http://${lanIp}:${port}/remote` : ""),
+      remoteTransport: tunnelRemoteUrl ? "tunnel" : "lan",
+      receiver: { port: receiver.port, reachable: receiver.reachable, latencyMs: receiver.latencyMs },
+    });
+  };
+
+  const remoteCommandHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") {
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+    try {
+      const body = await readJsonBody<Record<string, unknown>>(req);
+      const command = enqueueRemoteCommand({
+        token: body.token,
+        kind: body.kind,
+        action: body.action,
+        text: body.text,
+        key: body.key,
+        code: body.code,
+      });
+      return sendJson(res, 200, { ok: true, id: command.id });
+    } catch (error) {
+      const statusCode = error instanceof RemoteCommandError ? error.statusCode : 400;
+      return sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Invalid remote command." });
+    }
+  };
+
+  const remotePollHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") {
+      return sendJson(res, 405, { error: "Method not allowed." });
+    }
+    const url = new URL(req.url ?? "/api/remote/poll", "http://127.0.0.1");
+    if (!isPairedToken(url.searchParams.get("token"))) {
+      return sendJson(res, 401, { error: "Pair this remote from the dashboard first." });
+    }
+    const cursor = Number.parseInt(url.searchParams.get("cursor") ?? "0", 10);
+    return sendJson(res, 200, readRemoteCommands(cursor));
+  };
+
+  const remotePageHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "GET") {
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method not allowed.");
+      return;
+    }
+    const url = new URL(req.url ?? "/remote", "http://127.0.0.1");
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.end(renderPhoneRemotePage(url.searchParams.get("token") ?? ""));
+  };
+
   return {
     runtime,
     statusHandler,
@@ -2354,5 +2514,12 @@ export function createHttpHandlers() {
     meshAnnounceHandler,
     meshSnapshotHandler,
     meshNodesHandler,
+    localLibraryHandler,
+    remotePairHandler,
+    remoteUnpairHandler,
+    remoteInfoHandler,
+    remoteCommandHandler,
+    remotePollHandler,
+    remotePageHandler,
   };
 }

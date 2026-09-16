@@ -51,12 +51,17 @@ export type ImageDeliveryScenario = {
 };
 
 export function shouldUseEconomyArtwork(scenario: ImageDeliveryScenario) {
+  // NOTE: tvMode intentionally does NOT force economy artwork. A 10-foot
+  // surface (Apple TV / Android TV) sits on the biggest screen in the
+  // house — downscaling heroes to w780 looks blurry from the couch.
+  // Economy stays driven by real constraints: saveData, slow networks,
+  // low memory, and small viewports. TV sticks that need lighter pages
+  // get that from fewer rails/cards in TvHomePage, not worse pixels.
   return Boolean(
     scenario.saveData ||
     scenario.effectiveType === "slow-2g" ||
     scenario.effectiveType === "2g" ||
     scenario.effectiveType === "3g" ||
-    scenario.tvMode ||
     (scenario.deviceMemoryGb != null && scenario.deviceMemoryGb <= 4) ||
     (scenario.viewportWidth != null && scenario.viewportWidth <= 1023),
   );

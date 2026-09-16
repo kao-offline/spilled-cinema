@@ -1,5 +1,5 @@
-import { useEffect, type ReactNode } from "react";
-import { findBestSpatialCandidate, type SpatialDirection } from "../lib/spatial-navigation";
+import { useEffect, useRef, type ReactNode } from "react";
+import { rankSpatialCandidates, type SpatialDirection } from "../lib/spatial-navigation";
 
 const FOCUSABLE_SELECTOR = [
   "button:not(:disabled)",
@@ -25,12 +25,53 @@ function activeNavigationScope() {
 }
 
 function focusableElements(scope: HTMLElement) {
-  return Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(isVisible);
+  // tabindex="-1" means mouse-only (e.g. a card's overflow button that
+  // duplicates the primary action). The remote must skip those stops so one
+  // card is always one press, never a bounce between title and dots.
+  return Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter((element) => element.getAttribute("tabindex") !== "-1")
+    .filter(isVisible);
 }
 
-function focusElement(element: HTMLElement) {
+/**
+ * True when the element (or any ancestor) is viewport-docked. Only the
+ * element itself is not enough: nav buttons are static, their header is
+ * what is fixed — and that is exactly what poisons viewport-space scoring.
+ */
+function isViewportDocked(element: HTMLElement) {
+  let node: HTMLElement | null = element;
+  while (node && node !== document.body) {
+    if (window.getComputedStyle(node).position === "fixed") return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Rect in DOCUMENT coordinates. Viewport rects lie as soon as the page
+ * scrolls: a fixed header (the TV nav) never scrolls away, so in viewport
+ * space it is always "nearest" and steals every Up press from deep content.
+ * Content gets the scroll offset added back; fixed chrome is pinned to its
+ * natural place at the top, making all distances scroll-invariant.
+ */
+function documentRect(element: HTMLElement) {
+  const box = element.getBoundingClientRect();
+  const docked = isViewportDocked(element);
+  const left = box.left + (docked ? 0 : window.scrollX);
+  const top = box.top + (docked ? 0 : window.scrollY);
+  return { left, top, right: left + box.width, bottom: top + box.height, width: box.width, height: box.height };
+}
+
+function focusElement(element: HTMLElement, direction?: SpatialDirection) {
   element.focus({ preventScroll: true });
-  element.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  // Remote-friendly glide: preventScroll above suppresses the browser's
+  // instant jump, then this single animated pass carries the selection.
+  // Vertical moves CENTER the card so the page always travels with focus
+  // (nearest would scroll zero pixels when the target is already peeking
+  // into view, stranding context like the hero cut off above). Horizontal
+  // rail walks keep nearest so the page never swims sideways.
+  const vertical = direction === "up" || direction === "down";
+  element.scrollIntoView({ behavior: "smooth", block: vertical ? "center" : "nearest", inline: "nearest" });
 }
 
 function firstFocusable(elements: HTMLElement[]) {
@@ -52,8 +93,16 @@ function shouldKeepNativeKeys(target: HTMLElement | null, key: string) {
 }
 
 export function SpatialNavigationController({ children }: { children: ReactNode }) {
+  // Remembers the last hop so a repeated press in the SAME direction can
+  // never bounce straight back (A → B → A). Deliberate backtracking with the
+  // opposite arrow still works — only the exact return hop is skipped.
+  const lastMoveRef = useRef<{ from: HTMLElement; to: HTMLElement; direction: SpatialDirection } | null>(null);
+
   useEffect(() => {
-    const handlePointer = () => document.documentElement.classList.remove("spatial-navigation-active");
+    const handlePointer = () => {
+      document.documentElement.classList.remove("spatial-navigation-active");
+      lastMoveRef.current = null;
+    };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
@@ -79,11 +128,25 @@ export function SpatialNavigationController({ children }: { children: ReactNode 
         if (!active || !elements.includes(active)) {
           const first = firstFocusable(elements);
           if (first) focusElement(first);
+          lastMoveRef.current = null;
           return;
         }
-        const candidates = elements.filter((element) => element !== active).map((element) => ({ element, rect: element.getBoundingClientRect() }));
-        const next = findBestSpatialCandidate(active.getBoundingClientRect(), candidates, direction);
-        if (next) focusElement(next.element);
+        const ranked = rankSpatialCandidates(
+          documentRect(active),
+          elements.filter((element) => element !== active).map((element) => ({ element, rect: documentRect(element) })),
+          direction,
+        );
+        let pick = ranked[0] ?? null;
+        const last = lastMoveRef.current;
+        if (pick && last && last.direction === direction && active === last.to && pick.element === last.from) {
+          pick = ranked[1] ?? null;
+        }
+        if (pick) {
+          lastMoveRef.current = { from: active, to: pick.element, direction };
+          focusElement(pick.element, direction);
+        } else {
+          lastMoveRef.current = null;
+        }
         return;
       }
 

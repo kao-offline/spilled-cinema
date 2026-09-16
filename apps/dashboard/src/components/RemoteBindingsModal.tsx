@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Keyboard, RotateCcw, Satellite, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Keyboard, QrCode, RefreshCw, RotateCcw, Satellite, Smartphone, Wifi, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   DEFAULT_REMOTE_BINDINGS,
@@ -11,6 +11,16 @@ import {
   type RemoteAction,
   type RemoteBindings,
 } from "../lib/remote-bindings";
+import {
+  buildHostedPhoneRemoteUrl,
+  closeHostedPhoneRemoteSession,
+  fetchRemoteInfo,
+  readPhoneRemoteSession,
+  startHostedPhoneRemoteSession,
+  type PhoneRemoteSession,
+  type RemoteInfo,
+} from "../lib/phone-remote";
+import { PhoneRemoteQr } from "./PhoneRemoteQr";
 
 type RemoteBindingsModalProps = {
   open: boolean;
@@ -32,12 +42,41 @@ export function RemoteBindingsModal({ open, onClose }: RemoteBindingsModalProps)
   const [draft, setDraft] = useState<RemoteBindings>(() => readRemoteBindings());
   const [listeningFor, setListeningFor] = useState<RemoteAction | null>(null);
   const [message, setMessage] = useState("Choose an action, then press a remote button.");
+  const [remoteInfo, setRemoteInfo] = useState<RemoteInfo | null>(null);
+  const [remoteInfoState, setRemoteInfoState] = useState<"idle" | "checking" | "ready" | "unavailable">("idle");
+  const [phoneSession, setPhoneSession] = useState<PhoneRemoteSession | null>(null);
+  const [pairingBusy, setPairingBusy] = useState(false);
+
+  const refreshRemoteInfo = async () => {
+    setRemoteInfoState("checking");
+    const info = await fetchRemoteInfo();
+    setRemoteInfo(info);
+    setRemoteInfoState(info ? "ready" : "unavailable");
+    setPhoneSession(readPhoneRemoteSession());
+  };
+
+  const handlePairPhone = async () => {
+    setPairingBusy(true);
+    const session = await startHostedPhoneRemoteSession();
+    setPhoneSession(session);
+    setMessage(session
+      ? "Phone paired to this TV session. Scan the QR code to open the remote."
+      : "Could not start the phone remote session. Try again.");
+    setPairingBusy(false);
+  };
+
+  const handleUnpairPhone = async () => {
+    await closeHostedPhoneRemoteSession();
+    setPhoneSession(null);
+    setMessage("Phone unpaired. The old QR code no longer works.");
+  };
 
   useEffect(() => {
     if (!open) return;
     setDraft(readRemoteBindings());
     setListeningFor(null);
     setMessage("Choose an action, then press a remote button.");
+    void refreshRemoteInfo();
   }, [open]);
 
   useEffect(() => {
@@ -90,6 +129,79 @@ export function RemoteBindingsModal({ open, onClose }: RemoteBindingsModalProps)
         </header>
 
         <div className="relative overflow-y-auto px-4 py-4 sm:px-6">
+          <section aria-label="Local IR receiver" className="mb-3 flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[.03] px-4 py-3">
+            <span
+              aria-hidden="true"
+              className={`h-2.5 w-2.5 shrink-0 rounded-full ${remoteInfoState === "checking" ? "animate-pulse bg-amber-300" : remoteInfo?.receiver.reachable ? "bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,.8)]" : "bg-white/20"}`}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-bold text-white/88">Local IR receiver</div>
+              <div className="truncate text-[11px] text-white/38">
+                {remoteInfoState === "checking" || remoteInfoState === "idle"
+                  ? "Checking…"
+                  : remoteInfoState === "unavailable"
+                    ? "Spilled Server not reachable — start it to check the receiver."
+                    : remoteInfo?.receiver.reachable
+                      ? `Connected on :${remoteInfo.receiver.port}${remoteInfo.receiver.latencyMs != null ? ` · ${remoteInfo.receiver.latencyMs}ms` : ""}`
+                      : `Nothing on :${remoteInfo?.receiver.port ?? 8765} — start spilled-remote-receiver --bind 0.0.0.0`}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshRemoteInfo()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/8 bg-white/5 text-white/55 transition hover:bg-white/10 hover:text-white"
+              aria-label="Recheck receiver and phone remote"
+            >
+              <RefreshCw className={`h-4 w-4 ${remoteInfoState === "checking" ? "animate-spin" : ""}`} />
+            </button>
+          </section>
+
+          <section aria-label="Phone remote" className="mb-4 rounded-2xl border border-white/8 bg-white/[.03] px-4 py-4">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-300/12 text-cyan-100">
+                <Smartphone className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-bold text-white/88">Phone remote</div>
+                <div className="text-[11px] text-white/38">D-pad plus a keyboard that types into the TV search box.</div>
+              </div>
+            </div>
+            {!phoneSession ? (
+              <div className="mt-3">
+                <p className="mb-3 flex items-start gap-2 text-[11px] leading-5 text-white/45">
+                  <Wifi className="mt-0.5 h-4 w-4 shrink-0 text-emerald-200/70" />
+                  No server or shared Wi-Fi needed. The QR code pairs a phone to this TV session through a private link.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void handlePairPhone()}
+                  disabled={pairingBusy}
+                  className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-5 text-xs font-black text-black transition hover:bg-orange-100 disabled:opacity-50"
+                >
+                  <QrCode className="h-4 w-4" />
+                  {pairingBusy ? "Pairing…" : "Pair this TV"}
+                </button>
+              </div>
+            ) : (
+              <div className="mt-3 flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+                <PhoneRemoteQr value={buildHostedPhoneRemoteUrl(phoneSession)} />
+                <div className="min-w-0 flex-1 text-center sm:text-left">
+                  <div className="break-all font-mono text-[11px] leading-5 text-cyan-100/80">{buildHostedPhoneRemoteUrl(phoneSession)}</div>
+                  <p className="mt-2 text-[11px] leading-5 text-white/45">
+                    Scan to open the remote. Focus the TV search box, then type on your phone — letters land where the cursor is.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void handleUnpairPhone()}
+                    className="mt-2 h-9 rounded-full border border-white/10 px-4 text-[11px] font-bold text-white/55 transition hover:bg-white/8 hover:text-white"
+                  >
+                    Unpair phone
+                  </button>
+                </div>
+              </div>
+             )}
+          </section>
+
           <div className="grid gap-2 sm:grid-cols-2">
             {REMOTE_ACTIONS.map(({ action, label, hint }) => {
               const Icon = action in DIRECTION_ICON ? DIRECTION_ICON[action as keyof typeof DIRECTION_ICON] : Keyboard;
