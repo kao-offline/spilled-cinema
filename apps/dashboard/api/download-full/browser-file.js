@@ -140,7 +140,9 @@ export default async function handler(req, res) {
     const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
     const isXpassSegment = /play\.xpass\.top/i.test(referer || "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
 
-    const isRetryable403 = (status) => status === 403 || status === 401;
+    const isRetryableUpstreamStatus = (status) =>
+      status === 401 || status === 403 || status === 408 || status === 425 || status === 429 || status >= 500;
+    const MAX_UPSTREAM_ATTEMPTS = 6;
 
     function buildUpstreamHeaders(override = {}) {
       return {
@@ -160,15 +162,18 @@ export default async function handler(req, res) {
     ];
 
     let upstream;
-    for (const buildHeaders of headerStrategies) {
+    for (let attempt = 0; attempt < MAX_UPSTREAM_ATTEMPTS; attempt += 1) {
+      const buildHeaders = headerStrategies[attempt % headerStrategies.length];
       upstream = await fetch(parsed.toString(), {
         method: req.method,
         headers: buildHeaders(),
         redirect: "follow",
+        cache: "no-store",
       });
-      if (upstream.ok || upstream.status === 206 || !isRetryable403(upstream.status)) {
+      if (upstream.ok || upstream.status === 206 || !isRetryableUpstreamStatus(upstream.status) || attempt === MAX_UPSTREAM_ATTEMPTS - 1) {
         break;
       }
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
     }
 
     if (!upstream.ok && upstream.status !== 206) {

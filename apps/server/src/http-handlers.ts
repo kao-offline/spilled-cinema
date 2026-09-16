@@ -1459,7 +1459,9 @@ export function createHttpHandlers() {
       const isVidkingRequest = Boolean(getBrowserFileOriginHeader(referer));
       const isXpassSegment = /play\.xpass\.top/i.test(referer ?? "") && /\/page-\d+\.html(?:$|[?#])/i.test(parsed.pathname + parsed.search);
 
-      const isRetryable403 = (status: number) => status === 403 || status === 401;
+      const isRetryableUpstreamStatus = (status: number) =>
+        status === 401 || status === 403 || status === 408 || status === 425 || status === 429 || status >= 500;
+      const maxUpstreamAttempts = 6;
 
       function buildBrowserUpstreamHeaders(override: { stripReferer?: boolean; userAgent?: string; extra?: Record<string, string> } = {}) {
   return {
@@ -1479,15 +1481,17 @@ export function createHttpHandlers() {
       ];
 
       let upstream: Awaited<ReturnType<typeof fetchProxyTarget>> | undefined;
-      for (const buildHeaders of headerStrategies) {
+      for (let attempt = 0; attempt < maxUpstreamAttempts; attempt += 1) {
+        const buildHeaders = headerStrategies[attempt % headerStrategies.length];
         upstream = await fetchProxyTarget({
           url: parsed,
           method: req.method,
           headers: buildHeaders(),
         });
-        if (upstream.ok || upstream.status === 206 || !isRetryable403(upstream.status)) {
+        if (upstream.ok || upstream.status === 206 || !isRetryableUpstreamStatus(upstream.status) || attempt === maxUpstreamAttempts - 1) {
           break;
         }
+        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
       }
       if (!upstream) return sendJson(res, 502, { error: "Failed to reach upstream." });
 
