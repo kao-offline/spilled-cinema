@@ -89,6 +89,24 @@ the map immediately when the receiver already exists. If it adds the overlay,
 reboot once. This direct mode makes the remote a Linux input device, so Chromium
 and the dashboard receive the buttons without the Python network relay.
 
+The installer enables the keymap service for startup and verifies it with
+`systemctl is-enabled`, so the remote keeps working after a reboot.
+
+### One-command bridge setup (Pi forwards to a desktop over the LAN/web)
+
+If the dashboard runs on another computer, install the bridge as well. It is
+enabled for startup and the installer probes the receiver's `/health`
+endpoint to confirm the Pi can reach it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash -s -- --with-bridge --receiver-url http://192.168.1.50:8765 --token "YOUR_TOKEN"
+```
+
+Use the LAN address of the PC running
+`spilled-remote-receiver --bind 0.0.0.0 --token "YOUR_TOKEN"` and the same
+token. Add `--dashboard-url https://spilled.overload.studio` to also verify
+the Pi can reach the hosted dashboard (useful for a Pi-as-TV kiosk).
+
 The remote's arrows, OK, Home, Back, volume buttons, and menu/captions button
 receive sensible defaults. Open the dashboard Search menu and choose **Remote
 buttons** to capture different buttons or correct a revision-specific layout.

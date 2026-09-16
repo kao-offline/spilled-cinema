@@ -1,8 +1,7 @@
 [Unit]
 Description=Spilled IR remote prototype bridge
 After=network-online.target spilled-ir-keymap.service
-Wants=network-online.target
-Requires=spilled-ir-keymap.service
+Wants=network-online.target spilled-ir-keymap.service
 
 [Service]
 Type=simple

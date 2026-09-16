@@ -1,7 +1,9 @@
 import {
   keyEventForRemoteAction,
   pollHostedPhoneRemote,
+  pollPhoneRemote,
   readPhoneRemoteSession,
+  readPhoneRemoteToken,
   type RemoteCommand,
 } from "./phone-remote";
 
@@ -63,6 +65,16 @@ export function insertRemoteText(text: string) {
   }
   const active = document.activeElement;
   if (active instanceof HTMLElement && active.isContentEditable) {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(text));
+      range.collapse(false);
+      active.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+      return true;
+    }
+    active.focus();
     document.execCommand("insertText", false, text);
     return true;
   }
@@ -88,28 +100,44 @@ export function applyRemoteCommand(command: RemoteCommand) {
  * Polls the server queue and replays phone commands as local input. Idle
  * (no timers wasted on failures) until a token is paired; backs off while
  * the server is unreachable. Safe to start once per app lifetime.
+ *
+ * Hosted (edge) sessions are polled first; when none is paired, the legacy
+ * LAN queue from the Spilled Server /remote page is polled instead, so both
+ * pairing paths stay live.
  */
 export function startPhoneRemoteClient() {
   let stopped = false;
   let cursor = 0;
+  let lanCursor = 0;
   let timer: number | null = null;
   let inflight = false;
 
   const tick = async () => {
     if (stopped || inflight) return;
+    if (document.hidden) {
+      schedule(POLL_MS);
+      return;
+    }
     const session = readPhoneRemoteSession();
-    if (!session || document.hidden) {
+    const lanToken = session ? null : readPhoneRemoteToken();
+    if (!session && !lanToken) {
       schedule(POLL_MS);
       return;
     }
     inflight = true;
     try {
-      const result = await pollHostedPhoneRemote(session, cursor);
+      const result = session
+        ? await pollHostedPhoneRemote(session, cursor)
+        : await pollPhoneRemote(lanToken as string, lanCursor);
       if (!result) {
         schedule(RETRY_MS);
         return;
       }
-      cursor = result.cursor;
+      if (session) {
+        cursor = result.cursor;
+      } else {
+        lanCursor = result.cursor;
+      }
       for (const command of result.commands) {
         try {
           applyRemoteCommand(command);

@@ -1,11 +1,14 @@
 [Unit]
-Description=Load Argon IR keymap for Spilled remote prototype
-After=multi-user.target
+Description=Spilled Cinema Argon IR key bindings
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
 
 [Service]
 Type=oneshot
-# Change rc0 if `ir-keytable` reports a different receiver.
-ExecStart=/usr/bin/ir-keytable -s rc0 -p nec -w /etc/rc_keymaps/argon-spilled.toml
+# Auto-detects the gpio-ir receiver (event numbers change across reboots,
+# so rc0 is not hardcoded). Installed by pi/install.sh, which also writes
+# /usr/local/libexec/spilled-ir-load-keymap and /etc/rc_keymaps/argon-spilled.toml.
+ExecStart=/usr/local/libexec/spilled-ir-load-keymap
 RemainAfterExit=yes
 
 [Install]

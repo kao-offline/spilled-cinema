@@ -29,6 +29,10 @@ export type RemoteCommand = {
 };
 
 const PAIRING_KEY = "spilled.phone-remote.v1";
+// Legacy LAN pairing (Spilled Server /remote page) keeps its own storage key:
+// it stores a bare { token } while the hosted flow stores a full session, and
+// sharing one key made each flow unreadable to the other.
+const LEGACY_PAIRING_KEY = "spilled.phone-remote-lan.v1";
 const PHONE_REMOTE_EDGE = "https://spilled-control-plane.hrdykrystof.workers.dev/server/phone-remote";
 
 export type PhoneRemoteSession = {
@@ -50,9 +54,20 @@ function readStoredPairing(): PhoneRemoteSession | null {
   }
 }
 
+function readLegacyPairing(): { token: string } | null {
+  try {
+    const raw = window.localStorage.getItem(LEGACY_PAIRING_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<{ token: string }>;
+    return typeof parsed.token === "string" && parsed.token.length > 0 ? { token: parsed.token } : null;
+  } catch {
+    return null;
+  }
+}
+
 export function readPhoneRemoteToken(): string | null {
   if (typeof window === "undefined") return null;
-  return readStoredPairing()?.secret ?? null;
+  return readLegacyPairing()?.token ?? null;
 }
 
 export function readPhoneRemoteSession() {
@@ -107,7 +122,7 @@ export async function pairPhoneRemote(fresh = false): Promise<string | null> {
     });
     const token = result.ok ? (result.data as { token?: string })?.token : undefined;
     if (!token) return null;
-    window.localStorage.setItem(PAIRING_KEY, JSON.stringify({ token }));
+    window.localStorage.setItem(LEGACY_PAIRING_KEY, JSON.stringify({ token }));
     return token;
   } catch {
     return null;
@@ -116,7 +131,7 @@ export async function pairPhoneRemote(fresh = false): Promise<string | null> {
 
 export async function unpairPhoneRemote(): Promise<void> {
   try {
-    window.localStorage.removeItem(PAIRING_KEY);
+    window.localStorage.removeItem(LEGACY_PAIRING_KEY);
   } catch {
     // Storage is best-effort; the server token still rotates below.
   }

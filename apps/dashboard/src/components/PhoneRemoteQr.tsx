@@ -28,14 +28,16 @@ export function PhoneRemoteQr({ value, size = 208 }: PhoneRemoteQrProps) {
       height={size}
       viewBox={`0 0 ${side} ${side}`}
       role="img"
-      aria-label={`QR code linking to ${value}`}
-      className="rounded-2xl bg-white p-0"
+      // The URL carries a pairing secret, so the accessible name stays
+      // generic instead of reading the secret aloud.
+      aria-label="QR code to open the Spilled phone remote"
+      className="rounded-2xl overflow-hidden p-0"
     >
+      <rect x={0} y={0} width={side} height={side} fill="#ffffff" />
       {cells.map((cell) => (
         <rect key={`${cell.x}:${cell.y}`} x={cell.x + 4} y={cell.y + 4} width={1} height={1} fill="#05070b" />
       ))}
-      <rect x={0} y={0} width={side} height={side} fill="none" />
-      <title>{value}</title>
+      <title>Spilled phone remote pairing code</title>
     </svg>
   );
 }

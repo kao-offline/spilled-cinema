@@ -1,9 +1,64 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+usage() {
+  cat <<'USAGE'
+Spilled Cinema Argon IR setup (Raspberry Pi OS).
+
+Usage:
+  curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash
+  curl -fsSL .../install.sh | sudo bash -s -- --with-bridge --receiver-url http://192.168.1.50:8765 --token "YOUR_TOKEN"
+
+Direct (local-TV) mode is the default: the remote becomes a Linux input
+device, key bindings load at boot, and Chromium/the dashboard receives the
+buttons with no network involved.
+
+Options:
+  --with-bridge            also install the network bridge so this Pi forwards
+                           IR presses to a desktop receiver over your LAN/web.
+                           Startup is enabled automatically.
+  --receiver-url URL       desktop receiver base URL (required with --with-bridge).
+  --token TOKEN            shared receiver token (or set SPILLED_REMOTE_TOKEN).
+  --dashboard-url URL      optional dashboard URL to verify web reachability
+                           (Pi-as-TV kiosk check, e.g. https://spilled.overload.studio).
+  -h, --help               show this help.
+USAGE
+}
+
+RECEIVER_URL="${RECEIVER_URL:-}"
+RECEIVER_TOKEN="${SPILLED_REMOTE_TOKEN:-}"
+WITH_BRIDGE=0
+DASHBOARD_URL="${DASHBOARD_URL:-}"
+# Single parser handling both --opt=value and --opt value forms (the script
+# is usually piped via `curl | sudo bash -s -- <flags>`).
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --with-bridge) WITH_BRIDGE=1; shift ;;
+    --receiver-url=*) RECEIVER_URL="${1#*=}"; shift ;;
+    --receiver-url) RECEIVER_URL="${2:-}"; shift 2 ;;
+    --token=*) RECEIVER_TOKEN="${1#*=}"; shift ;;
+    --token) RECEIVER_TOKEN="${2:-}"; shift 2 ;;
+    --dashboard-url=*) DASHBOARD_URL="${1#*=}"; shift ;;
+    --dashboard-url) DASHBOARD_URL="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1 (see --help)." >&2; exit 1 ;;
+  esac
+done
+
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run this installer as root (for example: curl ... | sudo bash)." >&2
   exit 1
+fi
+
+if [[ $WITH_BRIDGE -eq 1 ]]; then
+  if [[ -z "$RECEIVER_URL" ]]; then
+    echo "Missing --receiver-url (the desktop receiver base URL, e.g. http://192.168.1.50:8765)." >&2
+    exit 1
+  fi
+  if [[ ${#RECEIVER_TOKEN} -lt 20 ]]; then
+    echo "Missing --token (or SPILLED_REMOTE_TOKEN): the same long token used on the desktop receiver." >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -r /proc/device-tree/model ]] || ! tr -d '\0' </proc/device-tree/model | grep -qi "raspberry pi"; then
@@ -34,7 +89,10 @@ fi
 echo "Installing the standard Linux IR tools..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ir-keytable
+apt-get install -y ir-keytable curl ca-certificates
+if [[ $WITH_BRIDGE -eq 1 ]]; then
+  apt-get install -y python3-venv git
+fi
 
 install -d -m 0755 /etc/rc_keymaps /usr/local/libexec
 
@@ -112,6 +170,130 @@ fi
 systemctl daemon-reload
 systemctl enable spilled-ir-keymap.service
 
+# Startup check: the keymap must survive reboots or the remote dies on boot.
+if ! systemctl is-enabled --quiet spilled-ir-keymap.service; then
+  echo "FAILED: spilled-ir-keymap.service is not enabled for startup." >&2
+  exit 1
+fi
+echo "Startup: spilled-ir-keymap.service is enabled."
+
+BRIDGE_OK=0
+if [[ $WITH_BRIDGE -eq 1 ]]; then
+  echo "Installing the network bridge (Pi forwards IR presses to the desktop receiver)..."
+
+  if ! id spilledremote >/dev/null 2>&1; then
+    useradd --system --user-group --home /opt/spilled-ir-remote-prototype --shell /usr/sbin/nologin spilledremote
+  fi
+  usermod -a -G input spilledremote
+  install -d -m 0755 -o spilledremote -g spilledremote /opt/spilled-ir-remote-prototype
+  install -d -m 0755 /etc/spilled-ir-remote
+
+  if [[ ! -d /opt/spilled-ir-remote-prototype/remote_control ]]; then
+    rm -rf /opt/spilled-ir-remote-prototype/src
+    git clone --depth 1 https://github.com/kao-offline/spilled-cinema.git /opt/spilled-ir-remote-prototype/src
+    cp -R /opt/spilled-ir-remote-prototype/src/testing/ir-remote-prototype/remote_control \
+      /opt/spilled-ir-remote-prototype/src/testing/ir-remote-prototype/pyproject.toml \
+      /opt/spilled-ir-remote-prototype/
+    rm -rf /opt/spilled-ir-remote-prototype/src
+    chown -R spilledremote:spilledremote /opt/spilled-ir-remote-prototype
+  fi
+  if [[ ! -d /opt/spilled-ir-remote-prototype/.venv ]]; then
+    sudo -u spilledremote python3 -m venv /opt/spilled-ir-remote-prototype/.venv
+    sudo -u spilledremote /opt/spilled-ir-remote-prototype/.venv/bin/python -m pip install --upgrade pip
+    sudo -u spilledremote /opt/spilled-ir-remote-prototype/.venv/bin/python -m pip install '/opt/spilled-ir-remote-prototype[pi]'
+  fi
+
+  trimmed_url="${RECEIVER_URL%/}"
+  cat >/etc/spilled-ir-remote/config.toml <<BRIDGE_CONFIG
+[receiver]
+# Desktop PC running: spilled-remote-receiver --bind 0.0.0.0 --token "…"
+url = "$trimmed_url"
+token = "$RECEIVER_TOKEN"
+timeout_seconds = 2.0
+
+device = "auto"
+device_name_contains = ["gpio_ir", "gpio-ir", "ir receiver", "argon"]
+
+[keys]
+KEY_UP = "up"
+KEY_DOWN = "down"
+KEY_LEFT = "left"
+KEY_RIGHT = "right"
+KEY_OK = "enter"
+KEY_ENTER = "enter"
+KEY_BACK = "back"
+KEY_ESC = "back"
+KEY_MENU = "back"
+KEY_HOME = "home"
+KEY_HOMEPAGE = "home"
+KEY_PLAYPAUSE = "play_pause"
+KEY_PLAY = "play_pause"
+KEY_C = "captions"
+KEY_VOLUMEUP = "volume_up"
+KEY_VOLUMEDOWN = "volume_down"
+BRIDGE_CONFIG
+  chown root:spilledremote /etc/spilled-ir-remote/config.toml
+  chmod 640 /etc/spilled-ir-remote/config.toml
+
+  cat >/etc/systemd/system/spilled-ir-remote.service <<'UNIT'
+[Unit]
+Description=Spilled IR remote prototype bridge
+After=network-online.target spilled-ir-keymap.service
+Wants=network-online.target spilled-ir-keymap.service
+
+[Service]
+Type=simple
+User=spilledremote
+Group=spilledremote
+SupplementaryGroups=input
+WorkingDirectory=/opt/spilled-ir-remote-prototype
+EnvironmentFile=-/etc/spilled-ir-remote/environment
+ExecStart=/opt/spilled-ir-remote-prototype/.venv/bin/spilled-ir-bridge --config /etc/spilled-ir-remote/config.toml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  systemctl daemon-reload
+  systemctl enable spilled-ir-remote.service
+  if ! systemctl is-enabled --quiet spilled-ir-remote.service; then
+    echo "FAILED: spilled-ir-remote.service is not enabled for startup." >&2
+    exit 1
+  fi
+  echo "Startup: spilled-ir-remote.service is enabled."
+
+  # Web check: the Pi must reach the desktop receiver over the LAN/web.
+  echo "Checking receiver web reachability: ${trimmed_url}/health ..."
+  if curl -fsS --max-time 8 "${trimmed_url}/health" | grep -q '"ok"'; then
+    echo "Web: receiver answered — bridge traffic can flow."
+    BRIDGE_OK=1
+  else
+    echo "WARNING: the receiver did not answer at ${trimmed_url}/health." >&2
+    echo "Start it on the desktop first: spilled-remote-receiver --bind 0.0.0.0 --token \"…\"" >&2
+    echo "The bridge service is still enabled and will retry at boot." >&2
+  fi
+  systemctl restart spilled-ir-remote.service || systemctl start spilled-ir-remote.service || true
+fi
+
+if [[ -n "$DASHBOARD_URL" ]]; then
+  trimmed_dashboard="${DASHBOARD_URL%/}"
+  echo "Checking dashboard web reachability: $trimmed_dashboard ..."
+  if curl -fsS --max-time 10 -o /dev/null "$trimmed_dashboard"; then
+    echo "Web: dashboard answered."
+  else
+    echo "WARNING: the dashboard did not answer at $trimmed_dashboard." >&2
+  fi
+fi
+
 if compgen -G '/sys/class/rc/rc*' >/dev/null && systemctl start spilled-ir-keymap.service; then
   echo "Argon IR key bindings are active."
 else
@@ -120,6 +302,18 @@ fi
 
 echo
 echo "Spilled Cinema IR setup is complete."
+echo "Startup state:"
+systemctl is-enabled spilled-ir-keymap.service | sed 's/^/  keymap (IR buttons at boot): /'
+if [[ $WITH_BRIDGE -eq 1 ]]; then
+  systemctl is-enabled spilled-ir-remote.service | sed 's/^/  bridge (forwards to receiver): /'
+  if [[ $BRIDGE_OK -eq 1 ]]; then
+    echo "Receiver web check: passed."
+  else
+    echo "Receiver web check: pending — start the desktop receiver, then run:"
+    echo "  curl -fsS ${RECEIVER_URL%/}/health"
+    echo "  sudo systemctl status spilled-ir-remote.service"
+  fi
+fi
 if [[ $overlay_added -eq 1 ]]; then
   echo "Reboot once with: sudo reboot"
 fi
