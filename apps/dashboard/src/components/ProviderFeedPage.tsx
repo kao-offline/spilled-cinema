@@ -5,7 +5,7 @@ import { clsx } from "clsx";
 import type { ExploreItem, ProviderFeedManifest, ProviderModuleManifest } from "../lib/types";
 import { formatEpisodeTitle } from "../lib/episode-title";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { showToast } from "./ToastHost";
+import { showToast } from "../lib/toast";
 
 type ProviderFeedPageProps = {
   module: ProviderModuleManifest;

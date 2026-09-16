@@ -26,7 +26,9 @@ function extractIdsFromUrl(url: string): SkipTitleIds {
     const parsed = new URL(url);
     const tmdbParam = parsed.searchParams.get("tmdb") ?? parsed.searchParams.get("tmdb_id");
     if (tmdbParam && /^\d{3,9}$/.test(tmdbParam)) ids.tmdb = tmdbParam;
-  } catch {}
+  } catch {
+    // A provider URL without a standard URL shape can still contain an IMDb id.
+  }
   const tmdbMatch = url.match(/\/(?:movie|tv|watch|title\/(?:tv|movie))\/(\d{3,9})(?:[/?#]|$)/i);
   if (tmdbMatch && !ids.tmdb) ids.tmdb = tmdbMatch[1];
   return ids;
@@ -72,10 +74,25 @@ export function collectSkipTitleIds(show: unknown, episode: unknown): SkipTitleI
 }
 
 const TIDB_BASE = "https://api.theintrodb.org/v3";
-const TOSD_BASE = "https://tosd.qtchaos.de/v1/skip";
-const SKIPME_BASE = "https://api.skipme.db/v1/segments";
-const CACHE_PREFIX = "spilled.intro-skip.v1";
+const SKIPDB_BASE = "https://api.skipdb.tv/api/segments";
+const CACHE_PREFIX = "spilled.intro-skip.v2";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const HEADROOM_BEFORE_SEC: Record<SkipSegmentType, number> = {
+  intro: 2,
+  outro: 1,
+  recap: 1,
+  credits: 1,
+};
+
+const HEADROOM_AFTER_SEC: Record<SkipSegmentType, number> = {
+  intro: 3,
+  outro: 2,
+  recap: 2,
+  credits: 2,
+};
+
+type SourceSegment = SkipSegment & { confidence: number };
 
 function cacheKey(id: string, season: number, episode: number): string {
   return `${CACHE_PREFIX}:${id}:s${season}:e${episode}`;
@@ -102,7 +119,9 @@ function writeCache(imdbId: string, season: number, episode: number, segments: S
       segments,
       savedAt: Date.now(),
     }));
-  } catch {}
+  } catch {
+    // Cache storage is optional in private browsing and restricted contexts.
+  }
 }
 
 async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -115,8 +134,8 @@ async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: num
   }
 }
 
-function normalizeTIDBSegments(data: Record<string, unknown>): SkipSegment[] {
-  const segments: SkipSegment[] = [];
+function normalizeTIDBSegments(data: Record<string, unknown>): SourceSegment[] {
+  const segments: SourceSegment[] = [];
   for (const type of ["intro", "recap", "credits", "preview"] as const) {
     const arr = data[type];
     if (!Array.isArray(arr)) continue;
@@ -132,32 +151,14 @@ function normalizeTIDBSegments(data: Record<string, unknown>): SkipSegment[] {
         start: (startMs ?? 0) / 1000,
         end: endMs != null ? endMs / 1000 : null,
         type: segType,
+        confidence: 1,
       });
     }
   }
   return segments;
 }
 
-function normalizeGenericSegments(items: unknown[]): SkipSegment[] {
-  const typeMap: Record<string, SkipSegmentType> = {
-    opening: "intro", op: "intro", intro: "intro",
-    ending: "outro", ed: "outro", outro: "outro",
-    recap: "recap", credits: "credits", preview: "outro",
-  };
-  const segments: SkipSegment[] = [];
-  for (const entry of items) {
-    if (!entry || typeof entry !== "object") continue;
-    const obj = entry as Record<string, unknown>;
-    const start = typeof obj.start === "number" ? obj.start : typeof obj.startTime === "number" ? obj.startTime : null;
-    const end = typeof obj.end === "number" ? obj.end : typeof obj.endTime === "number" ? obj.endTime : null;
-    if (start == null || end == null || start >= end) continue;
-    const rawType = (typeof obj.type === "string" ? obj.type : typeof obj.segmentType === "string" ? obj.segmentType : "intro").toLowerCase();
-    segments.push({ start, end, type: typeMap[rawType] || "intro" });
-  }
-  return segments;
-}
-
-async function fetchFromTIDB(ids: SkipTitleIds, season: number, episode: number): Promise<SkipSegment[]> {
+async function fetchFromTIDB(ids: SkipTitleIds, season: number, episode: number): Promise<SourceSegment[]> {
   try {
     const params = new URLSearchParams({ season: String(season), episode: String(episode) });
     if (ids.imdb) params.set("imdb_id", ids.imdb);
@@ -175,34 +176,46 @@ async function fetchFromTIDB(ids: SkipTitleIds, season: number, episode: number)
   }
 }
 
-async function fetchFromSkipMe(imdbId: string, season: number, episode: number): Promise<SkipSegment[]> {
+async function fetchFromSkipDB(imdbId: string, season: number, episode: number): Promise<SourceSegment[]> {
   try {
-    const url = `${SKIPME_BASE}?imdb=${encodeURIComponent(imdbId)}&season=${season}&episode=${episode}`;
+    const url = `${SKIPDB_BASE}?imdb_id=${encodeURIComponent(imdbId)}&season=${season}&episode=${episode}`;
     const response = await fetchWithTimeout(url, {
       headers: { "Accept": "application/json" },
     }, 8000);
     if (!response.ok) return [];
-    const data = await response.json() as unknown;
-    const items = Array.isArray(data) ? data : (data && typeof data === "object" && "segments" in data && Array.isArray((data as { segments: unknown }).segments) ? (data as { segments: unknown[] }).segments : []);
-    return normalizeGenericSegments(items);
+    const data = await response.json() as Record<string, unknown>;
+    return normalizeSkipDBSegments(data);
   } catch {
     return [];
   }
 }
 
-async function fetchFromTOSD(imdbId: string, season: number, episode: number): Promise<SkipSegment[]> {
-  try {
-    const url = `${TOSD_BASE}/${imdbId}/${season}/${episode}`;
-    const response = await fetchWithTimeout(url, {
-      headers: { "Accept": "application/json" },
-    }, 8000);
-    if (!response.ok) return [];
-    const data = await response.json() as unknown;
-    const items = Array.isArray(data) ? data : (data && typeof data === "object" && "segments" in data && Array.isArray((data as { segments: unknown }).segments) ? (data as { segments: unknown[] }).segments : []);
-    return normalizeGenericSegments(items);
-  } catch {
-    return [];
+function normalizeSkipDBSegments(data: Record<string, unknown>): SourceSegment[] {
+  const segments: SourceSegment[] = [];
+  const raw = data.segments;
+  if (!raw || typeof raw !== "object") return segments;
+  const typeMap: Record<string, SkipSegmentType> = {
+    intro: "intro",
+    recap: "recap",
+    outro: "outro",
+    preview: "outro",
+  };
+  for (const [key, value] of Object.entries(raw)) {
+    const type = typeMap[key];
+    if (!type || !value || typeof value !== "object") continue;
+    const obj = value as Record<string, unknown>;
+    const startMs = typeof obj.start_ms === "number" ? obj.start_ms : null;
+    const endMs = typeof obj.end_ms === "number" ? obj.end_ms : null;
+    if (startMs === null || endMs === null || startMs >= endMs) continue;
+    const confidence = typeof obj.confidence === "number" ? obj.confidence : 0.5;
+    segments.push({
+      start: startMs / 1000,
+      end: endMs / 1000,
+      type,
+      confidence,
+    });
   }
+  return segments;
 }
 
 const tmdbSearchCache = new Map<string, { tmdbId: string | null; imdbId: string | null }>();
@@ -246,6 +259,82 @@ export async function fetchSkipSegments(
   return fetchSkipSegmentsForIds(ids, season, episode);
 }
 
+function applyHeadroom(segments: SkipSegment[]): SkipSegment[] {
+  return segments.map((segment) => {
+    const before = HEADROOM_BEFORE_SEC[segment.type] ?? 0;
+    const after = HEADROOM_AFTER_SEC[segment.type] ?? 0;
+    const start = Math.max(0, segment.start - before);
+    const end = segment.end === null ? null : segment.end + after;
+    if (end === null || end > start) {
+      return { start, end, type: segment.type };
+    }
+    return segment;
+  });
+}
+
+const MERGE_OVERLAP_TOLERANCE_SEC = 15;
+
+function mergeSourceSegments(groups: SourceSegment[][]): SkipSegment[] {
+  const byType = new Map<SkipSegmentType, SourceSegment[]>();
+  for (const group of groups) {
+    for (const segment of group) {
+      const existing = byType.get(segment.type);
+      if (existing) existing.push(segment);
+      else byType.set(segment.type, [segment]);
+    }
+  }
+
+  const merged: SkipSegment[] = [];
+  for (const [, candidates] of byType) {
+    if (candidates.length === 0) continue;
+    const sorted = [...candidates].sort((a, b) => a.start - b.start);
+
+    const clusters: SourceSegment[][] = [];
+    for (const candidate of sorted) {
+      const last = clusters[clusters.length - 1];
+      if (last) {
+        const lastEnd = last[last.length - 1].end;
+        const overlaps = lastEnd !== null && candidate.start - (lastEnd ?? candidate.start) <= MERGE_OVERLAP_TOLERANCE_SEC;
+        if (overlaps) {
+          last.push(candidate);
+          continue;
+        }
+      }
+      clusters.push([candidate]);
+    }
+
+    for (const cluster of clusters) {
+      if (cluster.length === 1) {
+        const only = cluster[0];
+        merged.push({ start: only.start, end: only.end, type: only.type });
+        continue;
+      }
+      const totalWeight = cluster.reduce((sum, candidate) => sum + Math.max(0.1, candidate.confidence), 0);
+      let start = 0;
+      let end = 0;
+      let endNull = false;
+      for (const candidate of cluster) {
+        const weight = Math.max(0.1, candidate.confidence);
+        start += candidate.start * weight;
+        if (candidate.end === null) {
+          endNull = true;
+        } else {
+          end += candidate.end * weight;
+        }
+      }
+      start /= totalWeight;
+      if (!endNull) end /= totalWeight;
+      merged.push({
+        start,
+        end: endNull ? null : end,
+        type: cluster[0].type,
+      });
+    }
+  }
+
+  return merged;
+}
+
 export async function fetchSkipSegmentsForIds(
   ids: SkipTitleIds,
   season: number,
@@ -257,26 +346,19 @@ export async function fetchSkipSegmentsForIds(
   const cached = readCache(cacheId, season, episode);
   if (cached) return cached;
 
-  let segments = await fetchFromTIDB(ids, season, episode);
+  const [tidbSegments, skipdbSegments] = await Promise.all([
+    fetchFromTIDB(ids, season, episode),
+    ids.imdb ? fetchFromSkipDB(ids.imdb, season, episode) : Promise.resolve([]),
+  ]);
 
-  if (segments.length === 0 && ids.imdb) {
-    const imdbCacheId = ids.imdb;
-    const imdbCached = readCache(imdbCacheId, season, episode);
-    if (imdbCached) return imdbCached;
-    segments = await fetchFromSkipMe(ids.imdb, season, episode);
-    if (segments.length === 0) {
-      segments = await fetchFromTOSD(ids.imdb, season, episode);
-    }
-    if (segments.length > 0) {
-      writeCache(imdbCacheId, season, episode, segments);
-    }
+  const merged = mergeSourceSegments([tidbSegments, skipdbSegments]);
+  const withHeadroom = applyHeadroom(merged);
+
+  if (withHeadroom.length > 0) {
+    writeCache(cacheId, season, episode, withHeadroom);
   }
 
-  if (segments.length > 0) {
-    writeCache(cacheId, season, episode, segments);
-  }
-
-  return segments;
+  return withHeadroom;
 }
 
 export function getIntroSegments(segments: SkipSegment[]): SkipSegment[] {
@@ -312,5 +394,7 @@ export async function prewarmSkipTarget(
       const response = await fetch(playbackUrl, { cache: "force-cache", credentials: "same-origin" });
       if (response.ok) await response.arrayBuffer().catch(() => undefined);
     }
-  } catch {}
+  } catch {
+    // Prewarming is opportunistic and must never affect playback startup.
+  }
 }

@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { buildNodeMediaUrl, isAllowedNodeOrigin, isAllowedNodePath, rewriteNodePlaylistUrls } from "../../../api/node-proxy.js";
 
 describe("node proxy allowlist", () => {
+  it("allows subtitle proxy URLs with their encoded upstream query", () => {
+    expect(isAllowedNodePath("/api/subtitle-proxy?url=https%3A%2F%2Fsubs.example%2Fcs.vtt")).toBe(true);
+  });
   it("allows public localtunnel fetch node origins", () => {
     expect(isAllowedNodeOrigin("https://fetch-node.loca.lt")).toBe(true);
     expect(isAllowedNodeOrigin("https://fetch-node.trycloudflare.com")).toBe(true);

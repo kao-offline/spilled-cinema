@@ -37,6 +37,12 @@ body {
   min-height: 100vh;
 }
 
+html.spatial-navigation-active :is(button, a, input, select, textarea, [tabindex], [role="button"]):focus {
+  outline: 3px solid rgba(255, 255, 255, 0.96) !important;
+  outline-offset: 4px !important;
+  box-shadow: 0 0 0 7px rgba(5, 6, 10, 0.72), 0 0 28px rgba(255, 255, 255, 0.22) !important;
+}
+
 .text-serif {
   font-family: var(--font-serif);
 }
@@ -309,6 +315,26 @@ body {
   }
 }
 
+.spilled-audio-marker {
+  gap: 0.28rem;
+  min-width: 2.15rem;
+  padding-inline: 0.38rem;
+}
+
+.spilled-dubbing-tag {
+  display: inline-flex;
+  height: 1.35rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.13);
+  color: rgba(167, 243, 208, 0.96);
+  font-size: 0.58rem;
+  font-weight: 900;
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.2);
+}
+
 @supports (animation-timeline: view()) {
   .animate-grid-scroll-reveal {
     animation: grid-scroll-reveal linear both;
@@ -579,8 +605,7 @@ body {
   }
 
   .mobile-home-hero-image {
-    animation: mobile-home-hero-reveal 900ms cubic-bezier(0.22, 1, 0.36, 1) both,
-      mobile-home-hero-drift 8s ease-out both;
+    animation: mobile-home-hero-reveal 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .mobile-home-hero::after {
@@ -590,7 +615,7 @@ body {
     pointer-events: none;
     background: linear-gradient(112deg, transparent 15%, rgba(255, 255, 255, 0.09) 43%, transparent 68%);
     transform: translateX(-120%);
-    animation: mobile-home-glint 6.5s ease-in-out 1.2s infinite;
+    display: none;
   }
 
   .mobile-home-card {
@@ -639,96 +664,493 @@ body {
   }
 }
 
+@media (max-width: 1023px) and (orientation: landscape) and (max-height: 620px) {
+  .mobile-home {
+    padding-bottom: 5.75rem;
+  }
+
+  .mobile-dock {
+    left: auto;
+    right: max(.75rem, env(safe-area-inset-right));
+    width: min(23rem, 52vw);
+  }
+
+  .player-source-menu {
+    width: min(72vw, 31rem);
+  }
+}
+
+@media (min-width: 700px) and (max-width: 1023px) {
+  .mobile-home > main,
+  .mobile-home > header {
+    margin-inline: auto;
+    max-width: 58rem;
+  }
+}
+
 .ui-virtual-section {
   content-visibility: auto;
   contain-intrinsic-size: auto 420px;
 }
 
-@media (min-width: 1024px) {
-  html.tv-mode {
-    font-size: 20px;
-  }
+/* ------------------------------------------------------------------
+ * TV Mode flag (.tv-mode on <html>) — keep this MINIMAL by design.
+ *
+ * 10-foot principles (Apple tvOS / Android Leanback):
+ * - The dedicated surface owns every visual: all TV visuals live
+ *   under `.tv-home` below. This flag must NEVER resize normal
+ *   components, otherwise TV mode leaks into the desktop UI.
+ * - The flag only does three things:
+ *   1. a stronger, always-visible focus ring for remote/D-pad users
+ *      (also covers shared overlays: player, detail, search),
+ *   2. reduced motion for shared animations (low-power sticks),
+ *   3. a wider search panel when search is opened FROM the TV home
+ *      (scoped via `.tv-search`, not via a global z-index hack).
+ * ------------------------------------------------------------------ */
 
-  .tv-mode .text-\[9px\],
-  .tv-mode .text-\[10px\],
-  .tv-mode .text-\[11px\] {
-    font-size: 0.8rem !important;
-    line-height: 1.1rem !important;
-  }
+.tv-mode button:focus-visible,
+.tv-mode a:focus-visible,
+.tv-mode input:focus-visible,
+.tv-mode select:focus-visible,
+.tv-mode [role="button"]:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.94);
+  outline-offset: 4px;
+}
 
-  .tv-mode .text-xs {
-    font-size: 0.9rem;
-    line-height: 1.25rem;
-  }
+.tv-mode .animate-grid-scroll-reveal,
+.tv-mode .animate-command-row,
+.tv-mode .animate-detail-content-open,
+.tv-mode .animate-detail-content-open-late {
+  animation-duration: 180ms;
+  animation-delay: 0ms;
+  filter: none;
+}
 
-  .tv-mode [data-tutorial="homepage-feed-tabs"] > button {
-    min-height: 2.4rem;
-  }
+/* Search opened from the TV home: roomier 10-foot panel. The
+ * CommandMenu root gets `.tv-search` only when tvModeEnabled. */
+.tv-mode .tv-search {
+  max-width: min(52rem, 78vw);
+}
 
-  .tv-mode .tv-episode-browser {
-    margin-inline: -0.5rem;
-    padding: 1.25rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 1.4rem;
-    background: rgba(255, 255, 255, 0.035);
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
-  }
+.tv-mode .tv-search > div:first-child {
+  min-height: 4.5rem;
+  padding-inline: 1.5rem;
+}
 
-  .tv-mode .tv-episode-season {
-    min-height: 3rem;
-    padding-inline: 1.25rem;
-  }
+.tv-mode .tv-search input {
+  font-size: clamp(1rem, 1.3vw, 1.35rem);
+}
 
-  .tv-mode .tv-episode-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem;
-  }
+/* ------------------------------------------------------------------
+ * Dedicated TV surface (.tv-home) — the only place TV visuals live.
+ * Rendered INSTEAD of the normal homepage (not on top of it), so the
+ * desktop UI is byte-for-byte unchanged when TV mode is off.
+ *
+ * Lean-back rules applied here:
+ * - overscan-safe gutters (px-[5vw] in markup),
+ * - 10-foot targets: nav >= 3.25rem, hero actions >= 3.7rem,
+ * - focus is always visible and lifted (no hover-only affordances),
+ * - rails snap so D-pad left/right lands predictably,
+ * - reduced motion respected.
+ * ------------------------------------------------------------------ */
 
-  .tv-mode .tv-episode-card {
-    min-height: 6rem;
-    padding: 1rem;
-    border-radius: 1rem;
-  }
+.tv-home .tv-rail-scroll {
+  scroll-snap-type: x proximity;
+}
 
-  .tv-mode .player-episode-selector {
-    width: min(100vw, 46rem);
-    padding-left: 3rem;
-    padding-right: 1rem;
-  }
+.tv-home .tv-rail-scroll > * {
+  scroll-snap-align: start;
+}
 
-  .tv-mode .player-episode-selector header button {
-    min-height: 3rem;
-    min-width: 9rem;
-  }
+/* Landing room: when the remote glides to a card, the page stops with the
+ * selection clear of the fixed header and viewport edges instead of flush.
+ * Top margin clears the fixed header (clamp(5.5rem,8vw,7rem)) so an upward
+ * move always reveals the focused carousel card instead of parking it
+ * invisibly underneath the header — which caused the double-Up overshoot
+ * straight into the nav. */
+.tv-home .tv-card {
+  scroll-margin-top: clamp(6.5rem, 9vw, 8rem);
+  scroll-margin-bottom: 1.5rem;
+  scroll-margin-inline: 1rem;
+}
 
-  .tv-mode button:focus-visible,
-  .tv-mode a:focus-visible,
-  .tv-mode input:focus-visible,
-  .tv-mode select:focus-visible,
-  .tv-mode [role="button"]:focus-visible {
-    outline: 3px solid rgba(255, 255, 255, 0.94);
-    outline-offset: 4px;
-  }
+.tv-home .tv-hero-action,
+.tv-home .tv-nav-button,
+.tv-home .tv-empty-card {
+  scroll-margin-block: 1.5rem;
+  scroll-margin-inline: 1rem;
+}
 
-  .tv-mode .animate-grid-scroll-reveal,
-  .tv-mode .animate-command-row,
-  .tv-mode .animate-detail-content-open,
-  .tv-mode .animate-detail-content-open-late {
-    animation-duration: 180ms;
-    animation-delay: 0ms;
-    filter: none;
+/* Lean-back entrance: hero settles first, rails stagger in behind it.
+ * Mount-only (CSS animations run once on insertion), so D-pad travel
+ * never re-triggers motion. Stagger arrives via --tv-delay. */
+@keyframes tv-home-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 22px, 0);
   }
-
-  .tv-mode::view-transition-group(*),
-  .tv-mode::view-transition-old(*),
-  .tv-mode::view-transition-new(*) {
-    animation-duration: 220ms;
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 
-@media (min-width: 3000px) and (min-height: 1500px) {
-  html.tv-mode {
-    font-size: 24px;
+.tv-home .tv-enter-hero {
+  animation: tv-home-in 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.tv-home .tv-enter {
+  animation: tv-home-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--tv-delay, 0ms);
+}
+
+/* Slow ambient drift on the hero backdrop (screensaver-like, tvOS style).
+ * Killed by the prefers-reduced-motion rule below like all TV motion. */
+@keyframes tv-hero-drift {
+  from {
+    transform: scale(1.015);
+  }
+  to {
+    transform: scale(1.07);
+  }
+}
+
+.tv-home .tv-hero-drift {
+  animation: tv-hero-drift 24s ease-in-out infinite alternate;
+}
+
+.tv-home .tv-nav-button {
+  display: inline-flex;
+  min-height: clamp(3.25rem, 4.1vw, 4.25rem);
+  align-items: center;
+  gap: .65rem;
+  border: 1px solid transparent;
+  border-radius: 1rem;
+  padding-inline: clamp(.85rem, 1.15vw, 1.3rem);
+  color: rgba(255, 255, 255, .58);
+  font-size: clamp(.78rem, .95vw, 1rem);
+  font-weight: 850;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.tv-home .tv-nav-button svg {
+  width: clamp(1.1rem, 1.35vw, 1.4rem);
+  height: clamp(1.1rem, 1.35vw, 1.4rem);
+}
+
+.tv-home .tv-nav-button:hover,
+.tv-home .tv-nav-button.is-active {
+  border-color: rgba(255, 255, 255, .1);
+  background: rgba(255, 255, 255, .09);
+  color: white;
+}
+
+.tv-home .tv-icon-button {
+  width: clamp(3.25rem, 4.1vw, 4.25rem);
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.tv-home .tv-hero-action,
+.tv-detail .tv-hero-action {
+  display: inline-flex;
+  min-width: clamp(9rem, 12vw, 12.5rem);
+  min-height: clamp(3.7rem, 4.7vw, 4.8rem);
+  align-items: center;
+  justify-content: center;
+  gap: .75rem;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 1.1rem;
+  background: rgba(255, 255, 255, .1);
+  padding-inline: 1.7rem;
+  color: white;
+  font-size: clamp(1rem, 1.2vw, 1.25rem);
+  font-weight: 900;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .28);
+  backdrop-filter: blur(14px);
+  transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.tv-home .tv-hero-action svg,
+.tv-detail .tv-hero-action svg {
+  width: clamp(1.2rem, 1.45vw, 1.55rem);
+  height: clamp(1.2rem, 1.45vw, 1.55rem);
+}
+
+.tv-home .tv-hero-primary,
+.tv-detail .tv-hero-primary {
+  border-color: rgba(255, 255, 255, .9);
+  background: white;
+  color: #07090d;
+}
+
+.tv-home .tv-card:hover,
+.tv-home .tv-hero-action:hover,
+.tv-detail .tv-hero-action:hover,
+.tv-home .tv-empty-card:hover {
+  transform: translateY(-.3rem) scale(1.015);
+  border-color: rgba(165, 243, 252, .45);
+  box-shadow: 0 24px 65px rgba(0, 0, 0, .48), 0 0 0 1px rgba(165, 243, 252, .12);
+}
+
+.tv-home .tv-card:focus-visible,
+.tv-home .tv-card:focus,
+.tv-home .tv-nav-button:focus-visible,
+.tv-home .tv-nav-button:focus,
+.tv-home .tv-hero-action:focus-visible,
+.tv-home .tv-hero-action:focus,
+.tv-detail .tv-hero-action:focus-visible,
+.tv-detail .tv-hero-action:focus,
+.tv-home .tv-empty-card:focus-visible,
+.tv-home .tv-empty-card:focus {
+  outline: .28rem solid rgb(207 250 254);
+  outline-offset: .36rem;
+  transform: translateY(-.35rem) scale(1.025);
+  box-shadow: 0 28px 75px rgba(0, 0, 0, .58), 0 0 36px rgba(103, 232, 249, .24);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-mode .animate-grid-scroll-reveal,
+  .tv-mode .animate-command-row,
+  .tv-mode .animate-detail-content-open,
+  .tv-mode .animate-detail-content-open-late,
+  .tv-mode::view-transition-group(*),
+  .tv-mode::view-transition-old(*),
+  .tv-mode::view-transition-new(*) {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-home *,
+  .tv-home *::before,
+  .tv-home *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------
+ * TV detail + TV player picker (.tv-detail / .tv-pick) — dedicated
+ * lean-back surfaces, same rules as .tv-home: overscan gutters, 10-foot
+ * targets, always-visible lifted focus, one remote stop per row.
+ * ------------------------------------------------------------------ */
+
+.tv-detail .tv-back,
+.tv-detail .tv-season-pill,
+.tv-pick .tv-season-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  min-height: clamp(3.25rem, 4.2vw, 4.25rem);
+  border: 1px solid transparent;
+  border-radius: 1rem;
+  padding-inline: clamp(.9rem, 1.2vw, 1.35rem);
+  color: rgba(255, 255, 255, .6);
+  font-size: clamp(.85rem, 1vw, 1.05rem);
+  font-weight: 850;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.tv-detail .tv-back svg,
+.tv-detail .tv-season-pill svg,
+.tv-pick .tv-season-pill svg {
+  width: clamp(1.1rem, 1.35vw, 1.4rem);
+  height: clamp(1.1rem, 1.35vw, 1.4rem);
+}
+
+.tv-detail .tv-back:hover,
+.tv-detail .tv-season-pill:hover,
+.tv-pick .tv-season-pill:hover,
+.tv-detail .tv-season-pill.is-active,
+.tv-pick .tv-season-pill.is-active {
+  border-color: rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .09);
+  color: white;
+}
+
+.tv-detail .tv-season-pill.is-active,
+.tv-pick .tv-season-pill.is-active {
+  border-color: rgba(255, 255, 255, .85);
+  background: white;
+  color: #07090d;
+}
+
+.tv-season-count {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .1);
+  padding: .1rem .55rem;
+  font-size: .78em;
+}
+
+.is-active .tv-season-count {
+  background: rgba(0, 0, 0, .12);
+}
+
+.tv-episode-row-big {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: clamp(5rem, 6.5vw, 6.5rem);
+  align-items: center;
+  gap: clamp(1rem, 1.6vw, 1.75rem);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 1.35rem;
+  background: rgba(255, 255, 255, .045);
+  padding: clamp(1rem, 1.5vw, 1.5rem) clamp(1.1rem, 1.6vw, 1.7rem);
+  text-align: left;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, .35);
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.tv-episode-row-big:hover {
+  border-color: rgba(165, 243, 252, .4);
+  background: rgba(255, 255, 255, .07);
+}
+
+.tv-episode-row-big:focus-visible {
+  outline: .28rem solid rgb(207 250 254);
+  outline-offset: .36rem;
+  transform: translateY(-.2rem) scale(1.008);
+  box-shadow: 0 28px 75px rgba(0, 0, 0, .58), 0 0 36px rgba(103, 232, 249, .24);
+}
+
+.tv-episode-row-big,
+.tv-pick .tv-season-pill,
+.tv-detail .tv-season-pill,
+.tv-detail .tv-back,
+.tv-detail .tv-hero-action {
+  scroll-margin-block: 1.5rem;
+}
+
+.tv-episode-code-big {
+  min-width: clamp(4.5rem, 6.5vw, 7rem);
+  color: rgba(255, 255, 255, .5);
+  font-size: clamp(1.05rem, 1.4vw, 1.45rem);
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+
+.tv-episode-play {
+  display: inline-flex;
+  width: clamp(3.25rem, 4.2vw, 4.25rem);
+  height: clamp(3.25rem, 4.2vw, 4.25rem);
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 1.1rem;
+  background: rgba(255, 255, 255, .1);
+  color: white;
+}
+
+.tv-episode-play svg {
+  width: clamp(1.25rem, 1.5vw, 1.6rem);
+  height: clamp(1.25rem, 1.5vw, 1.6rem);
+}
+
+.tv-watched-badge,
+.tv-resume-label,
+.tv-lang-tag,
+.tv-now-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  padding-inline: .7rem;
+  font-size: .72rem;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+
+.tv-watched-badge svg,
+.tv-now-badge svg,
+.tv-lang-tag svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.tv-watched-badge {
+  background: rgba(52, 211, 153, .14);
+  color: rgba(167, 243, 208, .96);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, .22);
+}
+
+.tv-resume-label {
+  background: rgba(103, 232, 249, .12);
+  color: rgba(207, 250, 254, .9);
+  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, .2);
+}
+
+.tv-lang-tag {
+  background: rgba(125, 211, 252, .12);
+  color: rgba(186, 230, 253, .94);
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, .18);
+}
+
+.tv-lang-dub {
+  background: rgba(52, 211, 153, .12);
+  color: rgba(167, 243, 208, .94);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, .18);
+}
+
+.tv-now-badge {
+  background: white;
+  color: #07090d;
+}
+
+.tv-episode-progress {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: .3rem;
+  background: rgba(255, 255, 255, .12);
+}
+
+.tv-episode-progress > span {
+  display: block;
+  height: 100%;
+  background: rgb(103 232 249);
+}
+
+.tv-pick-row.is-current {
+  border-color: rgba(255, 255, 255, .85);
+  background: rgba(255, 255, 255, .1);
+}
+
+.tv-pick-close {
+  display: inline-flex;
+  width: clamp(3.25rem, 4.2vw, 4.25rem);
+  height: clamp(3.25rem, 4.2vw, 4.25rem);
+  align-items: center;
+  justify-content: center;
+  border-radius: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(255, 255, 255, .08);
+  color: white;
+}
+
+.tv-pick-close svg {
+  width: clamp(1.25rem, 1.5vw, 1.6rem);
+  height: clamp(1.25rem, 1.5vw, 1.6rem);
+}
+
+.tv-pick-close:hover {
+  background: rgba(255, 255, 255, .14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-detail *,
+  .tv-detail *::before,
+  .tv-detail *::after,
+  .tv-pick *,
+  .tv-pick *::before,
+  .tv-pick *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation: none !important;
   }
 }
 

@@ -10,6 +10,8 @@ import { CommandResultRow } from "./CommandResultRow";
 import { MobileBrandSearch } from "./MobileBrandSearch";
 import { HomeSourceTabs } from "./HomeSourceTabs";
 import type { HomepageTab } from "../lib/provider-home-preferences";
+import type { RecommendedWatchItem } from "../lib/home-personalization";
+import { HomePersonalizedRail } from "./HomePersonalizedRail";
 
 type MobileHomePageProps = {
   featuredShow: ImportedShow | null;
@@ -27,12 +29,19 @@ type MobileHomePageProps = {
   onOpenFavorites: () => void;
   onOpenExplore: () => void;
   onOpenSettings: () => void;
+  onOpenAccount: () => void;
+  accountLabel?: string | null;
+  motionPaused?: boolean;
   onOpenLocal: (item: HomepageRailItem) => void;
   onImportRemote: (item: HomepageRailItem) => void;
   onPlayFeatured: () => void;
   activeTab: HomepageTab;
   onTabChange: (tab: HomepageTab) => void;
   providerContent?: ReactNode;
+  recommendedWatchItems: RecommendedWatchItem[];
+  newEpisodeCheckState: { checking: boolean; message: string | null; error: boolean };
+  onCheckNewEpisodes: () => void;
+  onPlayEpisode: (episode: ImportedShow["episodes"][number]) => void;
 };
 
 function getItemImage(item: HomepageRailItem, kind: "banner" | "poster") {
@@ -74,16 +83,24 @@ export function MobileHomePage({
   onOpenFavorites,
   onOpenExplore,
   onOpenSettings,
+  onOpenAccount,
+  accountLabel,
+  motionPaused = false,
   onOpenLocal,
   onImportRemote,
   onPlayFeatured,
   activeTab,
   onTabChange,
   providerContent,
+  recommendedWatchItems,
+  newEpisodeCheckState,
+  onCheckNewEpisodes,
+  onPlayEpisode,
 }: MobileHomePageProps) {
   const [searchActive, setSearchActive] = useState(false);
   const [expandedResultId, setExpandedResultId] = useState<string | null>(null);
   const [heroIndex, setHeroIndex] = useState(0);
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const bannerRails = rails.filter((rail) => rail.kind === "banner");
   const posterRails = rails.filter((rail) => rail.kind === "poster");
   const heroItems = bannerRails[0]?.items.slice(0, 5) ?? [];
@@ -91,14 +108,27 @@ export function MobileHomePage({
   const heroImage = primaryBanner ? getItemImage(primaryBanner, "banner") : null;
 
   useEffect(() => {
-    if (heroItems.length < 2 || searchActive) return;
+    // Freeze the rotation while search or any overlay (account sheet, command
+    // menu) is open: besides saving motion, the parent re-renders on every
+    // tick, which used to yank focus out of open modal inputs.
+    if (heroItems.length < 2 || searchActive || motionPaused) return;
     const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroItems.length), 6500);
     return () => window.clearInterval(timer);
-  }, [heroItems.length, searchActive]);
+  }, [heroItems.length, searchActive, motionPaused]);
 
   useEffect(() => {
     if (heroIndex >= heroItems.length) setHeroIndex(0);
   }, [heroIndex, heroItems.length]);
+
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
 
   const activateItem = (item: HomepageRailItem) => {
     if (item.kind === "local") onOpenLocal(item);
@@ -122,6 +152,7 @@ export function MobileHomePage({
           onOpenSettings={onOpenSettings}
         />
         <HomeSourceTabs activeTab={activeTab} onTabChange={onTabChange} compact className="mt-3 w-full" />
+        {!online ? <div className="mt-3 rounded-xl border border-amber-200/15 bg-amber-300/8 px-3 py-2 text-center text-xs font-bold text-amber-100" role="status">Offline · your saved library remains available</div> : null}
       </header>
 
       {activeTab === "home" && searchActive && searchQuery.trim().length > 0 ? (
@@ -184,6 +215,14 @@ export function MobileHomePage({
             </div>
           ) : null}
         </section>
+
+        <HomePersonalizedRail
+          compact
+          items={recommendedWatchItems}
+          freshness={newEpisodeCheckState}
+          onRetry={onCheckNewEpisodes}
+          onPlay={(item) => onPlayEpisode(item.episode)}
+        />
 
         {posterRails.map((rail) => (
           <section key={rail.id}>
@@ -254,7 +293,7 @@ export function MobileHomePage({
         ))}
       </main> : providerContent}
 
-      <MobileDock active="home" onHome={() => undefined} onLibrary={onOpenLibrary} onFavorites={onOpenFavorites} onExplore={onOpenExplore} />
+      <MobileDock active="home" onHome={() => undefined} onLibrary={onOpenLibrary} onFavorites={onOpenFavorites} onExplore={onOpenExplore} onAccount={onOpenAccount} accountLabel={accountLabel} />
     </div>
   );
 }

@@ -91,12 +91,15 @@ export function buildHomepageRails(input: {
   shows: ImportedShow[];
   downloadedCountByShow: Record<string, number>;
   trendingItems: ExploreItem[];
+  /** Keep the desktop homepage compact; TV mode may request the full library. */
+  libraryLimit?: number;
 }) {
+  const libraryLimit = input.libraryLimit ?? 18;
   const withBackdrops = input.shows.filter((show) => {
     const artwork = getShowArtwork(show);
     return Boolean(artwork.bannerWithLogoUrl ?? show.homepageBannerUrl ?? artwork.backdropUrl ?? artwork.bannerUrl);
-  }).slice(0, 12);
-  const library = input.shows.slice(0, 18);
+  }).slice(0, libraryLimit);
+  const library = input.shows.slice(0, libraryLimit);
   const downloaded = input.shows.filter((show) => (input.downloadedCountByShow[show.slug] ?? 0) > 0).slice(0, 12);
   const trending = input.trendingItems.slice(0, 18);
 

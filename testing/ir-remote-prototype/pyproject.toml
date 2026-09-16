@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spilled-ir-remote-prototype"
+version = "0.1.0"
+description = "Standalone Tkinter and Raspberry Pi IR remote prototype"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+desktop = ["pynput>=1.7,<2"]
+pi = ["evdev>=1.7,<2; platform_system == 'Linux'"]
+
+[project.scripts]
+spilled-remote-pad = "remote_control.tk_controller:main"
+spilled-remote-receiver = "remote_control.desktop_receiver:main"
+spilled-ir-bridge = "remote_control.pi_ir_bridge:main"
+
+[tool.setuptools.packages.find]
+include = ["remote_control*"]

@@ -3,7 +3,9 @@ import { x25519 } from "@noble/curves/ed25519";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha256";
 
-type Capability = "provider.search" | "provider.feed" | "provider.import" | "player.resolve";
+type PublicCapability = "provider.search" | "provider.feed" | "provider.import" | "player.resolve";
+export type PrivateCapability = "library.read" | "library.write" | "node.admin" | "player.resolve";
+type Capability = PublicCapability | PrivateCapability;
 
 type CapabilityTicketV2 = {
   version: 2;
@@ -22,9 +24,11 @@ type CapabilityTicketV2 = {
   signature: string;
 };
 
-type V2Candidate = {
+export type V2Candidate = {
   nodeId: string;
   endpointUrl?: string;
+  connectionCode?: string;
+  networkName?: string;
   identity: {
     x25519PublicKey: string;
   };
@@ -62,8 +66,18 @@ type BrowserEncryptedRequest = {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const X25519_SPKI_PREFIX = Uint8Array.from([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00]);
-const GATEWAY_URL = (import.meta.env.VITE_SPILLED_GATEWAY_URL as string | undefined)
+const GATEWAY_URL = (import.meta.env?.VITE_SPILLED_GATEWAY_URL as string | undefined)
   ?? "https://spilled-node-gateway.4thsj85ywn.workers.dev";
+const GATEWAY_HTTP_TIMEOUT_MS = 12_000;
+const FAST_GATEWAY_RPC_TIMEOUT_MS = 8_000;
+const FAST_GATEWAY_METHODS = new Set([
+  "node.status",
+  "auth.accounts",
+  "auth.refresh",
+  "auth.logout",
+  "auth.watcher.password.login",
+  "auth.admin.password.login",
+]);
 
 // Capability tickets are signed and scoped to a node/capability/action but are
 // not single-use. Reusing the last known node + still-valid ticket for the same
@@ -76,11 +90,18 @@ type GatewayCachedSession = {
   ticket: CapabilityTicketV2;
 };
 
+export class GatewayRemoteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayRemoteError";
+  }
+}
+
 const gatewaySessionCache = new Map<string, GatewayCachedSession>();
 const GATEWAY_TICKET_REUSE_MARGIN_MS = 10_000;
 
-function gatewaySessionCacheKey(capability: Capability, action: string) {
-  return `${capability}:${action}`;
+function gatewaySessionCacheKey(capability: Capability, action: string, nodeId = "public") {
+  return `${nodeId}:${capability}:${action}`;
 }
 
 function isGatewayTicketUsable(ticket: CapabilityTicketV2) {
@@ -273,20 +294,24 @@ function gatewayWebSocketUrl(nodeId: string) {
   return url.toString();
 }
 
-async function discoverCandidates(capability: Capability) {
+async function discoverCandidates(capability: PublicCapability) {
   const response = await fetch(
     `/api/server?path=v2%2Fdiscovery%2Fnodes&capability=${encodeURIComponent(capability)}&limit=12`,
-    { headers: { Accept: "application/json" } },
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    },
   );
   if (!response.ok) return [];
   const payload = await response.json() as { candidates?: V2Candidate[] };
   return payload.candidates ?? [];
 }
 
-async function issueTicket(candidate: V2Candidate, capability: Capability, action: string) {
+async function issueTicket(candidate: V2Candidate, capability: PublicCapability, action: string) {
   const response = await fetch("/api/server?path=v2%2Ftickets", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
     body: JSON.stringify({
       nodeId: candidate.nodeId,
       capability,
@@ -295,6 +320,65 @@ async function issueTicket(candidate: V2Candidate, capability: Capability, actio
   });
   if (!response.ok) throw new Error(`Capability ticket request failed (${response.status}).`);
   return await response.json() as CapabilityTicketV2;
+}
+
+async function issuePrivateTicket(candidate: V2Candidate, capability: PrivateCapability, action: string) {
+  const response = await fetch("/api/server?path=v2%2Fprivate-tickets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    body: JSON.stringify({
+      nodeId: candidate.nodeId,
+      connectionCode: candidate.connectionCode,
+      capability,
+      action,
+    }),
+  });
+  const payload = await response.json().catch(() => null) as CapabilityTicketV2 & { error?: string };
+  if (!response.ok) throw new Error(payload?.error ?? `Private routing ticket request failed (${response.status}).`);
+  return payload;
+}
+
+export async function resolvePrivateGatewayCandidate(connectionCode: string) {
+  const response = await fetch(
+    `/api/server?path=v2%2Fprivate-nodes%2Fresolve&code=${encodeURIComponent(connectionCode)}`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    },
+  );
+  const payload = await response.json().catch(() => null) as {
+    candidate?: V2Candidate & { connectionCode: string; online: boolean };
+    error?: string;
+  } | null;
+  if (!response.ok || !payload?.candidate) {
+    if (response.status >= 500) {
+      throw new Error("The private-node connection service is temporarily unavailable. Try again in a moment.");
+    }
+    throw new Error(payload?.error ?? `Private node lookup failed (${response.status}).`);
+  }
+  return payload.candidate;
+}
+
+export async function resolvePrivateGatewayCandidateByNetworkName(networkName: string) {
+  const response = await fetch(
+    `/api/server?path=v2%2Fprivate-nodes%2Fresolve&name=${encodeURIComponent(networkName)}`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(GATEWAY_HTTP_TIMEOUT_MS),
+    },
+  );
+  const payload = await response.json().catch(() => null) as {
+    candidate?: V2Candidate & { connectionCode: string; networkName: string; online: boolean };
+    error?: string;
+  } | null;
+  if (!response.ok || !payload?.candidate) {
+    if (response.status >= 500) {
+      throw new Error("The private-node connection service is temporarily unavailable. Try again in a moment.");
+    }
+    throw new Error(payload?.error ?? `Private node lookup failed (${response.status}).`);
+  }
+  return payload.candidate;
 }
 
 async function sendGatewayRpc(
@@ -316,10 +400,21 @@ async function sendGatewayRpc(
   const ticketProtocol = `ticket.${bytesToBase64Url(textEncoder.encode(JSON.stringify(ticket)))}`;
   const socket = new WebSocket(gatewayWebSocketUrl(candidate.nodeId), ["spilled-v2", ticketProtocol]);
   const response = await new Promise<EncryptedResponseEnvelopeV2>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      callback();
+    };
+    const requestTimeoutMs = Math.min(
+      ticket.maxDurationMs + 5_000,
+      FAST_GATEWAY_METHODS.has(method) ? FAST_GATEWAY_RPC_TIMEOUT_MS : 95_000,
+    );
     const timeout = window.setTimeout(() => {
+      settle(() => reject(new Error("Gateway request timed out. The private node may be reconnecting.")));
       socket.close();
-      reject(new Error("Gateway request timed out."));
-    }, Math.min(ticket.maxDurationMs + 5_000, 95_000));
+    }, requestTimeoutMs);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({
         version: 2,
@@ -330,26 +425,24 @@ async function sendGatewayRpc(
       }));
     }, { once: true });
     socket.addEventListener("message", (event) => {
-      window.clearTimeout(timeout);
       try {
         const frame = JSON.parse(String(event.data)) as { body?: string };
         if (!frame.body) throw new Error("Gateway response body is missing.");
-        resolve(JSON.parse(frame.body) as EncryptedResponseEnvelopeV2);
+        const parsed = JSON.parse(frame.body) as EncryptedResponseEnvelopeV2;
+        settle(() => resolve(parsed));
       } catch (error) {
-        reject(error);
+        settle(() => reject(error));
       } finally {
         socket.close();
       }
     }, { once: true });
     socket.addEventListener("error", () => {
-      window.clearTimeout(timeout);
-      reject(new Error("Gateway connection failed."));
+      settle(() => reject(new Error("Gateway connection failed.")));
     }, { once: true });
     socket.addEventListener("close", (event) => {
-      if (event.code !== 1000 && event.code !== 1005) {
-        window.clearTimeout(timeout);
-        reject(new Error(event.reason || `Gateway closed the connection (${event.code}).`));
-      }
+      settle(() => reject(new Error(
+        event.reason || `Gateway closed before the node replied (${event.code || 1005}).`,
+      )));
     }, { once: true });
   });
   const payload = JSON.parse(await decodeBrowserNodeResponse({
@@ -358,42 +451,79 @@ async function sendGatewayRpc(
     privateKey: encrypted.privateKey,
     nodeTransportPublicKey: candidate.identity.x25519PublicKey,
   })) as { ok?: boolean; result?: unknown; error?: string };
-  if (!payload.ok) throw new Error(payload.error || "Node rejected the gateway request.");
+  if (!payload.ok) throw new GatewayRemoteError(payload.error || "Node rejected the gateway request.");
   return payload.result;
+}
+
+async function tryCachedGatewayRequest(
+  cacheKey: string,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const cached = gatewaySessionCache.get(cacheKey);
+  if (!cached || !isGatewayTicketUsable(cached.ticket)) return null;
+  try {
+    return {
+      candidate: cached.candidate,
+      data: await sendGatewayRpc(cached.candidate, cached.ticket, method, params),
+    };
+  } catch (error) {
+    if (error instanceof GatewayRemoteError) throw error;
+    gatewaySessionCache.delete(cacheKey);
+    console.warn(`[gateway] cached ${cached.candidate.nodeId} ${method} failed, requesting a fresh route:`, error);
+    return null;
+  }
+}
+
+async function requestFreshGatewayCandidate(
+  cacheKey: string,
+  candidate: V2Candidate,
+  issue: () => Promise<CapabilityTicketV2>,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const ticket = await issue();
+  gatewaySessionCache.set(cacheKey, { candidate, ticket });
+  try {
+    return await sendGatewayRpc(candidate, ticket, method, params);
+  } catch (error) {
+    if (error instanceof GatewayRemoteError) throw error;
+    gatewaySessionCache.delete(cacheKey);
+    throw error;
+  }
 }
 
 
 export async function requestPublicGateway(
-  capability: Capability,
+  capability: PublicCapability,
   action: string,
   method: string,
   params: Record<string, unknown>,
 ) {
   const cacheKey = gatewaySessionCacheKey(capability, action);
-  const cached = gatewaySessionCache.get(cacheKey);
-  if (cached && isGatewayTicketUsable(cached.ticket)) {
-    try {
-      return {
-        nodeId: cached.candidate.nodeId,
-        endpointUrl: cached.candidate.endpointUrl ?? null,
-        data: await sendGatewayRpc(cached.candidate, cached.ticket, method, params),
-      };
-    } catch (error) {
-      console.warn(`[gateway] cached ${cached.candidate.nodeId} ${method} failed, re-discovering:`, error);
-      gatewaySessionCache.delete(cacheKey);
-    }
+  const cached = await tryCachedGatewayRequest(cacheKey, method, params);
+  if (cached) {
+    return {
+      nodeId: cached.candidate.nodeId,
+      endpointUrl: cached.candidate.endpointUrl ?? null,
+      data: cached.data,
+    };
   }
 
   const candidates = await discoverCandidates(capability);
   let lastError: unknown = null;
   for (const candidate of candidates) {
     try {
-      const ticket = await issueTicket(candidate, capability, action);
-      gatewaySessionCache.set(cacheKey, { candidate, ticket });
       return {
         nodeId: candidate.nodeId,
         endpointUrl: candidate.endpointUrl ?? null,
-        data: await sendGatewayRpc(candidate, ticket, method, params),
+        data: await requestFreshGatewayCandidate(
+          cacheKey,
+          candidate,
+          () => issueTicket(candidate, capability, action),
+          method,
+          params,
+        ),
       };
     } catch (error) {
       lastError = error;
@@ -402,4 +532,39 @@ export async function requestPublicGateway(
   }
   if (lastError) throw lastError;
   return null;
+}
+
+export async function requestPrivateGateway(
+  candidate: V2Candidate,
+  capability: PrivateCapability,
+  action: string,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const cacheKey = gatewaySessionCacheKey(capability, action, candidate.nodeId);
+  const cached = await tryCachedGatewayRequest(cacheKey, method, params);
+  if (cached) return cached.data;
+
+  let lastError: unknown = null;
+  // Public requests can fall through to another verified node. A private code
+  // intentionally resolves to one node, so give that same route one fresh
+  // retry instead of making the user repeat the action manually.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await requestFreshGatewayCandidate(
+        cacheKey,
+        candidate,
+        () => issuePrivateTicket(candidate, capability, action),
+        method,
+        params,
+      );
+    } catch (error) {
+      if (error instanceof GatewayRemoteError) throw error;
+      lastError = error;
+      if (attempt === 0) {
+        console.warn(`[gateway] private ${candidate.nodeId} ${method} failed, retrying with a fresh ticket:`, error);
+      }
+    }
+  }
+  throw lastError;
 }

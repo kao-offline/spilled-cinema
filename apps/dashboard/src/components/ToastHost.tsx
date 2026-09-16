@@ -1,16 +1,9 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { TOAST_EVENT, type ToastTone } from "../lib/toast";
 
-type ToastTone = "error" | "success" | "info";
 type Toast = { id: number; message: string; tone: ToastTone };
-
-const TOAST_EVENT = "spilled:toast";
-
-export function showToast(message: string, tone: ToastTone = "error") {
-  if (typeof window === "undefined" || !message.trim()) return;
-  window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: { message, tone } }));
-}
 
 export function ToastHost() {
   const [toasts, setToasts] = useState<Toast[]>([]);

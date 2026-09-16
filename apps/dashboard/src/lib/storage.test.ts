@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mergeLibraryStates, normalizeLibraryStateCandidate, readLibraryState, updateEpisodePlaybackProgress, updateShowCast, upsertImportedShow } from "./storage";
+import { mergeLibraryStates, normalizeLibraryStateCandidate, readLibraryState, setEpisodeWatched, updateEpisodePlaybackProgress, updateShowCast, upsertImportedShow } from "./storage";
 import type { ImportedShow } from "./types";
 
 function createStorageStub() {
@@ -89,8 +89,23 @@ describe("library storage imports", () => {
     expect(state.shows).toHaveLength(1);
     expect(state.shows[0].slug).toBe("vidking-movie-1");
     expect(state.shows[0].episodes).toHaveLength(1);
+    expect(state.shows[0].episodes[0].importedAt).toBe(1);
     expect(state.shows[0].episodes[0].players.map((player) => player.provider)).toEqual(["vidking", "cineby"]);
     expect(state.shows[0].providerMatches?.map((match) => match.integrationId)).toEqual(["cineby"]);
+  });
+
+  it("retains the newer playback snapshot, including an explicit unseen reset", () => {
+    const show = showFixture({});
+    upsertImportedShow(show);
+    updateEpisodePlaybackProgress(show.episodes[0].id, { currentTime: 950, duration: 1000 });
+    const older = readLibraryState();
+    setEpisodeWatched(show.episodes[0].id, false);
+    const newer = readLibraryState();
+    newer.shows[0].episodes[0].playbackUpdatedAt = (older.shows[0].episodes[0].playbackUpdatedAt ?? 0) + 100;
+    const merged = mergeLibraryStates(older, newer).shows[0].episodes[0];
+    expect(merged.watched).toBe(false);
+    expect(merged.playbackPositionSeconds).toBe(0);
+    expect(mergeLibraryStates(newer, older).shows[0].episodes[0].playbackPositionSeconds).toBe(0);
   });
 
   it("deduplicates equivalent season episode codes across providers", () => {

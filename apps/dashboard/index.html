@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0c0d12" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -18,28 +18,6 @@
   <body class="no-scrollbar">
     <!-- The library is hydrated from the connected vault before it is persisted. -->
     <div id="root"></div>
-    <script>
-      (function () {
-        if (!('serviceWorker' in navigator)) {
-          return;
-        }
-        navigator.serviceWorker.getRegistrations().then(function (registrations) {
-          if (!registrations || registrations.length === 0) {
-            return;
-          }
-
-          return Promise.all(registrations.map(function (registration) {
-            return registration.unregister();
-          })).then(function () {
-            return (window.caches && caches.keys ? caches.keys().then(function (keys) {
-              return Promise.all(keys.map(function (key) { return caches.delete(key); }));
-            }) : Promise.resolve());
-          });
-        }).catch(function () {
-          // Keep bootstrap resilient even when SW cleanup fails.
-        });
-      })();
-    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -97,3 +97,12 @@ Credentials are read only from environment variables and are never written to re
 | Transport | direct local node | encrypted large gateway response | offline node/ticket failure | same decoded payload and bounded frame |
 
 Live providers are nondeterministic. A run is evidence for the recorded date, environment, and provider state; it is not a permanent availability guarantee.
+
+### Iteration 2 — hosted final-hop reliability (2026-09-16)
+
+- Goal: a saved episode must advance past a source that resolves successfully but whose final HLS/MP4 proxy request fails.
+- Production-shaped audit: 36 saved episodes were resolved through the hosted `browser-start` route and then checked by fetching the returned playback manifest. 17 returned a playable HLS manifest; 19 failed at the final upstream hop (403, 404, or 500).
+- Root cause: source resolution and final media delivery are separate boundaries. The original browser-file proxy tried four request-header variants only for 401/403. It immediately gave up on 408/425/429/5xx responses, while the client retried the same selected source after a media error.
+- Reversible repair: browser-file now uses up to six bounded, no-store attempts for retryable 401/403/408/425/429/5xx responses; it still fails fast for a true 404. The player marks a media-failed source only for the current viewing session and advances to the next distinct saved player without persisting that change.
+- Verification: dashboard API-module, PlayerModal, and subtitle tests passed (16 tests); dashboard TypeScript and server build passed. Deployment `dpl_AUYYpA32262uaN5Bs9L7gZAPJV1q` is ready.
+- Decision: CONTINUE. This removes the first-source dead end and transient proxy gap, but a source that consistently returns 403/404 after all six attempts remains unavailable until a different legitimate source is imported or becomes available.

@@ -65,6 +65,7 @@ export type WatcherProfileRuntimeState = {
 };
 
 export type PrivateProfileState = {
+  playbackProgress?: Record<string, import("./playback-progress").PlaybackProgressRecord>;
   accountId: string;
   profileId: string;
   libraryState: unknown;

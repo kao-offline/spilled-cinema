@@ -1,11 +1,15 @@
 {
   "name": "Spilled Library",
   "short_name": "Spilled",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#0c0d12",
   "theme_color": "#0c0d12",
   "description": "Stream and organize your imported cinema with offline-ready app shell support.",
+  "categories": ["entertainment", "video"],
   "icons": [
     {
       "src": "/icons/app-icon-dark-rounded-192.png",

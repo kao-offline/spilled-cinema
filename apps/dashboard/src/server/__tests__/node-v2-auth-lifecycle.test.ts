@@ -68,6 +68,34 @@ async function runtimeFixture() {
 }
 
 describe("node v2 authentication lifecycle", () => {
+  it("scopes progress to the authenticated profile and merges concurrent devices without losing newer entries", async () => {
+    const { runtime } = await runtimeFixture();
+    const login = await runtime.loginWatcherPassword({ watcherId: "watcher", password: "watcher password long", profileId: "main" });
+    const now = Date.now();
+    const first = { key: "serial:tmdb:1:1:1", position: 120, duration: 1800, watched: false, updatedAt: now };
+    const second = { ...first, key: "movie:tmdb:2:1:movie", position: 300 };
+    await Promise.all([
+      runtime.putPrivatePlaybackProgress(login.accessToken, "main", [first]),
+      runtime.putPrivatePlaybackProgress(login.accessToken, "main", [second]),
+    ]);
+    const merged = await runtime.putPrivatePlaybackProgress(login.accessToken, "main", [{ ...first, position: 5, updatedAt: now - 100 }]);
+    expect(Object.keys(merged)).toHaveLength(2);
+    expect(merged[first.key].position).toBe(120);
+    await expect(runtime.putPrivatePlaybackProgress(undefined, "main", [first])).rejects.toThrow();
+    await expect(runtime.putPrivatePlaybackProgress(login.accessToken, "other-profile", [first])).rejects.toThrow();
+    await expect(runtime.putPrivatePlaybackProgress(login.accessToken, "main", [{ ...first, position: -1 }])).rejects.toThrow(/invalid/i);
+    await runtime.putPrivateLibrary(login.accessToken, "main", { settings: { test: true } });
+    expect((await runtime.getPrivateLibrary(login.accessToken, "main")).playbackProgress?.[first.key].position).toBe(120);
+    const third = { ...first, key: "serial:tmdb:1:1:2", position: 45, updatedAt: now + 1 };
+    await Promise.all([
+      runtime.putPrivatePlaybackProgress(login.accessToken, "main", [third]),
+      runtime.putPrivateLibrary(login.accessToken, "main", { settings: { test: "concurrent" } }),
+    ]);
+    const profile = await runtime.getPrivateLibrary(login.accessToken, "main");
+    expect(profile.playbackProgress?.[third.key].position).toBe(45);
+    expect(profile.settings).toEqual({ test: "concurrent" });
+  });
+
   it("rotates refresh tokens and revokes the chain on reuse", async () => {
     const { runtime, readState } = await runtimeFixture();
     const login = await runtime.loginWatcherPassword({

@@ -1,4 +1,7 @@
-import { requestPublicGateway } from "./v2-gateway-client";
+import { getPrivateRuntimeOperation } from "./private-runtime-operation";
+import { readPrivateNodeConnection, refreshPrivateNodeSessionViaGateway } from "./private-node-client";
+import { requestPrivateGateway, requestPublicGateway, resolvePrivateGatewayCandidate } from "./v2-gateway-client";
+import { getPrivatePlaybackOperation } from "./private-playback-operation";
 import {
   isLocalhostProbeOnCooldown,
   markLocalhostProbeAttempted,
@@ -19,6 +22,35 @@ type JsonRequestInit = {
   body?: unknown;
   headers?: Record<string, string>;
 };
+
+export function rebaseGatewayMediaUrls<T>(data: T, endpointUrl?: string | null): T {
+  if (!endpointUrl || !data || typeof data !== "object") return data;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(endpointUrl);
+  } catch {
+    return data;
+  }
+  if (!/^https?:$/.test(endpoint.protocol)) return data;
+
+  const record = data as Record<string, unknown>;
+  let changed = false;
+  const next = { ...record };
+  for (const key of ["playbackUrl", "downloadUrl"] as const) {
+    const value = record[key];
+    if (typeof value !== "string") continue;
+    try {
+      const pageOrigin = typeof window === "undefined" ? "https://spilled.invalid" : window.location.origin;
+      const parsed = new URL(value, pageOrigin);
+      if (parsed.pathname !== "/api/download-full/browser-file") continue;
+      next[key] = `${endpoint.origin}${parsed.pathname}${parsed.search}`;
+      changed = true;
+    } catch {
+      // Leave malformed media URLs for the normal response validation path.
+    }
+  }
+  return (changed ? next : data) as T;
+}
 
 const LOCAL_RUNTIME_TIMEOUT_MS = 15000;
 const DIRECT_LOCAL_TIMEOUT_MS = 3000;
@@ -432,6 +464,52 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     ? init.body as Record<string, unknown>
     : {};
 
+  // Signed-in private nodes resolve providers and players through the encrypted
+  // gateway, so search/feed/import/playback work with zero public nodes online.
+  // Falls through to public transports below when no private session exists.
+  const privateOperation = getPrivateRuntimeOperation(path, body);
+  if (privateOperation) {
+    let connection = readPrivateNodeConnection();
+    if (connection.nodeId && connection.connectionCode && connection.token) {
+      const request = async () => {
+        const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode!);
+        if (candidate.nodeId !== connection.nodeId) {
+          throw new Error("Saved private node identity no longer matches its connection code.");
+        }
+        return {
+          candidate,
+          data: await requestPrivateGateway(candidate, privateOperation.capability, privateOperation.action, privateOperation.method, {
+            ...privateOperation.params,
+            accessToken: connection.token,
+            ...(connection.profileId ? { profileId: connection.profileId } : {}),
+          }),
+        };
+      };
+      try {
+        const response = await request();
+        return {
+          ok: true,
+          status: 200,
+          data: rebaseGatewayMediaUrls(response.data as T, response.candidate.endpointUrl),
+          origin: response.candidate.endpointUrl ?? response.candidate.nodeId,
+          transport: "gateway",
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/private session|session (?:expired|revoked)|access token/i.test(message)) throw error;
+        connection = await refreshPrivateNodeSessionViaGateway(connection);
+        const response = await request();
+        return {
+          ok: true,
+          status: 200,
+          data: rebaseGatewayMediaUrls(response.data as T, response.candidate.endpointUrl),
+          origin: response.candidate.endpointUrl ?? response.candidate.nodeId,
+          transport: "gateway",
+        };
+      }
+    }
+  }
+
   if (path === "/api/search") {
     const response = await requestPublicGateway(
       "provider.search",
@@ -443,7 +521,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
     return {
       ok: true,
       status: 200,
-      data: response.data as T,
+      data: rebaseGatewayMediaUrls(response.data as T, response.endpointUrl),
       origin: response.endpointUrl ?? response.nodeId,
       transport: "gateway",
     };
@@ -475,15 +553,8 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
         params: { ...body, moduleId: "bombuj" },
       };
     }
-    if (path === "/api/player/resolve") {
-      return { capability: "player.resolve" as const, action: "resolve", method: "player.embed.resolve", params: body };
-    }
-    if (path === "/api/player/clean-resolve") {
-      return { capability: "player.resolve" as const, action: "resolve", method: "player.clean.resolve", params: body };
-    }
-    if (path === "/api/player/playback-resolve") {
-      return { capability: "player.resolve" as const, action: "resolve", method: "player.playback.resolve", params: body };
-    }
+    const playerOperation = getPrivatePlaybackOperation(path, body);
+    if (playerOperation) return { capability: "player.resolve" as const, ...playerOperation };
     return null;
   })();
   if (!operation) return null;
@@ -498,7 +569,7 @@ async function fetchViaV2Gateway<T>(path: string, init: JsonRequestInit): Promis
   return {
     ok: true,
     status: 200,
-    data: response.data as T,
+    data: rebaseGatewayMediaUrls(response.data as T, response.endpointUrl),
     origin: response.endpointUrl ?? response.nodeId,
     transport: "gateway",
   };
@@ -585,7 +656,8 @@ export async function requestRuntimeJson<T>(path: string, init: JsonRequestInit 
     if (gateway) {
       return gateway;
     }
-  } catch {
+  } catch (error) {
+    if (getPrivateRuntimeOperation(path, {}) && readPrivateNodeConnection().token) throw error;
     // Fall through to legacy public fetch servers.
   }
 

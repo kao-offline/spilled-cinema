@@ -1,8 +1,8 @@
-import { ArrowLeft, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, Volume2, X } from "lucide-react";
 import { clsx } from "clsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource } from "../lib/types";
-import { getCanonicalLanguageKey, getCanonicalLanguageLabel, getLanguagePresentation } from "../lib/language";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource, SubtitleSource } from "../lib/types";
+import { getCanonicalLanguageKey, getLanguagePresentation } from "../lib/language";
 import { formatEpisodeTitle } from "../lib/episode-title";
 import { buildRuntimeUrl } from "../lib/local-api";
 import { resolveUniversalPlayback, type PlaybackResolveFailure, type PlaybackResolveResult } from "../lib/full-download-client";
@@ -10,13 +10,17 @@ import { getLibraryVaultFileObjectUrl } from "../lib/library-folder";
 import { readCachedPlayerFailure, readCachedPlayerUrl, removeCachedPlayerFailure, removeCachedPlayerUrl, writeCachedPlayerFailure, writeCachedPlayerUrl } from "../lib/player-url-cache";
 import { balancedBackgroundImage } from "../lib/image-resolution";
 import { prewarmPlaybackUrl } from "../lib/playback-prewarm";
-import { UniversalVideoPlayer } from "./UniversalVideoPlayer";
+import { UniversalVideoPlayer, type SubtitleTrack } from "./UniversalVideoPlayer";
 import { resolveTitleItem, searchTitleItems } from "../lib/provider-modules-client";
 import { getShowArtwork, getShowMetadata, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 import { fetchSkipSegmentsForIds, collectSkipTitleIds, resolveSkipTitleIdsByTitle, type SkipSegment, type SkipTitleIds } from "../lib/intro-skip";
 import { fetchEpisodePreviews, type EpisodePreview } from "../lib/import-client";
 import { prefetchEpisodePreviewImages } from "../lib/episode-preview-cache";
 import type { FullDownloadJob } from "../lib/full-download-client";
+import { getEpisodeAudioAvailability } from "../lib/episode-audio";
+import { buildAudioOptions, buildSubtitleOptions, buildSubtitleProxyUrl, getAudioLanguageKey, getSubtitleLanguageKey } from "../lib/media-selection";
+import { readTvMode } from "../lib/tv-mode";
+import { TvEpisodePicker } from "./TvEpisodePicker";
 
 type PlayerModalProps = {
   episode: LibraryEpisode | null;
@@ -45,6 +49,40 @@ type PlayerResolutionStatus = {
 };
 
 const ENABLE_PLAYER_BACKGROUND_DISCOVERY = true;
+const MEDIA_SELECTION_PREFERENCE_KEY = "spilled.player.media-selection.v1";
+
+type MediaSelectionPreference = { audioLanguage?: string; subtitleLanguage?: string };
+
+function handleRadioKeys(event: KeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  const group = (event.target as HTMLElement).closest('[role="radiogroup"]');
+  const options = Array.from(group?.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)') ?? []);
+  const index = options.indexOf((event.target as HTMLElement).closest<HTMLButtonElement>('button[role="radio"]') as HTMLButtonElement);
+  if (index < 0 || options.length === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (index + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + options.length) % options.length;
+  options[next].focus();
+  options[next].click();
+}
+
+function readMediaSelectionPreference(): MediaSelectionPreference {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(MEDIA_SELECTION_PREFERENCE_KEY) ?? "{}");
+    return { audioLanguage: typeof value?.audioLanguage === "string" ? value.audioLanguage : undefined, subtitleLanguage: typeof value?.subtitleLanguage === "string" ? value.subtitleLanguage : undefined };
+  } catch {
+    return {};
+  }
+}
+
+function writeMediaSelectionPreference(patch: MediaSelectionPreference) {
+  try {
+    const current = readMediaSelectionPreference();
+    window.localStorage.setItem(MEDIA_SELECTION_PREFERENCE_KEY, JSON.stringify({ ...current, ...patch }));
+  } catch {
+    // Media preferences are optional when browser storage is unavailable.
+  }
+}
 
 function episodeShortLabel(episode: LibraryEpisode | null) {
   if (!episode) return "Episode";
@@ -112,6 +150,21 @@ function inferStreamType(value: string): "hls" | "mp4" | "dash" | "embed" | "unk
   return "unknown";
 }
 
+function playerQualityLabel(player: EpisodePlayer) {
+  const match = `${player.label} ${player.streamUrl ?? ""}`.match(/\b(2160p|1440p|1080p|720p|480p|4k|uhd|fhd|hd)\b/i);
+  return match?.[1]?.toUpperCase() ?? null;
+}
+
+function subtitleLanguageFlags(languageKey: string) {
+  switch (languageKey) {
+    case "cs-sk": return ["🇨🇿", "🇸🇰"];
+    case "cs": return ["🇨🇿"];
+    case "sk": return ["🇸🇰"];
+    case "en": return ["🇬🇧"];
+    default: return [];
+  }
+}
+
 function isLocalPlayer(player: EpisodePlayer | null) {
   return player?.provider === "local" || player?.provider === "spillsave";
 }
@@ -161,6 +214,13 @@ function extractServerBaseUrl(playbackUrl: string | undefined): string | null {
   if (!playbackUrl) return null;
   try {
     const parsed = new URL(playbackUrl, window.location.origin);
+    if (parsed.pathname === "/api/node-proxy") {
+      const node = parsed.searchParams.get("node");
+      if (node) {
+        const nodeUrl = new URL(node);
+        if (/^https?:$/i.test(nodeUrl.protocol)) return nodeUrl.origin;
+      }
+    }
     if (parsed.origin !== window.location.origin && /^https?:$/i.test(parsed.protocol)) {
       return parsed.origin;
     }
@@ -168,18 +228,6 @@ function extractServerBaseUrl(playbackUrl: string | undefined): string | null {
     // Not an absolute URL or not a remote server.
   }
   return null;
-}
-
-function createSubtitleTrack(player: EpisodePlayer | null, _serverBaseUrl: string | null) {
-  if (!player?.subtitlesUrl) return [];
-  const presentation = getLanguagePresentation(player.language || player.label || "Subtitles");
-  const src = buildRuntimeUrl(`/api/subtitle-proxy?url=${encodeURIComponent(player.subtitlesUrl)}`);
-  return [{
-    src,
-    label: presentation.labelWithFlags,
-    srclang: (player.language || "en").slice(0, 5).toLowerCase(),
-    default: true,
-  }];
 }
 
 function episodeWithSelectedPlayer(episode: LibraryEpisode, player: EpisodePlayer, includeFallbacks = false): LibraryEpisode {
@@ -233,10 +281,32 @@ export function PlayerModal({
   fullDownloadJobsByEpisode,
   autoPlayToken = null,
 }: PlayerModalProps) {
-  const [expandedLangs, setExpandedLangs] = useState<Set<string>>(new Set());
-  const [downloadedSubtitleTracks, setDownloadedSubtitleTracks] = useState<{ src: string; label: string; srclang: string }[]>([]);
+  const initialMediaPreference = useMemo(() => readMediaSelectionPreference(), []);
+  const [selectedSubtitleLanguage, setSelectedSubtitleLanguage] = useState<string | null>(initialMediaPreference.subtitleLanguage ?? null);
+  const [explicitSubtitleId, setExplicitSubtitleId] = useState<string | null>(null);
+  const [downloadedSubtitleTracks, setDownloadedSubtitleTracks] = useState<SubtitleTrack[]>([]);
+  const [discoveredSubtitles, setDiscoveredSubtitles] = useState<SubtitleSource[]>([]);
+  const [subtitleError, setSubtitleError] = useState<string | null>(null);
   const [vaultPlaybackUrl, setVaultPlaybackUrl] = useState<string | null>(null);
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
+  const playerMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!playerMenuOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const menu = playerMenuRef.current;
+    menu?.querySelector<HTMLButtonElement>("button")?.focus();
+    const keydown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setPlayerMenuOpen(false); }
+      if (event.key !== "Tab") return;
+      const controls = Array.from(menu?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    menu?.addEventListener("keydown", keydown);
+    return () => { menu?.removeEventListener("keydown", keydown); previous?.focus(); };
+  }, [playerMenuOpen]);
   const [playback, setPlayback] = useState<PlaybackResolveResult | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playbackFailures, setPlaybackFailures] = useState<PlaybackResolveFailure[]>([]);
@@ -247,6 +317,13 @@ export function PlayerModal({
   const [, setSourceDiscoveryState] = useState<"idle" | "searching" | "complete" | "failed">("idle");
   const [selectedSelectorSeason, setSelectedSelectorSeason] = useState<number | null>(null);
   const [episodeSelectorOpen, setEpisodeSelectorOpen] = useState(false);
+  // TV mode swaps the 3D episode carousel for the lean-back picker below.
+  // Desktop path is untouched.
+  const tvMode = readTvMode();
+  const handleTvEpisodePick = (entry: LibraryEpisode) => {
+    setEpisodeTransitioning(true);
+    window.setTimeout(() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); window.setTimeout(() => setEpisodeTransitioning(false), 80); }, 280);
+  };
   const [seasonMenuOpen, setSeasonMenuOpen] = useState(false);
   const [episodeTransitioning, setEpisodeTransitioning] = useState(false);
   const [focusedEpisodeIndex, setFocusedEpisodeIndex] = useState<number>(0);
@@ -254,6 +331,7 @@ export function PlayerModal({
   const [episodePreviewsLoading, setEpisodePreviewsLoading] = useState(false);
   const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
   const playbackErrorRetryRef = useRef<string | null>(null);
+  const failedPlaybackAliasesRef = useRef<Set<string>>(new Set());
   const backgroundResolveKeysRef = useRef<Set<string>>(new Set());
   const lastProgressSaveRef = useRef(0);
   const onEpisodeEndedRef = useRef(onEpisodeEnded);
@@ -275,27 +353,13 @@ export function PlayerModal({
     };
   }, [episode, expandedPlayers, localSelectedAlias]);
 
-  const groupedPlayers = useMemo(() => {
-    if (!effectiveEpisode) return [];
-    const groups = new Map<string, { label: string; players: typeof effectiveEpisode.players }>();
-    for (const player of effectiveEpisode.players) {
-      const key = getCanonicalLanguageKey(player.language);
-      const group = groups.get(key) ?? { label: getCanonicalLanguageLabel(player.language), players: [] };
-      group.players.push(player);
-      groups.set(key, group);
-    }
-    return Array.from(groups.entries()).map(([key, group]) => ({ key, ...group }));
-  }, [effectiveEpisode]);
-
-  useEffect(() => {
-    if (groupedPlayers.length > 0 && expandedLangs.size === 0) {
-      setExpandedLangs(new Set([groupedPlayers[0].key]));
-    }
-  }, [groupedPlayers, expandedLangs]);
+  const groupedPlayers = useMemo(() => buildAudioOptions(effectiveEpisode?.players ?? []), [effectiveEpisode]);
 
   const activePlayer = effectiveEpisode
     ? effectiveEpisode.players.find((player) => player.alias === effectiveEpisode.selectedPlayerAlias) ?? effectiveEpisode.players[0]
     : null;
+  const activePlayerLanguageKey = getAudioLanguageKey(activePlayer?.language);
+  const visiblePlayerGroup = groupedPlayers.find((group) => group.key === activePlayerLanguageKey) ?? groupedPlayers[0] ?? null;
   const activeIsLocal = isLocalPlayer(activePlayer);
   const isMovieEntry = effectiveEpisode?.episodeCode === "movie" || effectiveEpisode?.episodeTitle === "Movie Format";
   const modalHeading = isMovieEntry
@@ -321,15 +385,6 @@ export function PlayerModal({
     : instantPlayback?.playerAlias
       ? effectiveEpisode?.players.find((player) => player.alias === instantPlayback.playerAlias) ?? activePlayer
       : activePlayer;
-
-  function toggleLang(lang: string) {
-    setExpandedLangs((prev) => {
-      const next = new Set(prev);
-      if (next.has(lang)) next.delete(lang);
-      else next.add(lang);
-      return next;
-    });
-  }
 
   function handleChoosePlayer(player: EpisodePlayer) {
     if (!episode) return;
@@ -358,9 +413,23 @@ export function PlayerModal({
     setLocalSelectedAlias(player.alias);
   }
 
+  function handleChooseAudioLanguage(languageKey: string) {
+    writeMediaSelectionPreference({ audioLanguage: languageKey });
+    const group = groupedPlayers.find((entry) => entry.key === languageKey);
+    if (!group || group.players.some((player) => player.alias === activePlayer?.alias)) return;
+    const firstAvailable = group.players.find((player) => player.resolutionStatus !== "failed") ?? group.players[0];
+    if (firstAvailable) handleChoosePlayer(firstAvailable);
+  }
+
   useEffect(() => {
     setExpandedPlayers([]);
-    setLocalSelectedAlias(null);
+    setDiscoveredSubtitles([]);
+    setSubtitleError(null);
+    failedPlaybackAliasesRef.current = new Set();
+    const preference = readMediaSelectionPreference().audioLanguage;
+    const selected = episode?.players.find((player) => player.alias === episode.selectedPlayerAlias);
+    const preferred = buildAudioOptions(episode?.players ?? []).find((group) => group.key === preference);
+    setLocalSelectedAlias(selected && (isLocalPlayer(selected) || getAudioLanguageKey(selected.language) === preference) ? selected.alias : preferred?.players[0]?.alias ?? null);
     setSourceDiscoveryState("idle");
     setSelectedSelectorSeason(null);
     setEpisodeSelectorOpen(false);
@@ -424,6 +493,7 @@ export function PlayerModal({
         const discoveredPlayers = resolved.players.map((source, index) => playerSourceToEpisodePlayer(source, index, episode));
         if (!canceled) {
           setExpandedPlayers(discoveredPlayers);
+          setDiscoveredSubtitles(resolved.subtitles);
           setSourceDiscoveryState("complete");
         }
       } catch {
@@ -488,9 +558,10 @@ export function PlayerModal({
           const languageLabel = entry.language ?? entry.label ?? `Subtitle ${index + 1}`;
           const presentation = getLanguagePresentation(languageLabel);
           return {
+            id: `downloaded:${entry.fileName}`,
             src: buildRuntimeUrl(`/api/download-full/subtitle-file?episodeId=${encodeURIComponent(episode.id)}&file=${encodeURIComponent(entry.fileName)}`),
             label: presentation.labelWithFlags,
-            srclang: (languageLabel || "en").slice(0, 5).toLowerCase(),
+            srclang: getSubtitleLanguageKey(languageLabel),
           };
         });
         if (!canceled) setDownloadedSubtitleTracks(tracks);
@@ -537,7 +608,6 @@ export function PlayerModal({
         if (player.streamUrl) {
           onResolvePlayer?.(targetEpisode.id, player, result);
         }
-        if (!background) setPlayback(result);
         return result;
       }
     }
@@ -558,7 +628,6 @@ export function PlayerModal({
       removeCachedPlayerFailure("playback", playbackCacheKey(player));
       setPlayerStatuses((prev) => ({ ...prev, [player.alias]: { status: "resolved", playback: result } }));
       onResolvePlayer?.(targetEpisode.id, player, result);
-      if (!background) setPlayback(result);
       return result;
     }
 
@@ -578,9 +647,6 @@ export function PlayerModal({
       onResolvePlayer?.(targetEpisode.id, resolvedPlayer, result);
     }
     setPlayerStatuses((prev) => ({ ...prev, [result.playerAlias]: { status: "resolved", playback: result } }));
-    if (!background) {
-      setPlayback(result);
-    }
     return result;
   }
 
@@ -686,29 +752,70 @@ export function PlayerModal({
     };
   }, [effectiveEpisode?.id, effectiveEpisode?.players, onResolvePlayerFailure, playback, playbackError]);
 
-  const localSubtitleTracks = useMemo(() => {
-    if (!episode || !activeIsLocal) return [];
-    if (downloadedSubtitleTracks.length > 0) {
-      return downloadedSubtitleTracks.map((track, index) => ({ ...track, default: index === 0 }));
-    }
-    return createSubtitleTrack(activePlayer, null);
-  }, [activeIsLocal, activePlayer, downloadedSubtitleTracks, episode]);
-  const remoteSubtitleTracks = useMemo(
-    () => createSubtitleTrack(
-      visiblePlayback?.subtitlesUrl && selectedResolvedPlayer
-        ? { ...selectedResolvedPlayer, subtitlesUrl: visiblePlayback.subtitlesUrl }
-        : selectedResolvedPlayer ?? activePlayer,
-      extractServerBaseUrl(visiblePlayback?.playbackUrl),
-    ),
-    [activePlayer, selectedResolvedPlayer, visiblePlayback],
+  const resolvedSubtitleSources = useMemo<SubtitleSource[]>(() => {
+    if (!visiblePlayback?.subtitlesUrl) return [];
+    const player = selectedResolvedPlayer ?? activePlayer;
+    const language = getCanonicalLanguageKey(player?.language).includes("subs") ? player?.language : undefined;
+    return [{
+      integrationId: player?.provider ?? "resolved",
+      label: language ?? "Subtitles",
+      language,
+      url: visiblePlayback.subtitlesUrl,
+    }];
+  }, [activePlayer, selectedResolvedPlayer, visiblePlayback]);
+  const remoteSubtitleOptions = useMemo(
+    () => buildSubtitleOptions(effectiveEpisode?.players ?? [], [...discoveredSubtitles, ...resolvedSubtitleSources]),
+    [discoveredSubtitles, effectiveEpisode?.players, resolvedSubtitleSources],
   );
-  const handlePlayerProgress = useCallback((progress: { currentTime: number; duration: number }) => {
+  const localSubtitleOptions = useMemo(() => downloadedSubtitleTracks.map((track) => ({
+    id: track.id,
+    languageKey: getSubtitleLanguageKey(track.srclang || track.label),
+    languageTag: track.srclang,
+    label: track.label,
+    sourceLabel: "Downloaded",
+    sourceUrl: track.src,
+  })), [downloadedSubtitleTracks]);
+  const availableSubtitleOptions = activeIsLocal && localSubtitleOptions.length > 0 ? localSubtitleOptions : remoteSubtitleOptions;
+  // Do not erase the preference while discovery is pending or silently substitute a language.
+  const selectedSubtitleOption = selectedSubtitleLanguage === "off" ? null
+    : availableSubtitleOptions.find((option) => option.id === explicitSubtitleId)
+      ?? (selectedSubtitleLanguage ? availableSubtitleOptions.find((option) => option.languageKey === selectedSubtitleLanguage) : availableSubtitleOptions[0]);
+  const subtitleRuntimeBase = extractServerBaseUrl(visiblePlayback?.playbackUrl)
+    ?? window.spilledNative?.serverUrl
+    ?? window.location.origin;
+  const activeSubtitleTracks = useMemo<SubtitleTrack[]>(() => availableSubtitleOptions.map((option) => ({
+    id: option.id,
+    src: option.sourceUrl.startsWith("blob:")
+      ? option.sourceUrl
+      : option.sourceUrl.startsWith("/api/")
+        ? `${subtitleRuntimeBase}${option.sourceUrl}`
+      : buildSubtitleProxyUrl(option.sourceUrl, subtitleRuntimeBase, window.location.origin),
+    label: option.label,
+    srclang: option.languageTag,
+    default: option.id === selectedSubtitleOption?.id,
+  })), [availableSubtitleOptions, selectedSubtitleOption?.id, subtitleRuntimeBase]);
+
+  const handleSubtitleSelection = useCallback((subtitleId: string | null) => {
+    setExplicitSubtitleId(subtitleId);
+    setSubtitleError(null);
+    if (!subtitleId) {
+      setSelectedSubtitleLanguage("off");
+      writeMediaSelectionPreference({ subtitleLanguage: "off" });
+      return;
+    }
+    const option = availableSubtitleOptions.find((entry) => entry.id === subtitleId);
+    if (!option) return;
+    setSelectedSubtitleLanguage(option.languageKey);
+    setSubtitleError(null);
+    writeMediaSelectionPreference({ subtitleLanguage: option.languageKey });
+  }, [availableSubtitleOptions]);
+  const handlePlayerProgress = useCallback((progress: { currentTime: number; duration: number; flush?: boolean }) => {
     if (!effectiveEpisode) return;
-    if (!Number.isFinite(progress.currentTime) || progress.currentTime < 3) return;
+    if (!Number.isFinite(progress.currentTime) || progress.currentTime < 0) return;
     playbackErrorRetryRef.current = null;
     if (!onPlaybackProgress) return;
     const now = Date.now();
-    if (now - lastProgressSaveRef.current < 5000) return;
+    if (!progress.flush && now - lastProgressSaveRef.current < 5000) return;
     lastProgressSaveRef.current = now;
     onPlaybackProgress(effectiveEpisode.id, progress);
   }, [effectiveEpisode?.id, onPlaybackProgress]);
@@ -720,39 +827,33 @@ export function PlayerModal({
     if (!activePlayer || activeIsLocal) return;
     const key = playbackCacheKey(activePlayer);
     removeCachedPlayerUrl("playback", key);
+    failedPlaybackAliasesRef.current.add(activePlayer.alias);
+    setPlayerStatuses((current) => ({
+      ...current,
+      [activePlayer.alias]: { status: "failed", error: message },
+    }));
+
+    const fallback = effectiveEpisode?.players.find((player) =>
+      !isLocalPlayer(player) &&
+      player.alias !== activePlayer.alias &&
+      !failedPlaybackAliasesRef.current.has(player.alias),
+    );
+    if (fallback) {
+      // A resolved URL can still be rejected by the final media host. Keep the
+      // saved preference intact, but continue playback with the next source.
+      setLocalSelectedAlias(fallback.alias);
+      setPlayback(null);
+      setPlaybackError(null);
+      setPlaybackFailures([]);
+      setPlaybackRetryNonce((value) => value + 1);
+      return;
+    }
+
     if (playbackErrorRetryRef.current === key) return;
     playbackErrorRetryRef.current = key;
     setPlayback(null);
     setPlaybackRetryNonce((value) => value + 1);
-  }, [activeIsLocal, activePlayer, playback]);
-
-  useEffect(() => {
-    if (!playbackError || !effectiveEpisode || activeIsLocal) return;
-    const active = effectiveEpisode.players.find((p) => p.alias === effectiveEpisode.selectedPlayerAlias) ?? effectiveEpisode.players[0];
-    if (!active) return;
-    const activeHasSubtitles = /titulky|subtitles|subbed/i.test(active.language ?? "") || Boolean(active.subtitlesUrl);
-    if (!activeHasSubtitles) return;
-
-    const nonSubtitlePlayers = effectiveEpisode.players.filter((p) =>
-      p.alias !== active.alias &&
-      !/titulky|subtitles|subbed/i.test(p.language ?? "") &&
-      !p.subtitlesUrl &&
-      p.resolutionStatus !== "failed" &&
-      !playbackFailures.some((f) => f.playerAlias === p.alias),
-    );
-    if (nonSubtitlePlayers.length === 0) return;
-
-    const fallback = nonSubtitlePlayers[0];
-    const fallbackKey = playbackCacheKey(fallback);
-    removeCachedPlayerUrl("playback", fallbackKey);
-    removeCachedPlayerFailure("playback", fallbackKey);
-    playbackErrorRetryRef.current = fallbackKey;
-    setPlayback(null);
-    setPlaybackError(null);
-    setPlaybackFailures([]);
-    setLocalSelectedAlias(fallback.alias);
-    setPlaybackRetryNonce((value) => value + 1);
-  }, [playbackError, effectiveEpisode, activeIsLocal, playbackFailures]);
+  }, [activeIsLocal, activePlayer, effectiveEpisode, playback]);
 
   const previewSeason = selectedSelectorSeason ?? episode?.seasonNumber ?? null;
   useEffect(() => {
@@ -831,7 +932,10 @@ export function PlayerModal({
             description={pageDescription}
             sourceLabel={sourceLabel}
             className="h-full min-h-0"
-            subtitleTracks={localSubtitleTracks}
+            subtitleTracks={activeSubtitleTracks}
+            preferredSubtitleId={selectedSubtitleOption?.id ?? null}
+            onSubtitleSelectionChange={handleSubtitleSelection}
+            onSubtitleError={setSubtitleError}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
             skipSegments={skipSegments}
@@ -851,7 +955,10 @@ export function PlayerModal({
             description={pageDescription}
             sourceLabel={sourceLabel}
             className="h-full min-h-0"
-            subtitleTracks={remoteSubtitleTracks}
+            subtitleTracks={activeSubtitleTracks}
+            preferredSubtitleId={selectedSubtitleOption?.id ?? null}
+            onSubtitleSelectionChange={handleSubtitleSelection}
+            onSubtitleError={setSubtitleError}
             autoPlayToken={autoPlayToken}
             initialTime={effectiveEpisode.playbackPositionSeconds ?? null}
             skipSegments={skipSegments}
@@ -928,14 +1035,28 @@ export function PlayerModal({
             <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
               <Settings className="h-4 w-4" />
             </button>
-            <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
-              <List className="h-4 w-4" />
-            </button>
+            {!isMovieEntry ? (
+              <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
+                <List className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
 
       {episodeSelectorOpen ? (
+        tvMode ? (
+          <>
+            <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
+            <TvEpisodePicker
+              seasons={selectorSeasons}
+              initialSeason={activeSelectorSeason}
+              currentEpisodeId={effectiveEpisode.id}
+              onClose={() => setEpisodeSelectorOpen(false)}
+              onPick={handleTvEpisodePick}
+            />
+          </>
+        ) : (
         <>
         <button type="button" className="absolute inset-0 z-20 cursor-default" aria-label="Close episode selector" onClick={() => { setEpisodeSelectorOpen(false); setSeasonMenuOpen(false); }} />
         <aside className="player-episode-selector pointer-events-auto absolute inset-y-0 right-0 z-20 flex w-[min(100vw,34rem)] flex-col overflow-hidden bg-gradient-to-l from-black/90 via-black/55 to-transparent pl-6 pr-2 sm:right-3 sm:pl-10 sm:pr-3" style={{ transform: episodeTransitioning ? "translateX(110%)" : "translateX(0)", transition: "transform 360ms cubic-bezier(.2,.8,.2,1)", touchAction: "pan-y" }} aria-label="Episode carousel" onWheel={(event) => { if (Math.abs(event.deltaY) > 8) setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (event.deltaY > 0 ? 1 : -1)))); }} onTouchStart={(event) => { selectorTouchStartRef.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={(event) => { const start = selectorTouchStartRef.current; selectorTouchStartRef.current = null; const end = event.changedTouches[0]?.clientY; if (start == null || end == null || Math.abs(end - start) < 28) return; setFocusedEpisodeIndex((index) => Math.max(0, Math.min(activeSelectorEpisodes.length - 1, index + (end < start ? 1 : -1)))); }}>
@@ -968,6 +1089,7 @@ export function PlayerModal({
               const title = preview?.title ?? entry.episodeTitle ?? `Episode ${entry.episodeNumber ?? index + 1}`;
               const minutes = preview?.runtimeMinutes ?? (entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null);
               const airDate = preview?.airDate ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${preview.airDate}T00:00:00`)) : null;
+              const audioAvailability = getEpisodeAudioAvailability(entry);
               return (
                 <div key={entry.id} onClick={() => {
                   if (!isFocused) { setFocusedEpisodeIndex(index); return; }
@@ -986,8 +1108,14 @@ export function PlayerModal({
                       <div className="absolute inset-0 bg-gradient-to-t from-black/55 to-transparent" />
                     </div>
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/65 to-transparent px-3 pb-3 pt-16 sm:px-4 sm:pb-4">
-                      <div className="flex items-start justify-between gap-2"><p className={clsx("line-clamp-2 font-bold leading-[1.2] text-white", isFocused ? "text-base sm:text-lg" : "text-sm")}>{entry.episodeNumber ?? index + 1}. {title}</p></div>
-                      <p className="mt-1 text-[10px] font-medium text-white/45">{[minutes ? `${minutes} min` : null, airDate].filter(Boolean).join("  ·  ") || episodeShortLabel(entry)}</p>
+                      <div className="flex items-start justify-between gap-2"><p className={clsx("player-selector-title line-clamp-2 font-bold leading-[1.2] text-white", isFocused ? "text-base sm:text-lg" : "text-sm")}><span className="player-selector-number">{entry.episodeNumber ?? index + 1}.</span> {title}</p></div>
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <p className="player-selector-meta text-[10px] font-medium text-white/45">{[minutes ? `${minutes} min` : null, airDate].filter(Boolean).join("  ·  ") || episodeShortLabel(entry)}</p>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {audioAvailability.subtitles ? <span className="spilled-subtitle-tag spilled-audio-marker" title="Subtitles available" aria-label="Subtitles available"><Captions className="h-3.5 w-3.5" /><span>SUB</span></span> : null}
+                          {audioAvailability.dubbing ? <span className="spilled-dubbing-tag spilled-audio-marker" title="Dubbed audio available" aria-label="Dubbed audio available"><Volume2 className="h-3.5 w-3.5" /><span>DUB</span></span> : null}
+                        </div>
+                      </div>
                       {isFocused && preview?.description ? <p className="mt-1.5 line-clamp-2 text-[11px] leading-4 text-white/52">{preview.description}</p> : null}
                     </div>
                   </button>
@@ -1011,6 +1139,7 @@ export function PlayerModal({
           </div>
         </aside>
         </>
+        )
       ) : null}
 
       {episodeTransitioning ? (
@@ -1018,43 +1147,67 @@ export function PlayerModal({
       ) : null}
 
       {playerMenuOpen ? (
-        <div className="absolute inset-y-0 right-0 z-30 flex justify-end" style={{ paddingTop: "max(5rem, env(safe-area-inset-top))" }}>
-          <div className="pointer-events-auto h-full w-[min(85vw,22rem)] overflow-y-auto bg-gradient-to-l from-black/95 via-black/90 to-transparent" style={{ scrollbarWidth: "none" }}>
-            <div className="p-4 pt-8 pb-24">
-              <div className="glass-panel overflow-hidden rounded-2xl border border-white/10">
-                <div className="border-b border-white/10 px-4 py-3">
-                  <div className="text-xs font-bold text-white/50">{isMovieEntry ? "Movie" : "Active Source"}</div>
-                  <div className="mt-1 truncate text-sm font-bold text-white">{modalHeading}</div>
-                </div>
-                <div className="p-2">
-                  {groupedPlayers.map((group) => {
-                    const isOpen = expandedLangs.has(group.key);
-                    return (
-                      <div key={group.key} className="mb-1">
-                        <button type="button" onClick={() => toggleLang(group.key)} className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition hover:bg-white/10">
-                          <span className="text-sm font-semibold text-white/80">{group.label}</span>
-                          <ChevronDown className={clsx("h-4 w-4 text-white/40 transition-transform duration-200", isOpen && "rotate-180")} />
+        <div className="absolute inset-0 z-50 flex justify-end bg-black/45" style={{ paddingTop: "max(1rem, env(safe-area-inset-top))" }}>
+          <div ref={playerMenuRef} role="dialog" aria-modal="true" aria-label="Playback options" onKeyDown={handleRadioKeys} className="player-source-menu pointer-events-auto max-h-[calc(100dvh-2rem)] w-[min(94vw,25rem)] self-start overflow-y-auto rounded-l-3xl border border-r-0 border-white/10 bg-[#101216]/98 shadow-[-20px_20px_60px_rgba(0,0,0,.4)]" style={{ scrollbarWidth: "none" }}>
+            <div className="p-3">
+              <button type="button" onClick={() => setPlayerMenuOpen(false)} className="mb-2 inline-flex min-h-10 items-center gap-2 rounded-full border border-white/14 bg-white/[0.04] px-3.5 text-xs font-bold text-white/80 transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"><X className="h-3.5 w-3.5" />Done</button>
+              <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/16">
+                <div className="flex items-center gap-2 border-b border-white/8 p-2">
+                  <Volume2 className="ml-1 h-4 w-4 shrink-0 text-white/42" aria-hidden="true" />
+                  <div className="no-scrollbar flex min-w-0 gap-1.5 overflow-x-auto" role="radiogroup" aria-label="Audio language">
+                    {groupedPlayers.map((group) => {
+                      const selected = visiblePlayerGroup?.key === group.key;
+                      return (
+                        <button key={group.key} type="button" role="radio" aria-checked={selected} aria-label={`Audio: ${group.label}`} title={group.label} onClick={() => handleChooseAudioLanguage(group.key)} className={clsx("player-language-tab inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70", selected ? "border-white/30 bg-white text-black" : "border-white/10 bg-white/[0.04] text-white/65 hover:bg-white/10 hover:text-white")}>
+                          <span className="text-[15px] leading-none" aria-hidden="true">{group.flags.join(" ") || "●"}</span>
+                          <span className="max-w-24 truncate text-[10px] font-black uppercase tracking-[0.08em]">{group.label}</span>
                         </button>
-                        {isOpen ? (
-                          <div className="mt-1 space-y-1 pl-2">
-                            {group.players.map((player) => {
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 border-b border-white/8 p-2">
+                  <Captions className="ml-1 h-4 w-4 shrink-0 text-white/42" aria-hidden="true" />
+                  <div className="no-scrollbar flex min-w-0 gap-1.5 overflow-x-auto" role="radiogroup" aria-label="Subtitle language">
+                    <button type="button" role="radio" aria-checked={selectedSubtitleLanguage === "off" || availableSubtitleOptions.length === 0} aria-label="Subtitles off" title="Subtitles off" onClick={() => handleSubtitleSelection(null)} className={clsx("inline-flex min-h-9 shrink-0 items-center rounded-full border px-3 text-[10px] font-black uppercase tracking-[0.08em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70", selectedSubtitleLanguage === "off" || availableSubtitleOptions.length === 0 ? "border-white/30 bg-white text-black" : "border-white/10 bg-white/[0.04] text-white/65 hover:bg-white/10")}>
+                      Off
+                    </button>
+                    {availableSubtitleOptions.map((option) => {
+                      const selected = selectedSubtitleOption?.id === option.id && selectedSubtitleLanguage !== "off";
+                      const flags = subtitleLanguageFlags(option.languageKey);
+                      return (
+                        <button key={option.id} type="button" role="radio" aria-checked={selected} aria-label={`Subtitles: ${option.label}, ${option.sourceLabel}`} title={`${option.label} · ${option.sourceLabel}`} onClick={() => handleSubtitleSelection(option.id)} className={clsx("inline-flex min-h-9 max-w-40 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70", selected ? "border-white/30 bg-white text-black" : "border-white/10 bg-white/[0.04] text-white/65 hover:bg-white/10")}>
+                          <span className="shrink-0 text-[15px] leading-none" aria-hidden="true">{flags.join(" ") || "CC"}</span>
+                          <span className="min-w-0">
+                            <span className="block truncate text-[10px] font-black uppercase tracking-[0.06em]">{option.label}</span>
+                            {option.sourceLabel.toLowerCase() !== option.label.toLowerCase() ? <span className={clsx("block truncate text-[8px] leading-none", selected ? "text-black/48" : "text-white/32")}>{option.sourceLabel}</span> : null}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {availableSubtitleOptions.length === 0 ? <p className="border-b border-white/8 px-3 py-2 text-[10px] text-white/38">No compatible subtitles available.</p> : null}
+                {subtitleError ? <p className="border-b border-amber-200/12 bg-amber-300/8 px-3 py-2 text-[10px] leading-4 text-amber-100" role="alert">{subtitleError} Video playback is unaffected.</p> : null}
+                <div className="p-1.5" role="radiogroup" aria-label="Player source">
+                  <div className="space-y-0.5">
+                    {visiblePlayerGroup?.players.map((player) => {
                               const active = player.alias === activePlayer.alias;
                               const status = playerStatuses[player.alias]?.status ?? player.resolutionStatus ?? "unresolved";
+                              const streamType = player.streamType ?? inferStreamType(player.streamUrl ?? player.embedUrl);
+                              const quality = playerQualityLabel(player);
                               return (
-                                <button key={player.alias} type="button" onClick={() => handleChoosePlayer(player)} className={clsx("glass-settings-item w-full text-left", active && "bg-white/15")}>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-medium text-white/80">{player.label}</div>
-                                    <div className="text-xs text-white/40">{player.provider}</div>
+                                <button key={player.alias} type="button" role="radio" aria-checked={active} onClick={() => handleChoosePlayer(player)} className={clsx("flex min-h-11 w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left transition hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70", active && "bg-white/[0.12] ring-1 ring-inset ring-white/16")}>
+                                  <span className={clsx("h-1.5 w-1.5 shrink-0 rounded-full", status === "failed" ? "bg-red-400" : status === "resolving" ? "animate-pulse bg-amber-300" : status === "resolved" ? "bg-emerald-300" : "bg-white/25")} aria-hidden="true" />
+                                  <div className="min-w-0 flex-1 leading-tight">
+                                    <div className="truncate text-xs font-bold text-white/88">{player.label}</div>
+                                    <div className="mt-0.5 truncate text-[9px] uppercase tracking-[0.04em] text-white/36">{[player.provider, quality, streamType !== "unknown" ? streamType.toUpperCase() : null, active ? "Playing" : null].filter(Boolean).join(" · ")}</div>
                                   </div>
-                                  {status === "resolving" ? <LoaderCircle className="h-4 w-4 animate-spin text-white/40" /> : status === "resolved" ? <div className="h-2 w-2 rounded-full bg-emerald-400" /> : status === "failed" ? <div className="h-2 w-2 rounded-full bg-red-400" /> : null}
+                                  {status === "resolving" ? <span className="flex shrink-0 items-center gap-1 text-[9px] font-bold text-white/55"><LoaderCircle className="h-3 w-3 animate-spin" />Checking</span> : status === "resolved" ? <span className="shrink-0 text-[9px] font-bold text-emerald-300">Ready</span> : status === "failed" ? <span className="shrink-0 text-[9px] font-bold text-red-300">Unavailable</span> : <span className="shrink-0 text-[9px] text-white/36">Unchecked</span>}
                                 </button>
                               );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                    })}
+                  </div>
                 </div>
                 {playbackFailures.length > 0 ? (
                   <div className="border-t border-white/10 px-4 py-3">

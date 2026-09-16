@@ -763,6 +763,35 @@ export const getReachablePrivateV2Node = internalQuery({
   },
 });
 
+/** Resolve a human-friendly private-node name without exposing any credentials. */
+export const resolvePrivateV2NodeNetworkName = internalQuery({
+  args: { networkName: v.string() },
+  handler: async (ctx, args) => {
+    const claim = await ctx.db
+      .query("nodeNetworkNames")
+      .withIndex("by_network_name", (q) => q.eq("networkName", args.networkName))
+      .unique();
+    if (!claim) return null;
+    const registration = await ctx.db
+      .query("nodeRegistrations")
+      .withIndex("by_node_id", (q) => q.eq("nodeId", claim.nodeId))
+      .unique();
+    if (!registration || ["disabled", "quarantined"].includes(registration.status) || !registration.connectionCode) return null;
+    const [heartbeat, identity] = await Promise.all([
+      ctx.db.query("nodeHeartbeatsV2").withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId)).unique(),
+      ctx.db.query("nodeIdentities").withIndex("by_node_id", (q) => q.eq("nodeId", registration.nodeId)).unique(),
+    ]);
+    if (!identity) return null;
+    return {
+      nodeId: registration.nodeId,
+      connectionCode: registration.connectionCode,
+      networkName: claim.networkName,
+      online: Boolean(heartbeat && heartbeat.expiresAt > Date.now()),
+      identity: { x25519PublicKey: identity.x25519PublicKey },
+    };
+  },
+});
+
 export const listActiveNodes = internalQuery({
   args: relaySelectRequestValidator,
   handler: async (ctx, args) => {

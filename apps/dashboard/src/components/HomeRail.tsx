@@ -16,8 +16,11 @@ export function HomeRail({ rail, onOpenLocal, onImportRemote, layout = "rail" }:
   const scrollBy = (direction: -1 | 1) => {
     const node = scrollerRef.current;
     if (!node) return;
-    const televisionLayout = document.documentElement.classList.contains("tv-mode");
-    node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: televisionLayout ? "auto" : "smooth" });
+    // Normal homepage rail only. The dedicated TV surface (TvHomePage)
+    // owns its own rails with instant D-pad scrolling, so this component
+    // must not read the global tv-mode flag — that coupling leaked TV
+    // behavior into the desktop UI.
+    node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: "smooth" });
   };
 
   return (

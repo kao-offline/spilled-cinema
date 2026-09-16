@@ -16,7 +16,7 @@ import type {
   ExploreSectionKey,
 } from "../lib/types";
 import type { IntegrationId } from "../lib/integrations";
-import { showToast } from "./ToastHost";
+import { showToast } from "../lib/toast";
 
 type ExploreViewProps = {
   query: string;

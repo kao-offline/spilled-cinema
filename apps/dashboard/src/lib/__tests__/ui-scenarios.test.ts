@@ -27,9 +27,9 @@ describe("responsive UI scenario matrix", () => {
     { name: "phone", viewportWidth: 390, memory: 4, economy: true, heroSize: "w780" },
     { name: "desktop", viewportWidth: 1366, memory: 8, economy: false, heroSize: "w1280" },
     { name: "1080p display with TV mode off", viewportWidth: 1920, memory: 8, tvMode: false, economy: false, heroSize: "w1280" },
-    { name: "1080p display with TV mode on", viewportWidth: 1920, memory: 8, tvMode: true, economy: true, heroSize: "w780" },
+    { name: "1080p display with TV mode on", viewportWidth: 1920, memory: 8, tvMode: true, economy: false, heroSize: "w1280" },
     { name: "4K display with TV mode off", viewportWidth: 3840, memory: 8, tvMode: false, economy: false, heroSize: "w1280" },
-    { name: "4K display with TV mode on", viewportWidth: 3840, memory: 8, tvMode: true, economy: true, heroSize: "w780" },
+    { name: "4K display with TV mode on", viewportWidth: 3840, memory: 8, tvMode: true, economy: false, heroSize: "w1280" },
     { name: "data saver desktop", viewportWidth: 1366, memory: 8, saveData: true, economy: true, heroSize: "w780" },
   ])("selects the expected artwork tier for $name", ({ viewportWidth, memory, saveData, tvMode, economy, heroSize }) => {
     const scenario = { viewportWidth, deviceMemoryGb: memory, saveData, tvMode };

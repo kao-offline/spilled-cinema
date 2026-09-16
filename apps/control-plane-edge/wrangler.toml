@@ -1,0 +1,6 @@
+name = "spilled-control-plane"
+main = "src/index.ts"
+compatibility_date = "2026-09-11"
+
+[vars]
+UPSTREAM_BASE = "https://cheerful-lynx-4.convex.site"

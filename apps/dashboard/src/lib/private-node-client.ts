@@ -1,4 +1,16 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import { normalizeNodeConnectionCode, parsePrivateNodeLoginName } from "../../../../packages/node-protocol/src";
+import {
+  requestPrivateGateway,
+  resolvePrivateGatewayCandidate,
+  resolvePrivateGatewayCandidateByNetworkName,
+  type V2Candidate,
+} from "./v2-gateway-client";
+import { adminCapabilitiesRpc, adminLoginRpc, adminStatusRpc, adminWatcherCreateRpc, type AdminGatewayRpc } from "./private-node-admin-rpc";
+
+async function requestAdminGateway(candidate: V2Candidate, rpc: AdminGatewayRpc) {
+  return await requestPrivateGateway(candidate, rpc.capability, rpc.action, rpc.method, rpc.params);
+}
 
 export type PrivateNodeAccount = {
   accountId: string;
@@ -17,7 +29,11 @@ export type PrivateNodeAccount = {
 
 export type PrivateNodeConnection = {
   nodeUrl: string;
+  nodeId?: string | null;
+  connectionCode?: string | null;
+  networkName?: string | null;
   token: string | null;
+  refreshToken: string | null;
   accountId: string | null;
   profileId: string | null;
   accountName: string | null;
@@ -26,6 +42,8 @@ export type PrivateNodeConnection = {
 
 export type AdminNodeConnection = {
   nodeUrl: string;
+  nodeId?: string | null;
+  connectionCode?: string | null;
   token: string | null;
   adminId: string | null;
   adminName: string | null;
@@ -67,7 +85,10 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
   if (typeof window === "undefined") {
     return {
       nodeUrl: "",
+      nodeId: null,
+      connectionCode: null,
       token: null,
+      refreshToken: null,
       accountId: null,
       profileId: null,
       accountName: null,
@@ -78,7 +99,11 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
     const parsed = JSON.parse(window.localStorage.getItem(PRIVATE_NODE_KEY) || "{}") as Partial<PrivateNodeConnection>;
     return {
       nodeUrl: typeof parsed.nodeUrl === "string" ? parsed.nodeUrl : "",
+      nodeId: typeof parsed.nodeId === "string" ? parsed.nodeId : null,
+      connectionCode: typeof parsed.connectionCode === "string" ? parsed.connectionCode : null,
+      networkName: typeof parsed.networkName === "string" ? parsed.networkName : null,
       token: typeof parsed.token === "string" ? parsed.token : null,
+      refreshToken: typeof parsed.refreshToken === "string" ? parsed.refreshToken : null,
       accountId: typeof parsed.accountId === "string" ? parsed.accountId : null,
       profileId: typeof parsed.profileId === "string" ? parsed.profileId : null,
       accountName: typeof parsed.accountName === "string" ? parsed.accountName : null,
@@ -87,7 +112,10 @@ export function readPrivateNodeConnection(): PrivateNodeConnection {
   } catch {
     return {
       nodeUrl: "",
+      nodeId: null,
+      connectionCode: null,
       token: null,
+      refreshToken: null,
       accountId: null,
       profileId: null,
       accountName: null,
@@ -101,13 +129,17 @@ export function writePrivateNodeConnection(connection: PrivateNodeConnection) {
     return connection;
   }
   window.localStorage.setItem(PRIVATE_NODE_KEY, JSON.stringify(connection));
+  window.dispatchEvent(new Event("spilled:private-connection"));
   return connection;
 }
 
 export function clearPrivateNodeConnection() {
   const next: PrivateNodeConnection = {
     nodeUrl: "",
+    nodeId: null,
+    connectionCode: null,
     token: null,
+    refreshToken: null,
     accountId: null,
     profileId: null,
     accountName: null,
@@ -115,8 +147,161 @@ export function clearPrivateNodeConnection() {
   };
   if (typeof window !== "undefined") {
     window.localStorage.removeItem(PRIVATE_NODE_KEY);
+    window.dispatchEvent(new Event("spilled:private-connection"));
   }
   return next;
+}
+
+export type ResolvedPrivateNode = V2Candidate & { connectionCode: string; networkName?: string; online: boolean };
+
+async function resolveSavedPrivateNode(connection: Pick<PrivateNodeConnection, "nodeId" | "connectionCode">) {
+  if (!connection.connectionCode) throw new Error("This saved connection is missing its connection code.");
+  const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode);
+  if (connection.nodeId && candidate.nodeId !== connection.nodeId) {
+    throw new Error("Connection code resolved to a different node identity.");
+  }
+  return candidate;
+}
+
+export async function connectPrivateNodeWithCode(value: string) {
+  const connectionCode = normalizeNodeConnectionCode(value);
+  const loginName = parsePrivateNodeLoginName(value);
+  if (!connectionCode && !loginName) {
+    throw new Error("Enter your username.servername login or the full recovery connection code.");
+  }
+  const candidate = connectionCode
+    ? await resolvePrivateGatewayCandidate(connectionCode)
+    : await resolvePrivateGatewayCandidateByNetworkName(loginName!.networkName);
+  return {
+    candidate,
+    loginName,
+    connection: {
+      nodeUrl: "",
+      nodeId: candidate.nodeId,
+      connectionCode: candidate.connectionCode ?? connectionCode,
+      networkName: candidate.networkName ?? loginName?.networkName ?? null,
+      token: null,
+      refreshToken: null,
+      accountId: null,
+      profileId: null,
+      accountName: null,
+      profileName: null,
+    } satisfies PrivateNodeConnection,
+  };
+}
+
+export async function fetchPrivateNodeStatusViaGateway(connection: PrivateNodeConnection, resolved?: ResolvedPrivateNode) {
+  const candidate = resolved ?? await resolveSavedPrivateNode(connection);
+  return await requestPrivateGateway(candidate, "library.read", "status", "node.status", {}) as Awaited<ReturnType<typeof fetchPrivateNodeStatus>>;
+}
+
+export async function fetchPrivateNodeAccountsViaGateway(connection: PrivateNodeConnection, resolved?: ResolvedPrivateNode) {
+  const candidate = resolved ?? await resolveSavedPrivateNode(connection);
+  const payload = await requestPrivateGateway(candidate, "library.read", "accounts", "auth.accounts", {}) as {
+    accounts: PrivateNodeAccount[];
+  };
+  return payload.accounts;
+}
+
+export async function loginWatcherViaGateway(input: {
+  connection: PrivateNodeConnection;
+  watcherId: string;
+  password: string;
+  profileId?: string | null;
+  candidate?: ResolvedPrivateNode;
+}) {
+  const candidate = input.candidate ?? await resolveSavedPrivateNode(input.connection);
+  return await requestPrivateGateway(candidate, "library.write", "password.login", "auth.watcher.password.login", {
+    watcherId: input.watcherId,
+    password: input.password,
+    profileId: input.profileId ?? undefined,
+  }) as Awaited<ReturnType<typeof loginWatcherNodePassword>>;
+}
+
+export async function loginPasskeyViaGateway(input: {
+  connection: PrivateNodeConnection;
+  accountId: string;
+  profileId?: string | null;
+  candidate?: ResolvedPrivateNode;
+}) {
+  const candidate = input.candidate ?? await resolveSavedPrivateNode(input.connection);
+  const origin = window.location.origin;
+  const optionsPayload = await requestPrivateGateway(candidate, "library.read", "passkey.options", "auth.passkey.options", {
+    accountId: input.accountId,
+    origin,
+    flow: "login",
+  }) as { options: unknown };
+  const response = await startAuthentication({ optionsJSON: optionsPayload.options as never });
+  return await requestPrivateGateway(candidate, "library.write", "passkey.verify", "auth.passkey.verify", {
+    accountId: input.accountId,
+    profileId: input.profileId ?? undefined,
+    origin,
+    flow: "login",
+    response,
+  }) as Awaited<ReturnType<typeof loginPrivateNodePasskey>>;
+}
+
+export async function fetchPrivateNodeStorageViaGateway(connection: PrivateNodeConnection) {
+  if (!connection.token) throw new Error("Sign in before loading private storage.");
+  const candidate = await resolveSavedPrivateNode(connection);
+  return await requestPrivateGateway(candidate, "library.read", "storage", "library.storage", {
+    accessToken: connection.token,
+  }) as PrivateNodeStorageSummary;
+}
+
+export async function selectPrivateNodeProfileViaGateway(connection: PrivateNodeConnection, profileId: string) {
+  if (!connection.token) throw new Error("Sign in before selecting a profile.");
+  const candidate = await resolveSavedPrivateNode(connection);
+  return await requestPrivateGateway(candidate, "library.write", "profile.select", "library.profile.select", {
+    accessToken: connection.token,
+    profileId,
+  }) as Awaited<ReturnType<typeof selectPrivateNodeProfile>>;
+}
+
+export async function logoutPrivateNode(connection: PrivateNodeConnection) {
+  if (!connection.token) return { ok: true };
+  if (connection.connectionCode) {
+    const candidate = await resolveSavedPrivateNode(connection);
+    return await requestPrivateGateway(candidate, "library.read", "logout", "auth.logout", {
+      accessToken: connection.token,
+    }) as { ok: boolean };
+  }
+  if (connection.nodeUrl) {
+    return await privateFetch<{ ok: boolean }>(connection.nodeUrl, "/api/node/auth/logout", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${connection.token}` },
+    });
+  }
+  return { ok: true };
+}
+
+let privateSessionRefresh: Promise<PrivateNodeConnection> | null = null;
+
+export async function refreshPrivateNodeSessionViaGateway(connection: PrivateNodeConnection) {
+  if (!connection.refreshToken) throw new Error("Your private-node session expired. Sign in again.");
+  if (privateSessionRefresh) return await privateSessionRefresh;
+  privateSessionRefresh = (async () => {
+    const candidate = await resolveSavedPrivateNode(connection);
+    const refreshed = await requestPrivateGateway(candidate, "library.read", "refresh", "auth.refresh", {
+      refreshToken: connection.refreshToken,
+    }) as {
+      token?: string;
+      accessToken: string;
+      refreshToken: string;
+      session: { profileId?: string | null };
+    };
+    return writePrivateNodeConnection({
+      ...connection,
+      token: refreshed.accessToken ?? refreshed.token ?? null,
+      refreshToken: refreshed.refreshToken,
+      profileId: refreshed.session.profileId ?? connection.profileId,
+    });
+  })();
+  try {
+    return await privateSessionRefresh;
+  } finally {
+    privateSessionRefresh = null;
+  }
 }
 
 export async function fetchPrivateNodeStatus(nodeUrl: string) {
@@ -125,6 +310,7 @@ export async function fetchPrivateNodeStatus(nodeUrl: string) {
     node?: {
       mode?: string;
       nodeId?: string;
+      connectionCode?: string;
       endpointUrl?: string | null;
       capabilities?: Record<string, { visibility?: string; requiresSession?: boolean }>;
     };
@@ -246,18 +432,20 @@ export async function fetchPrivateNodeAccounts(nodeUrl: string) {
 
 export function readAdminNodeConnection(): AdminNodeConnection {
   if (typeof window === "undefined") {
-    return { nodeUrl: "", token: null, adminId: null, adminName: null };
+    return { nodeUrl: "", nodeId: null, connectionCode: null, token: null, adminId: null, adminName: null };
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(ADMIN_NODE_KEY) || "{}") as Partial<AdminNodeConnection>;
     return {
       nodeUrl: typeof parsed.nodeUrl === "string" ? parsed.nodeUrl : "",
+      nodeId: typeof parsed.nodeId === "string" ? parsed.nodeId : null,
+      connectionCode: typeof parsed.connectionCode === "string" ? parsed.connectionCode : null,
       token: typeof parsed.token === "string" ? parsed.token : null,
       adminId: typeof parsed.adminId === "string" ? parsed.adminId : null,
       adminName: typeof parsed.adminName === "string" ? parsed.adminName : null,
     };
   } catch {
-    return { nodeUrl: "", token: null, adminId: null, adminName: null };
+    return { nodeUrl: "", nodeId: null, connectionCode: null, token: null, adminId: null, adminName: null };
   }
 }
 
@@ -269,11 +457,44 @@ export function writeAdminNodeConnection(connection: AdminNodeConnection) {
 }
 
 export function clearAdminNodeConnection() {
-  const next = { nodeUrl: "", token: null, adminId: null, adminName: null };
+  const next: AdminNodeConnection = { nodeUrl: "", nodeId: null, connectionCode: null, token: null, adminId: null, adminName: null };
   if (typeof window !== "undefined") {
     window.localStorage.removeItem(ADMIN_NODE_KEY);
   }
   return next;
+}
+
+async function resolveSavedAdminNode(connection: Pick<AdminNodeConnection, "nodeId" | "connectionCode">) {
+  if (!connection.connectionCode) throw new Error("Enter the private node connection code.");
+  const candidate = await resolvePrivateGatewayCandidate(connection.connectionCode);
+  if (connection.nodeId && candidate.nodeId !== connection.nodeId) {
+    throw new Error("Connection code resolved to a different node identity.");
+  }
+  return candidate;
+}
+
+export async function loginAdminViaGateway(input: { connection: AdminNodeConnection; adminId: string; password: string }) {
+  const candidate = await resolveSavedAdminNode(input.connection);
+  const result = await requestAdminGateway(candidate, adminLoginRpc(input.adminId, input.password)) as Awaited<ReturnType<typeof loginAdminNodePassword>>;
+  return { ...result, nodeId: candidate.nodeId, connectionCode: candidate.connectionCode };
+}
+
+export async function fetchAdminNodeStatusViaGateway(connection: AdminNodeConnection) {
+  if (!connection.token) throw new Error("Admin sign-in is required.");
+  const candidate = await resolveSavedAdminNode(connection);
+  return await requestAdminGateway(candidate, adminStatusRpc(connection.token)) as Awaited<ReturnType<typeof fetchAdminNodeStatus>>;
+}
+
+export async function saveAdminNodeCapabilitiesViaGateway(connection: AdminNodeConnection, capabilities: Record<string, boolean>) {
+  if (!connection.token) throw new Error("Admin sign-in is required.");
+  const candidate = await resolveSavedAdminNode(connection);
+  return await requestAdminGateway(candidate, adminCapabilitiesRpc(connection.token, capabilities)) as Awaited<ReturnType<typeof saveAdminNodeCapabilities>>;
+}
+
+export async function createAdminWatcherViaGateway(connection: AdminNodeConnection, input: Omit<Parameters<typeof createAdminWatcher>[0], "nodeUrl" | "token">) {
+  if (!connection.token) throw new Error("Admin sign-in is required.");
+  const candidate = await resolveSavedAdminNode(connection);
+  return await requestAdminGateway(candidate, adminWatcherCreateRpc(connection.token, input)) as Awaited<ReturnType<typeof createAdminWatcher>>;
 }
 
 export async function loginAdminNodePassword(input: { nodeUrl: string; adminId: string; password: string }) {
@@ -338,6 +559,7 @@ export async function loginWatcherNodePassword(input: {
 }) {
   return privateFetch<{
     token: string;
+    refreshToken: string;
     account: { accountId: string; watcherId?: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -368,6 +590,7 @@ export async function enrollPrivateNodePasskey(input: {
   const response = await startRegistration({ optionsJSON: optionsPayload.options as never });
   return privateFetch<{
     token: string;
+    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -397,6 +620,7 @@ export async function loginPrivateNodePasskey(input: {
   const response = await startAuthentication({ optionsJSON: optionsPayload.options as never });
   return privateFetch<{
     token: string;
+    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };
@@ -427,6 +651,7 @@ export async function selectPrivateNodeProfile(input: {
 }) {
   return privateFetch<{
     token: string;
+    refreshToken: string;
     account: { accountId: string; displayName: string };
     profiles: Array<{ profileId: string; displayName: string }>;
     session: { profileId?: string | null };

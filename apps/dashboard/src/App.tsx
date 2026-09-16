@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { scheduleEpisodeRefresh } from "./lib/episode-refresh";
 import { RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
@@ -25,7 +26,8 @@ import { ConfirmDeleteModal } from "./components/ConfirmDeleteModal";
 import { ConfirmRemoveShowModal } from "./components/ConfirmRemoveShowModal";
 import { WelcomeModal } from "./components/WelcomeModal";
 import { ToastHost } from "./components/ToastHost";
-import { TvModeToggle } from "./components/TvModeToggle";
+import { showToast } from "./lib/toast";
+import { queuePrivatePlaybackProgress, startPrivatePlaybackSync } from "./lib/private-playback-sync";
 import { ImportActivityPopup, type ImportActivity } from "./components/ImportActivityPopup";
 import { RemoteImportPreview } from "./components/RemoteImportPreview";
 import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
@@ -57,6 +59,7 @@ import {
   importLibraryState,
   mergeLibraryStates,
   normalizeLibraryStateCandidate,
+  readLibraryUpdatedAt,
   updateShowCast,
   mergeImportedShowIntoState,
 } from "./lib/storage";
@@ -108,6 +111,7 @@ import { formatEpisodeTitle } from "./lib/episode-title";
 import { scoreSearchCandidate } from "./lib/search-ranking";
 import { prioritizeImportSearchResults, resolveImportInput } from "./lib/import-search";
 import { buildRuntimeUrl } from "./lib/local-api";
+import { readServerLibrarySnapshot, writeServerLibrarySnapshot } from "./lib/server-library-sync";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
 import { resetLocalNodeProbeCache } from "./lib/local-api";
 import { balancedBackgroundImage } from "./lib/image-resolution";
@@ -144,8 +148,10 @@ import {
 import { readPrivateNodeConnection, registerPrivateNodeDownload } from "./lib/private-node-client";
 import { buildLibraryPath, buildLibraryShowPath, buildLibraryWatchPath, parseLibraryPath } from "./lib/library-routes";
 import { scanProviderFeeds } from "./lib/library-watcher";
+import { startPhoneRemoteClient } from "./lib/remote-input";
 import { applyTvMode, readTvMode, writeTvMode } from "./lib/tv-mode";
 import { createImportGate, findImportedShowBySource, importSourceKey } from "./lib/import-guard";
+import { countAddedEpisodeAudioOptions } from "./lib/episode-audio";
 
 type ViewTransitionDocument = Document & {
   startViewTransition?: (callback: () => void) => { finished: Promise<void> };
@@ -546,6 +552,8 @@ function AppContent() {
   const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
   const libraryWatcherActiveRef = useRef(false);
   const activeWatchEpisodeIdRef = useRef(activeWatchEpisodeId);
+  const serverLibrarySyncReadyRef = useRef(false);
+  const lastServerLibraryUpdatedAtRef = useRef(0);
   const deferredExploreQuery = useDeferredValue(discoveryState.exploreQuery);
 
   function pushRoute(path: string) {
@@ -556,6 +564,10 @@ function AppContent() {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // Phone-as-remote: replays paired phone commands as local input. Idle
+  // until a pairing token exists; safe to start once per app lifetime.
+  useEffect(() => startPhoneRemoteClient(), []);
 
   useEffect(() => {
     if (!vaultSnapshotReady || metadataEnrichmentActiveRef.current) return;
@@ -686,12 +698,20 @@ function AppContent() {
   useEffect(() => {
     const refreshPrivateNodeConnection = () => setPrivateNodeConnection(readPrivateNodeConnection());
     window.addEventListener("storage", refreshPrivateNodeConnection);
+    window.addEventListener("spilled:private-connection", refreshPrivateNodeConnection);
     window.addEventListener("focus", refreshPrivateNodeConnection);
     return () => {
       window.removeEventListener("storage", refreshPrivateNodeConnection);
+      window.removeEventListener("spilled:private-connection", refreshPrivateNodeConnection);
       window.removeEventListener("focus", refreshPrivateNodeConnection);
     };
   }, []);
+
+  useEffect(() => startPrivatePlaybackSync(privateNodeConnection, {
+    getState: () => stateRef.current,
+    onState: (next) => { writeLibraryState(next); stateRef.current = next; setState(next); },
+    onError: (message) => showToast(message, "info"),
+  }), [privateNodeConnection.nodeUrl, privateNodeConnection.token, privateNodeConnection.accountId, privateNodeConnection.profileId]);
 
   useEffect(() => {
     let canceled = false;
@@ -729,6 +749,7 @@ function AppContent() {
       return { skipped: true, checkedFeeds: 0, refreshedTitles: 0, changedTitles: [] as string[], failures: [] as string[] };
     }
     libraryWatcherActiveRef.current = true;
+    setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
       const result = await scanProviderFeeds(
         stateRef.current,
@@ -763,6 +784,13 @@ function AppContent() {
         });
       }
 
+      setNewEpisodeCheckState({
+        checking: false,
+        error: result.failures.length > 0,
+        message: result.failures.length > 0
+          ? "Some sources could not be checked. Your saved episodes are still available."
+          : result.changedTitles.length > 0 ? `Updated ${result.changedTitles.length} titles.` : "Your saved series are up to date.",
+      });
       return {
         skipped: false,
         checkedFeeds: result.checkedFeeds,
@@ -770,12 +798,16 @@ function AppContent() {
         changedTitles: result.changedTitles,
         failures: result.failures,
       };
+    } catch (error) {
+      setNewEpisodeCheckState({ checking: false, message: "Updates could not be checked. Check your connection and retry.", error: true });
+      throw error;
     } finally {
       libraryWatcherActiveRef.current = false;
     }
   };
 
   const handleCheckNewEpisodes = async (forSlug?: string) => {
+    if (libraryWatcherActiveRef.current) return;
     setNewEpisodeCheckState({ checking: true, message: null, error: false });
     try {
       const result = await performLibraryWatcherScan(providerModules);
@@ -797,7 +829,7 @@ function AppContent() {
       }
       const updated = result.changedTitles.length;
       if (updated > 0) {
-        setNewEpisodeCheckState({ checking: false, message: `Updated ${updated} ${updated === 1 ? "title" : "titles"} with new episodes.`, error: false });
+        setNewEpisodeCheckState({ checking: false, message: `Updated ${updated} ${updated === 1 ? "title" : "titles"} with new episodes or playback options.`, error: false });
       } else if (result.refreshedTitles > 0) {
         setNewEpisodeCheckState({ checking: false, message: "Checked — no new episodes, your library is up to date.", error: false });
       } else {
@@ -839,16 +871,26 @@ function AppContent() {
         .map((episode) => episode.episodeCode?.trim().toLowerCase())
         .filter((code): code is string => Boolean(code) && !existingCodes.has(code!));
       const newCount = newCodes.length;
+      const nextState = mergeLibraryStates(stateRef.current, mergeImportedShowIntoState(stateRef.current, imported, show.slug));
+      const refreshedShow = nextState.shows.find((entry) => entry.slug === show.slug);
+      const addedAudio = countAddedEpisodeAudioOptions(show.episodes, refreshedShow?.episodes ?? show.episodes);
 
-      if (newCount > 0) {
-        const nextState = mergeLibraryStates(stateRef.current, mergeImportedShowIntoState(stateRef.current, imported, show.slug));
-        writeLibraryState(nextState);
-        stateRef.current = nextState;
-        setState(nextState);
-        setNewEpisodeCheckState({ checking: false, message: `Found ${newCount} new ${newCount === 1 ? "episode" : "episodes"} for this show.`, error: false });
-      } else {
-        setNewEpisodeCheckState({ checking: false, message: "No new episodes found for this show.", error: false });
-      }
+      writeLibraryState(nextState);
+      stateRef.current = nextState;
+      setState(nextState);
+
+      const additions = [
+        newCount > 0 ? `${newCount} new ${newCount === 1 ? "episode" : "episodes"}` : null,
+        addedAudio.subtitles > 0 ? `subtitles for ${addedAudio.subtitles} ${addedAudio.subtitles === 1 ? "episode" : "episodes"}` : null,
+        addedAudio.dubbing > 0 ? `dubbing for ${addedAudio.dubbing} ${addedAudio.dubbing === 1 ? "episode" : "episodes"}` : null,
+      ].filter((entry): entry is string => Boolean(entry));
+      setNewEpisodeCheckState({
+        checking: false,
+        message: additions.length > 0
+          ? `Refresh found ${additions.join(", ")}.`
+          : "Up to date — no new episodes, subtitles, or dubbing found.",
+        error: false,
+      });
     } catch (error) {
       setNewEpisodeCheckState({ checking: false, message: `Check failed: ${error instanceof Error ? error.message : String(error)}`, error: true });
     }
@@ -856,47 +898,10 @@ function AppContent() {
 
   useEffect(() => {
     if (providerModules.length === 0) return;
-    let canceled = false;
-    let timer: number | null = null;
-
-    const poll = async () => {
-      if (canceled) return;
-      let retrySoon = false;
-      try {
-        const result = await performLibraryWatcherScan(providerModules);
-        if (canceled) return;
-        retrySoon = result.failures.length > 0 && result.checkedFeeds === 0;
-      } catch {
-        retrySoon = true;
-      } finally {
-        if (!canceled) {
-          const delay = retrySoon
-            ? 15_000
-            : document.visibilityState === "visible"
-              ? 2 * 60_000
-              : 5 * 60_000;
-          timer = window.setTimeout(() => void poll(), delay);
-        }
-      }
-    };
-
-    const runNow = () => {
-      if (canceled || document.visibilityState === "hidden") return;
-      if (timer !== null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => void poll(), 0);
-    };
-
-    runNow();
-    window.addEventListener("focus", runNow);
-    window.addEventListener("online", runNow);
-    document.addEventListener("visibilitychange", runNow);
-    return () => {
-      canceled = true;
-      if (timer !== null) window.clearTimeout(timer);
-      window.removeEventListener("focus", runNow);
-      window.removeEventListener("online", runNow);
-      document.removeEventListener("visibilitychange", runNow);
-    };
+    return scheduleEpisodeRefresh(async () => {
+      const result = await performLibraryWatcherScan(providerModules);
+      return result.failures.length === 0;
+    });
   }, [providerModules]);
 
   async function refreshVaultState() {
@@ -1104,6 +1109,211 @@ function AppContent() {
   useEffect(() => {
     setState(readLibraryState());
   }, []);
+
+  // Automatic library backup on the installed Spilled Server: no user input.
+  // localStorage is per-origin, so each domain (localhost, hosted, Electron)
+  // silently converges through one atomic library-state.json on loopback.
+  // Newest timestamp wins; legacy untimestamped copies merge once instead of
+  // being discarded. Unreachable server = hosted-only user, sync stays off.
+  useEffect(() => {
+    let canceled = false;
+
+    const applyServerState = (
+      serverState: LibraryState,
+      serverUpdatedAt: number,
+      languages: Record<string, string>,
+      queue: Record<string, unknown>,
+    ) => {
+      const currentState = stateRef.current;
+      const nextState = {
+        ...serverState,
+        query: currentState.query,
+        selectedEpisodeId: currentState.selectedEpisodeId,
+        settings: {
+          ...serverState.settings,
+          connectedFolderName: currentState.settings.connectedFolderName,
+        },
+      };
+      writeLibraryState(nextState, serverUpdatedAt);
+      stateRef.current = nextState;
+      setState(nextState);
+      setDownloadedEpisodeLanguageById(new Map(Object.entries(replaceDownloadedLanguageMap(languages))));
+      setDownloadQueue(replaceDownloadQueue(queue));
+      lastServerLibraryUpdatedAtRef.current = serverUpdatedAt;
+    };
+
+    void (async () => {
+      try {
+        const { reachable, snapshot } = await readServerLibrarySnapshot();
+        if (canceled || !reachable) {
+          return;
+        }
+        if (canceled) {
+          return;
+        }
+
+        const localState = stateRef.current;
+        const localHasShows = localState.shows.length > 0;
+        let localUpdatedAt = readLibraryUpdatedAt();
+        if (localHasShows && localUpdatedAt === 0) {
+          // Legacy pre-timestamp library: stamp it now so future startups
+          // can compare instead of merging every time.
+          localUpdatedAt = Date.now();
+          writeLibraryState(localState, localUpdatedAt);
+        }
+        const localLanguages = readDownloadedLanguageMap();
+        const localQueue = readDownloadQueue();
+
+        if (!snapshot) {
+          if (localHasShows) {
+            const stamp = localUpdatedAt || Date.now();
+            const ok = await writeServerLibrarySnapshot({
+              version: 1,
+              updatedAt: stamp,
+              libraryState: localState,
+              downloadedLanguages: localLanguages,
+              downloadQueue: localQueue,
+            });
+            if (ok) {
+              lastServerLibraryUpdatedAtRef.current = stamp;
+            }
+          } else {
+            lastServerLibraryUpdatedAtRef.current = 0;
+          }
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        const serverState = normalizeLibraryStateCandidate(snapshot.libraryState as Partial<LibraryState>);
+        const serverHasShows = serverState.shows.length > 0;
+        const serverUpdatedAt = snapshot.updatedAt;
+        const serverLanguages = snapshot.downloadedLanguages ?? {};
+        const serverQueue = snapshot.downloadQueue ?? {};
+
+        if (!localHasShows && serverHasShows) {
+          if (!canceled) {
+            applyServerState(serverState, serverUpdatedAt || Date.now(), serverLanguages, serverQueue);
+          }
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        if (localHasShows && !serverHasShows) {
+          const stamp = localUpdatedAt || Date.now();
+          const ok = await writeServerLibrarySnapshot({
+            version: 1,
+            updatedAt: stamp,
+            libraryState: localState,
+            downloadedLanguages: localLanguages,
+            downloadQueue: localQueue,
+          });
+          if (ok) {
+            lastServerLibraryUpdatedAtRef.current = stamp;
+          }
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        if (!localHasShows && !serverHasShows) {
+          lastServerLibraryUpdatedAtRef.current = Math.max(localUpdatedAt, serverUpdatedAt);
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        const SKEW_MS = 1000;
+        const localIsLegacy = localUpdatedAt === 0;
+        const serverIsLegacy = serverUpdatedAt === 0;
+        if (localIsLegacy || serverIsLegacy) {
+          // One side predates timestamps: union both libraries once so
+          // neither domain's old data is discarded.
+          const merged = localIsLegacy && !serverIsLegacy
+            ? mergeLibraryStates(serverState, localState)
+            : mergeLibraryStates(localState, serverState);
+          const stamp = Date.now();
+          const mergedLanguages = { ...serverLanguages, ...localLanguages };
+          const mergedQueue = { ...(serverQueue as PersistentDownloadQueue), ...(localQueue as PersistentDownloadQueue) };
+          if (!canceled) {
+            const nextState = {
+              ...merged,
+              query: localState.query,
+              selectedEpisodeId: localState.selectedEpisodeId,
+              settings: {
+                ...merged.settings,
+                connectedFolderName: localState.settings.connectedFolderName,
+              },
+            };
+            writeLibraryState(nextState, stamp);
+            stateRef.current = nextState;
+            setState(nextState);
+            setDownloadedEpisodeLanguageById(new Map(Object.entries(replaceDownloadedLanguageMap(mergedLanguages))));
+            setDownloadQueue(replaceDownloadQueue(mergedQueue));
+          }
+          const ok = await writeServerLibrarySnapshot({
+            version: 1,
+            updatedAt: stamp,
+            libraryState: merged,
+            downloadedLanguages: mergedLanguages,
+            downloadQueue: mergedQueue,
+          });
+          lastServerLibraryUpdatedAtRef.current = stamp;
+          void ok;
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        if (serverUpdatedAt > localUpdatedAt + SKEW_MS) {
+          if (!canceled) {
+            applyServerState(serverState, serverUpdatedAt, serverLanguages, serverQueue);
+          }
+        } else if (localUpdatedAt > serverUpdatedAt + SKEW_MS) {
+          const ok = await writeServerLibrarySnapshot({
+            version: 1,
+            updatedAt: localUpdatedAt,
+            libraryState: localState,
+            downloadedLanguages: localLanguages,
+            downloadQueue: localQueue,
+          });
+          if (ok) {
+            lastServerLibraryUpdatedAtRef.current = localUpdatedAt;
+          }
+        } else {
+          lastServerLibraryUpdatedAtRef.current = Math.max(localUpdatedAt, serverUpdatedAt);
+        }
+        serverLibrarySyncReadyRef.current = true;
+      } catch {
+        // Silent: library sync must never interrupt startup.
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  // Debounced push of local changes to the server after startup convergence.
+  useEffect(() => {
+    if (!serverLibrarySyncReadyRef.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const stamp = readLibraryUpdatedAt();
+      if (stamp <= lastServerLibraryUpdatedAtRef.current) {
+        return;
+      }
+      void writeServerLibrarySnapshot({
+        version: 1,
+        updatedAt: stamp,
+        libraryState: stateRef.current,
+        downloadedLanguages: Object.fromEntries(downloadedLanguageMapRef.current.entries()),
+        downloadQueue: downloadQueueRef.current as unknown as Record<string, unknown>,
+      }).then((ok) => {
+        if (ok) {
+          lastServerLibraryUpdatedAtRef.current = stamp;
+        }
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [state, downloadQueue, downloadedEpisodeLanguageById]);
 
   useEffect(() => {
     void refreshVaultState();
@@ -2760,6 +2970,20 @@ function AppContent() {
   }
 
   useEffect(() => {
+    const handleRemoteHome = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (event.key !== "Home" || target?.closest("input,textarea,select,[contenteditable='true']")) return;
+      event.preventDefault();
+      pushRoute("/");
+      setActiveView("home");
+      setActiveShowSlug(null);
+      setActiveWatchEpisodeId(null);
+    };
+    window.addEventListener("keydown", handleRemoteHome);
+    return () => window.removeEventListener("keydown", handleRemoteHome);
+  }, []);
+
+  useEffect(() => {
     const preferences = Object.fromEntries(Object.entries(providerFeedStates).map(([viewId, page]) => [viewId, {
       query: page.query,
       animeFilterMode: page.animeFilterMode,
@@ -3477,9 +3701,11 @@ function AppContent() {
     setState(nextState);
   }
 
-  function handlePlaybackProgress(episodeId: string, progress: { currentTime: number; duration: number }) {
+  function handlePlaybackProgress(episodeId: string, progress: { currentTime: number; duration: number; flush?: boolean }) {
     const nextState = updateEpisodePlaybackProgress(episodeId, progress);
+    stateRef.current = nextState;
     setState(nextState);
+    queuePrivatePlaybackProgress(nextState, episodeId, progress.flush);
   }
 
   function handleGoHomeFromPlayer() {
@@ -3495,11 +3721,17 @@ function AppContent() {
   }
 
   function handleEpisodeEnded(episodeId: string) {
-    setState(markEpisodeWatched(episodeId));
+    const next = markEpisodeWatched(episodeId);
+    stateRef.current = next;
+    setState(next);
+    queuePrivatePlaybackProgress(next, episodeId, true);
   }
 
   function handleSetEpisodeWatched(episodeId: string, watched: boolean) {
-    setState(setEpisodeWatched(episodeId, watched));
+    const next = setEpisodeWatched(episodeId, watched);
+    stateRef.current = next;
+    setState(next);
+    queuePrivatePlaybackProgress(next, episodeId, true);
   }
 
   function handleCloseWelcome() {
@@ -3600,6 +3832,7 @@ function AppContent() {
           setActiveShowSlug(null);
           setActiveWatchEpisodeId(null);
           }}
+          privateNodeConnection={privateNodeConnection}
           onOpenShow={handleOpenShow}
           onPlayShow={(show) => {
           const episode = show.episodes[show.episodes.length - 1];
@@ -3609,6 +3842,11 @@ function AppContent() {
             handleOpenShow(show.slug);
           }
           }}
+          onPlayEpisode={handleSelectEpisode}
+          onCheckNewEpisodes={() => {
+            void handleCheckNewEpisodes();
+          }}
+          newEpisodeCheckState={newEpisodeCheckState}
           onImportRemote={async (platform, slug, mediaType, context) => {
             await handleImport(platform, slug, mediaType, context);
           }}
@@ -3616,8 +3854,9 @@ function AppContent() {
             void handleEnsureHomepageTextArtwork(slug);
           }}
           importActivity={importActivity}
+          tvModeEnabled={tvMode}
+          onTvModeChange={handleTvModeChange}
         />
-        <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
         <ImportActivityPopup activity={importActivity} />
         <ToastHost />
         {welcomeOpen ? (
@@ -3907,11 +4146,11 @@ function AppContent() {
                             ? "cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35"
                             : "border-white/15 bg-white/[0.05] text-white/80 hover:border-white/30 hover:bg-white/10 hover:text-white",
                         )}
-                        aria-label="Check for new episodes"
-                        title="Scan svetserialu for episodes you don't have yet"
+                        aria-label="Refresh episodes, subtitles, and dubbing"
+                        title="Check for new episodes, subtitles, and dubbed audio"
                       >
                         <RefreshCw className={clsx("h-3.5 w-3.5", newEpisodeCheckState.checking && "animate-spin")} />
-                        {newEpisodeCheckState.checking ? "Checking…" : "Check for new episodes"}
+                        {newEpisodeCheckState.checking ? "Checking…" : "Refresh library"}
                       </button>
                     ) : null}
                     <div className="text-xs font-semibold text-white/32">{filteredShows.length} {filteredShows.length === 1 ? "title" : "titles"}</div>
@@ -4061,7 +4300,6 @@ function AppContent() {
         />
       ) : null}
 
-      {!isImmersivePage ? <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} /> : null}
       <ImportActivityPopup activity={importActivity} />
 
       {pendingRemoteImport && pendingRemotePlatform ? (

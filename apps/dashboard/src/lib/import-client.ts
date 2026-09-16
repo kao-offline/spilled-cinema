@@ -56,7 +56,24 @@ async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: numb
   }] : []);
 }
 
-export async function fetchEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
+const episodePreviewRequests = new Map<string, { expires: number; request: Promise<EpisodePreview[]> }>();
+
+export function fetchEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
+  const key = JSON.stringify([show.slug, show.externalIds, seasonNumber]);
+  const cached = episodePreviewRequests.get(key);
+  if (cached && cached.expires > Date.now()) return cached.request;
+  const entry = { expires: Infinity, request: loadEpisodePreviews(show, seasonNumber) };
+  episodePreviewRequests.set(key, entry);
+  void entry.request.then(() => { entry.expires = Date.now() + 5 * 60_000; }, () => { episodePreviewRequests.delete(key); });
+  if (episodePreviewRequests.size > 64) {
+    for (const [oldKey, old] of episodePreviewRequests) {
+      if (oldKey !== key && old.expires !== Infinity) { episodePreviewRequests.delete(oldKey); break; }
+    }
+  }
+  return entry.request;
+}
+
+async function loadEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
   const directFallback = fetchTvmazeEpisodePreviews(show, seasonNumber);
   if (import.meta.env.DEV || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) {
     return directFallback;
