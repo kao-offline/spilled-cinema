@@ -28,7 +28,6 @@ import { WelcomeModal } from "./components/WelcomeModal";
 import { ToastHost } from "./components/ToastHost";
 import { showToast } from "./lib/toast";
 import { queuePrivatePlaybackProgress, startPrivatePlaybackSync } from "./lib/private-playback-sync";
-import { TvModeToggle } from "./components/TvModeToggle";
 import { ImportActivityPopup, type ImportActivity } from "./components/ImportActivityPopup";
 import { RemoteImportPreview } from "./components/RemoteImportPreview";
 import { fetchHomepageTextArtworkForShow, fetchTitleMetadataForShow, HOMEPAGE_ARTWORK_VERSION, importProviderItem, refreshArtworkForShow, searchRemotes } from "./lib/import-client";
@@ -2757,6 +2756,20 @@ function AppContent() {
   }
 
   useEffect(() => {
+    const handleRemoteHome = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (event.key !== "Home" || target?.closest("input,textarea,select,[contenteditable='true']")) return;
+      event.preventDefault();
+      pushRoute("/");
+      setActiveView("home");
+      setActiveShowSlug(null);
+      setActiveWatchEpisodeId(null);
+    };
+    window.addEventListener("keydown", handleRemoteHome);
+    return () => window.removeEventListener("keydown", handleRemoteHome);
+  }, []);
+
+  useEffect(() => {
     const preferences = Object.fromEntries(Object.entries(providerFeedStates).map(([viewId, page]) => [viewId, {
       query: page.query,
       animeFilterMode: page.animeFilterMode,
@@ -3627,8 +3640,9 @@ function AppContent() {
             void handleEnsureHomepageTextArtwork(slug);
           }}
           importActivity={importActivity}
+          tvModeEnabled={tvMode}
+          onTvModeChange={handleTvModeChange}
         />
-        <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} />
         <ImportActivityPopup activity={importActivity} />
         <ToastHost />
         {welcomeOpen ? (
@@ -4072,7 +4086,6 @@ function AppContent() {
         />
       ) : null}
 
-      {!isImmersivePage ? <TvModeToggle enabled={tvMode} onChange={handleTvModeChange} /> : null}
       <ImportActivityPopup activity={importActivity} />
 
       {pendingRemoteImport && pendingRemotePlatform ? (

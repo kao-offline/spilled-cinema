@@ -917,6 +917,12 @@ export function UniversalVideoPlayer({
         toggleMute();
       } else if (event.key.toLowerCase() === "c") {
         toggleCaptions();
+      } else if (event.key === "AudioVolumeUp") {
+        event.preventDefault();
+        setPlayerVolume(clamp(volume + 0.1, 0, 1));
+      } else if (event.key === "AudioVolumeDown") {
+        event.preventDefault();
+        setPlayerVolume(clamp(volume - 0.1, 0, 1));
       }
     };
     window.addEventListener("keydown", onKeyDown);

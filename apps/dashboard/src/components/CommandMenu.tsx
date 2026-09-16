@@ -1,7 +1,9 @@
-import { Search, X } from "lucide-react";
+import { Gamepad2, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { CommandSearchResult } from "../lib/command-search";
 import { CommandResultRow } from "./CommandResultRow";
+import { RemoteBindingsModal } from "./RemoteBindingsModal";
+import { TvModeToggle } from "./TvModeToggle";
 
 type CommandMenuProps = {
   open: boolean;
@@ -14,6 +16,8 @@ type CommandMenuProps = {
   onPlay: (result: CommandSearchResult) => void;
   onAdd: (result: CommandSearchResult) => void;
   onMore: (result: CommandSearchResult) => void;
+  tvModeEnabled: boolean;
+  onTvModeChange: (enabled: boolean) => void;
 };
 
 export function CommandMenu({
@@ -27,8 +31,11 @@ export function CommandMenu({
   onPlay,
   onAdd,
   onMore,
+  tvModeEnabled,
+  onTvModeChange,
 }: CommandMenuProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   const firstResultId = results[0]?.id ?? null;
 
   useEffect(() => {
@@ -96,7 +103,7 @@ export function CommandMenu({
           </button>
         </div>
 
-        <div className="max-h-[min(540px,64vh)] overflow-y-auto p-2">
+        <div className="max-h-[min(500px,58vh)] overflow-y-auto p-2">
           {groupedResults.length > 0 ? (
             <div className="space-y-3">
               {groupedResults.map((group) => (
@@ -129,7 +136,25 @@ export function CommandMenu({
             </div>
           )}
         </div>
+
+        <footer className="flex flex-col gap-2 border-t border-white/[0.07] bg-black/18 p-2 sm:flex-row" aria-label="TV controls">
+          <TvModeToggle enabled={tvModeEnabled} onChange={onTvModeChange} />
+          <button
+            type="button"
+            onClick={() => setRemoteSetupOpen(true)}
+            className="group flex min-h-12 flex-1 items-center gap-3 rounded-2xl border border-white/8 bg-white/[.035] px-3 text-left text-white transition hover:border-orange-200/24 hover:bg-orange-200/[.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-100/60"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-orange-200/10 text-orange-100/68 transition group-hover:bg-orange-200/16 group-hover:text-orange-50">
+              <Gamepad2 className="h-4 w-4" />
+            </span>
+            <span>
+              <span className="block text-[10px] font-black uppercase tracking-[0.18em] text-white/88">Remote buttons</span>
+              <span className="block text-[9px] font-semibold text-white/36">Set up IR or keyboard binds</span>
+            </span>
+          </button>
+        </footer>
       </div>
+      <RemoteBindingsModal open={remoteSetupOpen} onClose={() => setRemoteSetupOpen(false)} />
     </div>
   );
 }

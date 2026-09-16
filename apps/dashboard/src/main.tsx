@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { SpatialNavigationController } from './components/SpatialNavigationController.tsx'
+import { RemoteInputController } from './components/RemoteInputController.tsx'
 
 if (window.spilledNative?.kind === "native") {
   document.documentElement.classList.add("native-shell");
@@ -22,8 +23,10 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <SpatialNavigationController>
-      <App />
-    </SpatialNavigationController>
+    <RemoteInputController>
+      <SpatialNavigationController>
+        <App />
+      </SpatialNavigationController>
+    </RemoteInputController>
   </StrictMode>,
 )

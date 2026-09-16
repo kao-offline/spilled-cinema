@@ -43,6 +43,8 @@ type CinematicHomePageProps = {
   onImportRemote: (platform: IntegrationId, slug: string, mediaType?: "movie" | "serial", context?: { title?: string; posterUrl?: string | null }) => Promise<unknown>;
   onEnsureHomepageTextArtwork: (slug: string) => void;
   importActivity?: ImportActivity | null;
+  tvModeEnabled: boolean;
+  onTvModeChange: (enabled: boolean) => void;
 };
 
 function normalizeRemoteResult(raw: RemoteCommandResult & {
@@ -100,6 +102,8 @@ export function CinematicHomePage({
   onImportRemote,
   onEnsureHomepageTextArtwork,
   importActivity,
+  tvModeEnabled,
+  onTvModeChange,
 }: CinematicHomePageProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const [mobileSearchActive, setMobileSearchActive] = useState(false);
@@ -486,6 +490,8 @@ export function CinematicHomePage({
           void handleAddResult(result);
         }}
         onMore={handleMoreResult}
+        tvModeEnabled={tvModeEnabled}
+        onTvModeChange={onTvModeChange}
       />
     </div>
   );

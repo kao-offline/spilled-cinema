@@ -74,6 +74,27 @@ focus.
 
 ## 3. Raspberry Pi + Argon case
 
+### One-command local-TV setup
+
+After this branch is merged into the repository's default branch, this command
+can be run from any directory on Raspberry Pi OS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash
+```
+
+It verifies Raspberry Pi hardware, installs `ir-keytable`, backs up `config.txt`
+before enabling GPIO 23, installs the Argon keymap and a boot service, and loads
+the map immediately when the receiver already exists. If it adds the overlay,
+reboot once. This direct mode makes the remote a Linux input device, so Chromium
+and the dashboard receive the buttons without the Python network relay.
+
+The remote's arrows, OK, Home, Back, volume buttons, and menu/captions button
+receive sensible defaults. Open the dashboard Search menu and choose **Remote
+buttons** to capture different buttons or correct a revision-specific layout.
+
+### Manual/development setup
+
 Argon40 documents the case IR receiver on BCM GPIO 23 (physical pin 16). See
 the [Argon40 case hardware reference](https://github.com/Argon40Tech/Argon40case)
 and [Argon ONE I2C/GPIO reference](https://github.com/Argon40Tech/Argon-ONE-i2c-Codes).
