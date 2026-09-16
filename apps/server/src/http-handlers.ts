@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import {
+  normalizeLocalLibraryInput,
+  readLocalLibrarySnapshot,
+  writeLocalLibrarySnapshot,
+} from "./local-library-store";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
@@ -2272,6 +2277,53 @@ export function createHttpHandlers() {
     sendJson(res, 200, { records: await runtime.listKnownNodeRecords() });
   };
 
+  function isLoopbackHostHeader(value: string | string[] | undefined) {
+    const raw = Array.isArray(value) ? value[0] : value;
+    if (!raw) {
+      // Native pipe / in-process calls carry no Host header; allow them.
+      return true;
+    }
+    const host = raw.trim().toLowerCase().split(",")[0]?.trim() ?? "";
+    const withoutPort = host.startsWith("[")
+      ? host.slice(0, host.indexOf("]") + 1)
+      : host.split(":")[0] ?? "";
+    return withoutPort === "127.0.0.1" || withoutPort === "localhost" || withoutPort === "::1" || withoutPort === "[::1]";
+  }
+
+  function isLocalLibraryRequestAllowed(req: RequestLike) {
+    const headers = req.headers ?? {};
+    // Tunnel / proxy markers must never reach this local-only endpoint, even
+    // though the TCP connection itself arrives via loopback forwarding.
+    const forwarded = headers["x-forwarded-for"] ?? headers["cf-connecting-ip"] ?? headers["cf-ray"] ?? headers["x-forwarded-host"];
+    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    if (typeof forwardedValue === "string" && forwardedValue.trim()) {
+      return false;
+    }
+    return isLoopbackHostHeader(headers.host);
+  }
+
+  const localLibraryHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (!isLocalLibraryRequestAllowed(req)) {
+      return sendJson(res, 403, { error: "Local library sync is available only from this computer." });
+    }
+    try {
+      if (req.method === "GET") {
+        sendJson(res, 200, { snapshot: await readLocalLibrarySnapshot() });
+        return;
+      }
+      if (req.method === "PUT" || req.method === "POST") {
+        const body = await readJsonBody<{ snapshot?: unknown } & Record<string, unknown>>(req);
+        const input = (body as { snapshot?: unknown }).snapshot ?? body;
+        const snapshot = await writeLocalLibrarySnapshot(normalizeLocalLibraryInput(input));
+        sendJson(res, 200, { ok: true, snapshot });
+        return;
+      }
+      return sendJson(res, 405, { error: "Method not allowed." });
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : "Failed to sync local library." });
+    }
+  };
+
   return {
     runtime,
     statusHandler,
@@ -2354,5 +2406,6 @@ export function createHttpHandlers() {
     meshAnnounceHandler,
     meshSnapshotHandler,
     meshNodesHandler,
+    localLibraryHandler,
   };
 }

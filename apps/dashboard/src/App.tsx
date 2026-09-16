@@ -60,6 +60,7 @@ import {
   importLibraryState,
   mergeLibraryStates,
   normalizeLibraryStateCandidate,
+  readLibraryUpdatedAt,
   updateShowCast,
   mergeImportedShowIntoState,
 } from "./lib/storage";
@@ -111,6 +112,7 @@ import { formatEpisodeTitle } from "./lib/episode-title";
 import { scoreSearchCandidate } from "./lib/search-ranking";
 import { prioritizeImportSearchResults, resolveImportInput } from "./lib/import-search";
 import { buildRuntimeUrl } from "./lib/local-api";
+import { readServerLibrarySnapshot, writeServerLibrarySnapshot } from "./lib/server-library-sync";
 import { probeLocalRuntime, type LocalRuntimeStatus } from "./lib/runtime-bridge";
 import { resetLocalNodeProbeCache } from "./lib/local-api";
 import { balancedBackgroundImage } from "./lib/image-resolution";
@@ -550,6 +552,8 @@ function AppContent() {
   const metadataEnrichmentAttemptedRef = useRef(new Set<string>());
   const libraryWatcherActiveRef = useRef(false);
   const activeWatchEpisodeIdRef = useRef(activeWatchEpisodeId);
+  const serverLibrarySyncReadyRef = useRef(false);
+  const lastServerLibraryUpdatedAtRef = useRef(0);
   const deferredExploreQuery = useDeferredValue(discoveryState.exploreQuery);
 
   function pushRoute(path: string) {
@@ -1098,9 +1102,207 @@ function AppContent() {
     return saved.fileName;
   }
 
+  // Automatic library backup on the installed Spilled Server: no user input.
+  // localStorage is per-origin, so each domain (localhost, hosted, Electron)
+  // silently converges through one atomic library-state.json on loopback.
+  // Newest timestamp wins; legacy untimestamped copies merge once instead of
+  // being discarded. Unreachable server = hosted-only user, sync stays off.
   useEffect(() => {
-    setState(readLibraryState());
+    let canceled = false;
+
+    const applyServerState = (
+      serverState: LibraryState,
+      serverUpdatedAt: number,
+      languages: Record<string, string>,
+      queue: Record<string, unknown>,
+    ) => {
+      const currentState = stateRef.current;
+      const nextState = {
+        ...serverState,
+        query: currentState.query,
+        selectedEpisodeId: currentState.selectedEpisodeId,
+        settings: {
+          ...serverState.settings,
+          connectedFolderName: currentState.settings.connectedFolderName,
+        },
+      };
+      writeLibraryState(nextState, serverUpdatedAt);
+      stateRef.current = nextState;
+      setState(nextState);
+      setDownloadedEpisodeLanguageById(new Map(Object.entries(replaceDownloadedLanguageMap(languages))));
+      setDownloadQueue(replaceDownloadQueue(queue));
+      lastServerLibraryUpdatedAtRef.current = serverUpdatedAt;
+    };
+
+    void (async () => {
+      try {
+        const { reachable, snapshot } = await readServerLibrarySnapshot();
+        if (canceled || !reachable) {
+          return;
+        }
+
+        const localState = stateRef.current;
+        const localHasShows = localState.shows.length > 0;
+        let localUpdatedAt = readLibraryUpdatedAt();
+        if (localHasShows && localUpdatedAt === 0) {
+          // Legacy pre-timestamp library: stamp it now so future startups
+          // can compare instead of merging every time.
+          localUpdatedAt = Date.now();
+          writeLibraryState(localState, localUpdatedAt);
+        }
+        const localLanguages = readDownloadedLanguageMap();
+        const localQueue = readDownloadQueue();
+
+        if (!snapshot) {
+          if (localHasShows) {
+            const stamp = localUpdatedAt || Date.now();
+            const ok = await writeServerLibrarySnapshot({
+              version: 1,
+              updatedAt: stamp,
+              libraryState: localState,
+              downloadedLanguages: localLanguages,
+              downloadQueue: localQueue,
+            });
+            if (ok) {
+              lastServerLibraryUpdatedAtRef.current = stamp;
+            }
+          } else {
+            lastServerLibraryUpdatedAtRef.current = 0;
+          }
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        const serverState = normalizeLibraryStateCandidate(snapshot.libraryState as Partial<LibraryState>);
+        const serverHasShows = serverState.shows.length > 0;
+        const serverUpdatedAt = snapshot.updatedAt;
+        const serverLanguages = snapshot.downloadedLanguages ?? {};
+        const serverQueue = snapshot.downloadQueue ?? {};
+
+        if (!localHasShows && serverHasShows) {
+          if (!canceled) {
+            applyServerState(serverState, serverUpdatedAt || Date.now(), serverLanguages, serverQueue);
+          }
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        if (localHasShows && !serverHasShows) {
+          const stamp = localUpdatedAt || Date.now();
+          const ok = await writeServerLibrarySnapshot({
+            version: 1,
+            updatedAt: stamp,
+            libraryState: localState,
+            downloadedLanguages: localLanguages,
+            downloadQueue: localQueue,
+          });
+          if (ok) {
+            lastServerLibraryUpdatedAtRef.current = stamp;
+          }
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        if (!localHasShows && !serverHasShows) {
+          lastServerLibraryUpdatedAtRef.current = Math.max(localUpdatedAt, serverUpdatedAt);
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        const SKEW_MS = 1000;
+        const localIsLegacy = localUpdatedAt === 0;
+        const serverIsLegacy = serverUpdatedAt === 0;
+        if (localIsLegacy || serverIsLegacy) {
+          // One side predates timestamps: union both libraries once so
+          // neither domain's old data is discarded.
+          const merged = localIsLegacy && !serverIsLegacy
+            ? mergeLibraryStates(serverState, localState)
+            : mergeLibraryStates(localState, serverState);
+          const stamp = Date.now();
+          const mergedLanguages = { ...serverLanguages, ...localLanguages };
+          const mergedQueue = { ...(serverQueue as PersistentDownloadQueue), ...(localQueue as PersistentDownloadQueue) };
+          if (!canceled) {
+            const nextState = {
+              ...merged,
+              query: localState.query,
+              selectedEpisodeId: localState.selectedEpisodeId,
+              settings: {
+                ...merged.settings,
+                connectedFolderName: localState.settings.connectedFolderName,
+              },
+            };
+            writeLibraryState(nextState, stamp);
+            stateRef.current = nextState;
+            setState(nextState);
+            setDownloadedEpisodeLanguageById(new Map(Object.entries(replaceDownloadedLanguageMap(mergedLanguages))));
+            setDownloadQueue(replaceDownloadQueue(mergedQueue));
+          }
+          const ok = await writeServerLibrarySnapshot({
+            version: 1,
+            updatedAt: stamp,
+            libraryState: merged,
+            downloadedLanguages: mergedLanguages,
+            downloadQueue: mergedQueue,
+          });
+          lastServerLibraryUpdatedAtRef.current = stamp;
+          void ok;
+          serverLibrarySyncReadyRef.current = true;
+          return;
+        }
+
+        if (serverUpdatedAt > localUpdatedAt + SKEW_MS) {
+          if (!canceled) {
+            applyServerState(serverState, serverUpdatedAt, serverLanguages, serverQueue);
+          }
+        } else if (localUpdatedAt > serverUpdatedAt + SKEW_MS) {
+          const ok = await writeServerLibrarySnapshot({
+            version: 1,
+            updatedAt: localUpdatedAt,
+            libraryState: localState,
+            downloadedLanguages: localLanguages,
+            downloadQueue: localQueue,
+          });
+          if (ok) {
+            lastServerLibraryUpdatedAtRef.current = localUpdatedAt;
+          }
+        } else {
+          lastServerLibraryUpdatedAtRef.current = Math.max(localUpdatedAt, serverUpdatedAt);
+        }
+        serverLibrarySyncReadyRef.current = true;
+      } catch {
+        // Silent: library sync must never interrupt startup.
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
   }, []);
+
+  // Debounced push of local changes to the server after startup convergence.
+  useEffect(() => {
+    if (!serverLibrarySyncReadyRef.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const stamp = readLibraryUpdatedAt();
+      if (stamp <= lastServerLibraryUpdatedAtRef.current) {
+        return;
+      }
+      void writeServerLibrarySnapshot({
+        version: 1,
+        updatedAt: stamp,
+        libraryState: stateRef.current,
+        downloadedLanguages: Object.fromEntries(downloadedLanguageMapRef.current.entries()),
+        downloadQueue: downloadQueueRef.current as unknown as Record<string, unknown>,
+      }).then((ok) => {
+        if (ok) {
+          lastServerLibraryUpdatedAtRef.current = stamp;
+        }
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [state, downloadQueue, downloadedEpisodeLanguageById]);
 
   useEffect(() => {
     void refreshVaultState();

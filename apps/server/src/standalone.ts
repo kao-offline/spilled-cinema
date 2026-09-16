@@ -228,6 +228,7 @@ const routes: Array<{ path: string; handler: RouteHandler }> = [
   { path: "/api/node/mesh/announce", handler: handlers.meshAnnounceHandler },
   { path: "/api/node/mesh/snapshot", handler: handlers.meshSnapshotHandler },
   { path: "/api/node/mesh/nodes", handler: handlers.meshNodesHandler },
+  { path: "/api/local-library", handler: handlers.localLibraryHandler },
 ];
 
 const DEFAULT_DASHBOARD_ORIGINS = [
@@ -282,6 +283,22 @@ function notFound(res: ServerResponse) {
   res.statusCode = 404;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify({ error: "Not found." }));
+}
+
+function isLoopbackHostHeaderValue(value: string | string[] | undefined) {
+  const raw = (Array.isArray(value) ? value[0] : value)?.trim().toLowerCase() ?? "";
+  if (!raw) {
+    return false;
+  }
+  const host = raw.split(",")[0]?.trim() ?? "";
+  const withoutPort = host.startsWith("[")
+    ? host.slice(0, host.indexOf("]") + 1)
+    : (host.split(":")[0] ?? "");
+  return withoutPort === "127.0.0.1" || withoutPort === "localhost" || withoutPort === "::1" || withoutPort === "[::1]";
+}
+
+function isLoopbackRemoteAddress(remote: string) {
+  return remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
 }
 
 function findHandler(url = "") {
@@ -357,6 +374,21 @@ function startNativePipe() {
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = req.url?.split("?")[0];
   const isBrowserFile = pathname === "/api/download-full/browser-file";
+  const isLocalLibrary = pathname === "/api/local-library";
+  if (isLocalLibrary) {
+    // Local-only endpoint: the TCP peer always looks like loopback because
+    // public tunnels forward locally, so the Host header is the real barrier.
+    // Direct dashboard calls use 127.0.0.1:8787 / localhost:8787; tunnel
+    // origins carry the public hostname and are rejected here (plus a second
+    // check inside the handler for proxy headers).
+    const remote = req.socket.remoteAddress ?? "";
+    if (!isLoopbackRemoteAddress(remote) || !isLoopbackHostHeaderValue(req.headers.host)) {
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Local library sync is available only from this computer." }));
+      return;
+    }
+  }
   if (!isBrowserFile && !applyCors(req, res)) {
     res.statusCode = 403;
     res.setHeader("Content-Type", "application/json");
