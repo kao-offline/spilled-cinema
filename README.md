@@ -21,6 +21,24 @@ per-user storage, registers the headless host to start at Windows sign-in, and
 opens the loopback-only owner wizard. It does not install the Spilled library
 UI.
 
+## Raspberry Pi IR remote setup
+
+For a Raspberry Pi in an Argon case with its IR remote. Run on the Pi —
+buttons load at boot and reach the dashboard with no extra steps:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash
+```
+
+If the dashboard runs on another computer, the Pi can forward button presses
+to it instead (replace the address and token):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash -s -- --with-bridge --receiver-url http://192.168.1.50:8765 --token "YOUR_TOKEN"
+```
+
+Details: [testing/ir-remote-prototype/README.md](testing/ir-remote-prototype/README.md).
+
 ## Structure
 
 - `apps/dashboard`
