@@ -55,7 +55,7 @@ function Wait-ForDocker {
 }
 
 $env:SPILLED_CONTROL_PLANE_URL = "https://cheerful-lynx-4.convex.site/server"
-$env:SPILLED_GATEWAY_URL = "https://spilled-node-gateway.hrdykrystof.workers.dev"
+$env:SPILLED_GATEWAY_URL = "https://spilled-node-gateway.4thsj85ywn.workers.dev"
 $env:SPILLED_CONTROL_PLANE_SECRET = Read-DotEnvValue "SPILLED_CONTROL_PLANE_SECRET"
 
 Push-Location $ProjectRoot

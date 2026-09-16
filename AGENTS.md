@@ -76,7 +76,7 @@ This is how the dashboard reaches the server. Each transport is tried in order; 
 ### Gateway (Cloudflare Worker)
 
 - **Location:** `apps/gateway/src/index.ts`
-- **Deployed:** `spilled-node-gateway.hrdykrystof.workers.dev`
+- **Deployed:** `spilled-node-gateway.4thsj85ywn.workers.dev`
 - **Durable Object:** `NodeLink` — one per node, stores node socket + client sockets.
 - **Heartbeat alarm:** Every 10s, sends heartbeat to control plane. If node socket is gone, cleans up.
 - **Frame relay:** Client → node (with clientId appended) and node → specific client (by clientId).
@@ -208,7 +208,7 @@ Browser-side offline storage for downloaded media using the **File System Access
 | `SPILLED_VAULT_PATH` | Download vault folder | `./downloads/` |
 | `SPILLED_NODE_ENDPOINT_URL` | Public tunnel URL (auto-set if tunnel enabled) | — |
 | `SPILLED_CONTROL_PLANE_URL` | Convex control plane URL | `https://cheerful-lynx-4.convex.site` |
-| `SPILLED_GATEWAY_URL` | Gateway WebSocket URL | `wss://spilled-node-gateway.hrdykrystof.workers.dev` |
+| `SPILLED_GATEWAY_URL` | Gateway WebSocket URL | `wss://spilled-node-gateway.4thsj85ywn.workers.dev` |
 | `SPILLED_DISABLE_AUTO_TUNNEL` | Disable auto-tunnel creation | `false` |
 | `SPILLED_PUBLIC_TUNNEL_PROVIDERS` | Tunnel providers (`cloudflared`, `localtunnel`) | both |
 | `SPILLED_PUBLIC_CAPABILITIES` | Comma-separated public capabilities | — |
@@ -263,7 +263,7 @@ npm run dist:windows -w @spilledcinema/server-windows
 ```bash
 # From apps/gateway/
 npx wrangler deploy
-# Worker: spilled-node-gateway.hrdykrystof.workers.dev
+# Worker: spilled-node-gateway.4thsj85ywn.workers.dev
 # Secrets: GATEWAY_SERVICE_TOKEN, TURN_SHARED_SECRET
 ```
 - Durable Object: `NodeLink` with SQLite storage.

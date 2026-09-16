@@ -28,7 +28,7 @@ app.setPath("userData", path.join(app.getPath("appData"), "Spilled Verifier"));
 
 const DEFAULT_CONFIG = {
   controlPlaneUrl: process.env.SPILLED_CONTROL_PLANE_URL || "https://cheerful-lynx-4.convex.site/server",
-  gatewayUrl: process.env.SPILLED_GATEWAY_URL || "https://spilled-node-gateway.hrdykrystof.workers.dev",
+  gatewayUrl: process.env.SPILLED_GATEWAY_URL || "https://spilled-node-gateway.4thsj85ywn.workers.dev",
   controlPlaneSecret: process.env.SPILLED_CONTROL_PLANE_SECRET || "",
   probesJson: process.env.SPILLED_VERIFIER_PROBES_JSON || "{}",
   once: false,

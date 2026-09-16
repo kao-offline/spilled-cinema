@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=dist/index.mjs",
+    "probe:scheduler": "node scripts/probe-scheduler.mjs dist/index.mjs",
     "start": "node dist/index.mjs"
   },
   "dependencies": {

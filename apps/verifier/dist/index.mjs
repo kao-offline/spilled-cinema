@@ -58,7 +58,15 @@ function decryptChaCha20Poly1305(key, nonce, aad, ciphertext, authenticationTag)
   ])));
 }
 function transportAad(envelope) {
-  return Buffer.from(stableStringify(envelope), "utf8");
+  return Buffer.from(stableStringify({
+    version: envelope.version,
+    requestId: envelope.requestId,
+    ticketId: envelope.ticketId,
+    issuedAt: envelope.issuedAt,
+    expiresAt: envelope.expiresAt,
+    nonce: envelope.nonce,
+    clientEphemeralKey: envelope.clientEphemeralKey
+  }), "utf8");
 }
 function createEncryptedNodeRequest(input) {
   const ephemeral = generateKeyPairSync("x25519");
@@ -71,7 +79,8 @@ function createEncryptedNodeRequest(input) {
     issuedAt: input.issuedAt,
     expiresAt: input.expiresAt,
     nonce: base64UrlEncode(nonce),
-    clientEphemeralKey: ephemeralPublicKey
+    clientEphemeralKey: ephemeralPublicKey,
+    ...input.acceptEncoding ? { acceptEncoding: input.acceptEncoding } : {}
   };
   const sharedSecret = diffieHellman({
     privateKey: ephemeral.privateKey,
@@ -114,7 +123,8 @@ function decryptNodeResponse(input) {
     requestId: input.response.requestId,
     ticketId: input.response.ticketId,
     issuedAt: input.response.issuedAt,
-    nonce: input.response.nonce
+    nonce: input.response.nonce,
+    ...input.response.contentEncoding ? { contentEncoding: input.response.contentEncoding } : {}
   }), ciphertext, base64UrlDecode(input.response.authenticationTag));
 }
 function verifyPayload(payload, signature, publicKeyPem) {
@@ -356,9 +366,10 @@ async function main() {
   } finally {
     passInFlight = false;
   }
-  if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
-    const intervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
-    setInterval(() => void main().catch((error) => console.error("[verifier]", error)), Math.max(intervalMs, 6e4));
-  }
 }
 await main();
+if (process.env.SPILLED_VERIFIER_ONCE !== "1") {
+  const configuredIntervalMs = Number.parseInt(process.env.SPILLED_VERIFIER_INTERVAL_MS || "600000", 10);
+  const intervalMs = Number.isFinite(configuredIntervalMs) ? Math.max(configuredIntervalMs, 6e4) : 6e5;
+  setInterval(() => void main().catch((error) => console.error("[verifier]", error)), intervalMs);
+}
