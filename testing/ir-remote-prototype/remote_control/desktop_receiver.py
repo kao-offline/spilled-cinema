@@ -79,6 +79,34 @@ def make_handler(token: str, sink: ActionSink) -> type[BaseHTTPRequestHandler]:
     class RemoteHandler(BaseHTTPRequestHandler):
         server_version = "SpilledRemotePrototype/0.1"
 
+        def _cors(self) -> None:
+            # Browser sessions (the Spilled dashboard, including TV mode on a
+            # Raspberry Pi running both the browser and this receiver) must be
+            # able to health-check and POST commands with fetch(). Without
+            # these headers every browser request is blocked by CORS, and
+            # without the OPTIONS branch every authenticated POST dies in
+            # preflight. Chrome additionally requires the private-network
+            # header for a public/hosted page talking to loopback.
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+            else:
+                self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            if self.path not in ("/health", "/command"):
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._cors()
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Spilled-Remote-Token")
+            self.send_header("Access-Control-Max-Age", "86400")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_GET(self) -> None:  # noqa: N802
             if self.path != "/health":
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -120,6 +148,7 @@ def make_handler(token: str, sink: ActionSink) -> type[BaseHTTPRequestHandler]:
         def _json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
+            self._cors()
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")

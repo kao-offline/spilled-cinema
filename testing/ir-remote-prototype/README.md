@@ -91,6 +91,35 @@ and the dashboard receive the buttons without the Python network relay.
 The installer enables the keymap service for startup and verifies it with
 `systemctl is-enabled`, so the remote keeps working after a reboot.
 
+### One-command same-Pi TV setup
+
+When the Pi runs the media server, the browser, and the remote together
+(the TV case), add `--same-pi`. On top of the direct setup it installs a
+key-injection-free receiver status service (so the dashboard's Remote buttons
+screen reports **Connected**) and then verifies every layer the dashboard
+checks — keymap, receiver, server, and the server's own view of the receiver:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash -s -- --same-pi
+```
+
+Open the dashboard on the Pi afterward: Search → **Remote buttons** should show
+`Connected on :8765`. If the server line warns it cannot see the receiver while
+the receiver itself answers, the server is almost certainly in Docker — set
+`SPILLED_REMOTE_RECEIVER_URL=http://host.docker.internal:8765` on it
+(`docker-compose.node.yml` already does) and restart it.
+
+### Powering the Pi on/off with the remote
+
+Power control is a case-hardware feature, not software: our stack deliberately
+ignores the remote's power button. On Argon cases with a built-in IR receiver
+(ONE V2/M.2/V3 — the original V1 has no IR receiver), leave the official power
+supply plugged in and press the remote's power button: the case microcontroller
+powers the Pi on from standby and cuts power on long-press, with no OS or
+dashboard involvement. Keep the case jumper in its default manual-boot position
+(press-to-boot after power loss) rather than always-on mode. On V3, `argonone-ir`
+configures which IR signal toggles power.
+
 ### One-command bridge setup (Pi forwards to a desktop over the LAN/web)
 
 If the dashboard runs on another computer, install the bridge as well (copy-paste, replacing the address and token). It is
@@ -183,7 +212,7 @@ templates and are not installed automatically.
 | back | Escape | Back/Menu Back |
 | home | Home | Home |
 | play_pause | Space | Play/Pause or OK in player |
-| fullscreen | F | configurable |
+| fullscreen | F | Menu/Info: enters browser fullscreen on TV surfaces, exits back to the windowed browser on the next press (toggles the player surface inside the player) |
 | mute | M | configurable |
 | captions | C | configurable |
 | volume_up/down | OS media volume | Volume buttons |

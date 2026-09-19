@@ -64,6 +64,73 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 401)
         context.exception.close()
 
+    def test_health_echoes_browser_origin(self) -> None:
+        # A browser dashboard session fetches /health with an Origin header;
+        # without an echoed ACAO header the response is unreadable (CORS).
+        request = Request(
+            f"{self.base_url}/health",
+            method="GET",
+            headers={"Origin": "https://spilled.overload.studio"},
+        )
+        with urlopen(request, timeout=2) as response:
+            self.assertTrue(json.load(response)["ok"])
+            self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "https://spilled.overload.studio")
+            self.assertEqual(response.headers.get("Access-Control-Allow-Private-Network"), "true")
+
+    def test_preflight_allows_authenticated_browser_post(self) -> None:
+        # Authenticated POSTs carry Content-Type + X-Spilled-Remote-Token, so
+        # browsers send an OPTIONS preflight first. It must answer 204 with
+        # the matching allow-list or no browser session can ever connect.
+        request = Request(
+            f"{self.base_url}/command",
+            method="OPTIONS",
+            headers={
+                "Origin": "https://spilled.overload.studio",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,x-spilled-remote-token",
+            },
+        )
+        with urlopen(request, timeout=2) as response:
+            self.assertEqual(response.status, 204)
+            allow_methods = response.headers.get("Access-Control-Allow-Methods", "")
+            allow_headers = response.headers.get("Access-Control-Allow-Headers", "").lower()
+            self.assertIn("POST", allow_methods)
+            self.assertIn("x-spilled-remote-token", allow_headers)
+            self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "https://spilled.overload.studio")
+
+    def test_command_from_browser_origin_succeeds(self) -> None:
+        before = len(self.sink.actions)
+        request = Request(
+            f"{self.base_url}/command",
+            data=encode_command(Command.create(Action.UP, "browser-test")),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-Spilled-Remote-Token": "a" * 20,
+                "Origin": "http://127.0.0.1:5173",
+            },
+        )
+        with urlopen(request, timeout=2) as response:
+            self.assertTrue(json.load(response)["ok"])
+            self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:5173")
+        self.assertEqual(self.sink.actions[before:], [Action.UP])
+
+    def test_rejection_stays_readable_to_browsers(self) -> None:
+        request = Request(
+            f"{self.base_url}/command",
+            data=encode_command(Command.create(Action.UP, "test")),
+            method="POST",
+            headers={"X-Spilled-Remote-Token": "wrong", "Origin": "https://spilled.overload.studio"},
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 401)
+        self.assertEqual(
+            context.exception.headers.get("Access-Control-Allow-Origin"),
+            "https://spilled.overload.studio",
+        )
+        context.exception.close()
+
 
 if __name__ == "__main__":
     unittest.main()

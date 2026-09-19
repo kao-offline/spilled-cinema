@@ -30,6 +30,23 @@ buttons load at boot and reach the dashboard with no extra steps:
 curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash
 ```
 
+### Same-Pi TV setup (server + browser + remote on one Pi)
+
+When the Pi itself runs the media server and the browser with Spilled Cinema
+open, one command installs the IR keymap, starts the receiver status service,
+and verifies every layer, so Remote buttons shows **Connected on :8765**.
+Paste this on the Pi and reboot once if it asks:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kao-offline/spilled-cinema/master/testing/ir-remote-prototype/pi/install.sh | sudo bash -s -- --same-pi
+```
+
+Then open the dashboard on the Pi, turn on TV mode, open Search →
+**Remote buttons**, and check the Local IR receiver row says Connected. The
+Menu/Info button toggles browser fullscreen (press again to leave it and go
+back to the windowed browser); inside the player the same button toggles the
+player surface instead.
+
 If the dashboard runs on another computer, the Pi can forward button presses
 to it instead (replace the address and token):
 

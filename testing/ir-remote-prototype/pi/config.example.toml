@@ -18,7 +18,6 @@ KEY_OK = "enter"
 KEY_ENTER = "enter"
 KEY_BACK = "back"
 KEY_ESC = "back"
-KEY_MENU = "back"
 KEY_HOME = "home"
 KEY_HOMEPAGE = "home"
 KEY_PLAYPAUSE = "play_pause"
@@ -26,6 +25,12 @@ KEY_PLAY = "play_pause"
 KEY_C = "captions"
 KEY_VOLUMEUP = "volume_up"
 KEY_VOLUMEDOWN = "volume_down"
+# Fullscreen toggle: same remote button enters browser fullscreen on TV
+# surfaces and exits back to the windowed browser on the next press (inside
+# the player it toggles the player surface instead). Bind whichever spare
+# button your remote has — Menu and Info are common choices:
+KEY_MENU = "fullscreen"
+KEY_INFO = "fullscreen"
 
 # Optional choices for spare remote buttons:
 # KEY_SUBTITLE = "captions"

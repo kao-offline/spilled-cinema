@@ -14,9 +14,16 @@ device, key bindings load at boot, and Chromium/the dashboard receives the
 buttons with no network involved.
 
 Options:
+  --same-pi                same-Pi TV setup: everything above, plus a local
+                           receiver status service and a full end-to-end check,
+                           so the dashboard's Remote buttons screen shows
+                           "Connected". Use when the Pi runs the media server,
+                           the browser, and the remote together.
   --with-bridge            also install the network bridge so this Pi forwards
                            IR presses to a desktop receiver over your LAN/web.
-                           Startup is enabled automatically.
+                           Startup is enabled automatically. Cannot be combined
+                           with --same-pi (that mode controls the local TV
+                           directly through the kernel keymap instead).
   --receiver-url URL       desktop receiver base URL (required with --with-bridge).
   --token TOKEN            shared receiver token (or set SPILLED_REMOTE_TOKEN).
   --dashboard-url URL      optional dashboard URL to verify web reachability
@@ -28,12 +35,14 @@ USAGE
 RECEIVER_URL="${RECEIVER_URL:-}"
 RECEIVER_TOKEN="${SPILLED_REMOTE_TOKEN:-}"
 WITH_BRIDGE=0
+SAME_PI=0
 DASHBOARD_URL="${DASHBOARD_URL:-}"
 # Single parser handling both --opt=value and --opt value forms (the script
 # is usually piped via `curl | sudo bash -s -- <flags>`).
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-bridge) WITH_BRIDGE=1; shift ;;
+    --same-pi) SAME_PI=1; shift ;;
     --receiver-url=*) RECEIVER_URL="${1#*=}"; shift ;;
     --receiver-url) RECEIVER_URL="${2:-}"; shift 2 ;;
     --token=*) RECEIVER_TOKEN="${1#*=}"; shift ;;
@@ -47,6 +56,12 @@ done
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run this installer as root (for example: curl ... | sudo bash)." >&2
+  exit 1
+fi
+
+if [[ $WITH_BRIDGE -eq 1 && $SAME_PI -eq 1 ]]; then
+  echo "Pick one: --same-pi controls this Pi's own TV through the kernel keymap;" >&2
+  echo "--with-bridge forwards presses to a receiver on another computer." >&2
   exit 1
 fi
 
@@ -112,6 +127,8 @@ protocol = "nec"
 0xff09f6 = "KEY_ESC"
 0xff01fe = "KEY_VOLUMEUP"
 0xff817e = "KEY_VOLUMEDOWN"
+# Fullscreen toggle (Menu/Info): capture the real scancode with
+# `sudo ir-keytable -t`, then add e.g. 0x........ = "KEY_MENU".
 KEYMAP
 
 cat >/usr/local/libexec/spilled-ir-load-keymap <<'LOADER'
@@ -223,7 +240,6 @@ KEY_OK = "enter"
 KEY_ENTER = "enter"
 KEY_BACK = "back"
 KEY_ESC = "back"
-KEY_MENU = "back"
 KEY_HOME = "home"
 KEY_HOMEPAGE = "home"
 KEY_PLAYPAUSE = "play_pause"
@@ -231,6 +247,10 @@ KEY_PLAY = "play_pause"
 KEY_C = "captions"
 KEY_VOLUMEUP = "volume_up"
 KEY_VOLUMEDOWN = "volume_down"
+# Fullscreen toggle: enters browser fullscreen on TV surfaces, exits back to
+# the windowed browser on the next press (player surface inside the player).
+KEY_MENU = "fullscreen"
+KEY_INFO = "fullscreen"
 BRIDGE_CONFIG
   chown root:spilledremote /etc/spilled-ir-remote/config.toml
   chmod 640 /etc/spilled-ir-remote/config.toml
@@ -284,6 +304,94 @@ UNIT
   systemctl restart spilled-ir-remote.service || systemctl start spilled-ir-remote.service || true
 fi
 
+if [[ $SAME_PI -eq 1 ]]; then
+  echo "Setting up the same-Pi TV receiver (status endpoint for the dashboard)..."
+  echo "Button presses keep flowing through the kernel keymap above, so this"
+  echo "service runs key-injection-free: it only answers the dashboard's"
+  echo "health check and never double-presses."
+
+  if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+    echo "Python 3.11 or newer is required (Raspberry Pi OS Bookworm or newer)." >&2
+    exit 1
+  fi
+  apt-get install -y git
+
+  install -d -m 0755 /opt/spilled-ir-receiver /etc/spilled-ir-receiver
+  if [[ ! -f /opt/spilled-ir-receiver/remote_control/desktop_receiver.py ]]; then
+    rm -rf /opt/spilled-ir-receiver/src
+    git clone --depth 1 https://github.com/kao-offline/spilled-cinema.git /opt/spilled-ir-receiver/src
+    cp -R /opt/spilled-ir-receiver/src/testing/ir-remote-prototype/remote_control \
+      /opt/spilled-ir-receiver/src/testing/ir-remote-prototype/pyproject.toml \
+      /opt/spilled-ir-receiver/
+    rm -rf /opt/spilled-ir-receiver/src
+  fi
+  if [[ ! -f /etc/spilled-ir-receiver/receiver.env ]]; then
+    receiver_token=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+    printf 'SPILLED_REMOTE_TOKEN=%s\n' "$receiver_token" >/etc/spilled-ir-receiver/receiver.env
+    chmod 600 /etc/spilled-ir-receiver/receiver.env
+    echo "Generated a receiver token in /etc/spilled-ir-receiver/receiver.env."
+  fi
+
+  cat >/etc/systemd/system/spilled-ir-receiver.service <<'UNIT'
+[Unit]
+Description=Spilled Cinema IR receiver (dashboard status endpoint)
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+WorkingDirectory=/opt/spilled-ir-receiver
+EnvironmentFile=/etc/spilled-ir-receiver/receiver.env
+ExecStart=/usr/bin/python3 -m remote_control.desktop_receiver --bind 127.0.0.1 --port 8765 --dry-run
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  systemctl daemon-reload
+  systemctl enable spilled-ir-receiver.service
+  if ! systemctl is-enabled --quiet spilled-ir-receiver.service; then
+    echo "FAILED: spilled-ir-receiver.service is not enabled for startup." >&2
+    exit 1
+  fi
+  systemctl restart spilled-ir-receiver.service || systemctl start spilled-ir-receiver.service || true
+  sleep 2
+
+  echo "Verifying every layer the dashboard checks..."
+  if curl -fsS --max-time 8 http://127.0.0.1:8765/health | grep -q '"ok"'; then
+    echo "  receiver :8765 ............ OK"
+  else
+    echo "FAILED: the receiver does not answer at http://127.0.0.1:8765/health." >&2
+    echo "Check: sudo systemctl status spilled-ir-receiver.service" >&2
+    exit 1
+  fi
+
+  # This is the exact criterion behind "Connected" in Remote buttons: the
+  # server on this Pi must see the receiver. A missing server or a server in
+  # Docker (own loopback namespace) are the two usual causes here.
+  remote_info=$(curl -fsS --max-time 8 http://127.0.0.1:8787/api/remote/info || true)
+  if [[ -z "$remote_info" ]]; then
+    echo "WARNING: no Spilled server answers at http://127.0.0.1:8787." >&2
+    echo "Start your media server on this Pi first, then re-run with --same-pi." >&2
+  else
+    receiver_seen=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("receiver", {}).get("reachable", False))' <<<"$remote_info")
+    receiver_port=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("receiver", {}).get("port", 8765))' <<<"$remote_info")
+    if [[ "$receiver_seen" == "True" ]]; then
+      echo "  server sees receiver :$receiver_port ... OK — Remote buttons will show Connected."
+    else
+      echo "WARNING: the receiver answers locally, but the server cannot see it." >&2
+      echo "If the server runs in Docker, point its probe at this host with" >&2
+      echo "SPILLED_REMOTE_RECEIVER_URL=http://host.docker.internal:8765" >&2
+      echo "(docker-compose.node.yml already sets this by default), then restart it." >&2
+    fi
+  fi
+fi
+
 if [[ -n "$DASHBOARD_URL" ]]; then
   trimmed_dashboard="${DASHBOARD_URL%/}"
   echo "Checking dashboard web reachability: $trimmed_dashboard ..."
@@ -304,6 +412,11 @@ echo
 echo "Spilled Cinema IR setup is complete."
 echo "Startup state:"
 systemctl is-enabled spilled-ir-keymap.service | sed 's/^/  keymap (IR buttons at boot): /'
+if [[ $SAME_PI -eq 1 ]]; then
+  systemctl is-enabled spilled-ir-receiver.service | sed 's/^/  receiver (dashboard status): /'
+  echo "Open the dashboard on this Pi, enable TV mode, then open Search -> Remote buttons:"
+  echo "the Local IR receiver row should say Connected."
+fi
 if [[ $WITH_BRIDGE -eq 1 ]]; then
   systemctl is-enabled spilled-ir-remote.service | sed 's/^/  bridge (forwards to receiver): /'
   if [[ $BRIDGE_OK -eq 1 ]]; then
