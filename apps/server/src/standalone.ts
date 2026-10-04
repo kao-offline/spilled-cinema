@@ -242,7 +242,7 @@ const DEFAULT_DASHBOARD_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://localhost:4173",
   "http://127.0.0.1:4173",
-  "https://spilled.overload.studio",
+  "https://spilled.kaooffline.top",
 ];
 
 function configuredDashboardOrigins() {
@@ -746,7 +746,7 @@ async function restartPublicTunnel() {
     console.log(`[spilledcinema-server] public fetch server ${nextTunnel.url}`);
     void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
       if (setup?.setupCode) {
-        console.log(`[spilledcinema-server] setup URL: https://spilled.overload.studio/node/setup?node=${encodeURIComponent(nextTunnel.url)}`);
+        console.log(`[spilledcinema-server] setup URL: https://spilled.kaooffline.top/node/setup?node=${encodeURIComponent(nextTunnel.url)}`);
       }
     });
     void refreshManagedGatewayApplication?.();
@@ -769,7 +769,7 @@ async function startServerServices() {
     console.log(`[spilledcinema-server] public fetch server ${publicTunnel.url}`);
     void handlers.runtime.getSetupCodeForTerminal().then((setup) => {
       if (setup?.setupCode) {
-        console.log(`[spilledcinema-server] setup URL: https://spilled.overload.studio/node/setup?node=${encodeURIComponent(publicTunnel!.url)}`);
+        console.log(`[spilledcinema-server] setup URL: https://spilled.kaooffline.top/node/setup?node=${encodeURIComponent(publicTunnel!.url)}`);
       }
     });
   } else if (process.env.SPILLED_NODE_ENDPOINT_URL) {
