@@ -116,6 +116,7 @@ public sealed class SpilledClient
         var preferred = players.FirstOrDefault(x => x.Text("language").StartsWith(Plugin.Instance.Configuration.PreferredLanguage, StringComparison.OrdinalIgnoreCase));
         var alias = string.IsNullOrEmpty(reference.Player) ? preferred.ValueKind != JsonValueKind.Undefined ? preferred.Text("alias") : episode.Text("selectedPlayerAlias", players[0].Text("alias")) : reference.Player;
         if (!players.Any(x => x.Text("alias") == alias)) throw new ArgumentException("Player is not part of this episode.");
+        if (!string.IsNullOrEmpty(reference.Player)) players = players.Where(x => x.Text("alias") == alias).ToArray();
         return await Request("api/player/playback-resolve", new
         {
             episodeId = episode.Text("id"), showTitle = show.Text("title"), episodeTitle = episode.Text("episodeTitle"),
