@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Jellyfin.Plugin.SpilledCinema</AssemblyName>
+    <RootNamespace>Jellyfin.Plugin.SpilledCinema</RootNamespace>
+    <Version>1.0.0</Version>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+    <PackageReference Include="Jellyfin.Controller" Version="12.2.0" />
+    <PackageReference Include="Jellyfin.Model" Version="12.2.0" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <EmbeddedResource Include="Configuration/configPage.html" />
+  </ItemGroup>
+</Project>

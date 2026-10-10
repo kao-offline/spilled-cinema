@@ -402,7 +402,7 @@ function isCacheableHlsAsset(url: URL, contentType: string) {
     /video\/mp2t|audio\/aac|text\/vtt/i.test(contentType);
 }
 
-function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string, inlinePlayback = false) {
+export function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?: string, inlinePlayback = false) {
   const params = new URLSearchParams({
     url: streamUrl,
     name: fileName,
@@ -413,7 +413,9 @@ function buildBrowserFileProxyPath(streamUrl: string, fileName: string, referer?
   if (inlinePlayback) {
     params.set("playback", "1");
   }
-  return `/api/download-full/browser-file?${params.toString()}`;
+  const upstreamPath = new URL(streamUrl).pathname;
+  const extension = upstreamPath.match(/\.(m3u8|mp4|m4s|aac|vtt|key|ts)$/i)?.[1]?.toLowerCase() || "ts";
+  return `/api/download-full/browser-file/stream.${extension}?${params.toString()}`;
 }
 
 function rewriteHlsTagUris(line: string, playlistUrl: URL, fileName: string, referer?: string, inlinePlayback = false) {

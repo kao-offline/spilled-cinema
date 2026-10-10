@@ -1,0 +1,12 @@
+{
+  "name": "spilled-umbrel-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@node-rs/argon2": "2.0.2",
+    "localtunnel": "2.0.2",
+    "node-datachannel": "0.31.0",
+    "sharp": "0.35.3",
+    "ws": "8.21.0"
+  }
+}

@@ -9,6 +9,7 @@ import {
   getFullDownloadJob,
   getMediaToolStatus,
   listDownloadedEpisodeIds,
+  listFullDownloadJobsByEpisode,
   resolveBrowserDownload,
   resolvePlaybackStream,
 } from "../../../apps/dashboard/src/server/full-download";
@@ -513,7 +514,7 @@ export async function listDownloads() {
     }
   }
 
-  return { episodeIds, files };
+  return { episodeIds, files, jobs: listFullDownloadJobsByEpisode() };
 }
 
 export async function checkDownload(episodeId: string) {

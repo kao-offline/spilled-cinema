@@ -309,7 +309,7 @@ function isLoopbackRemoteAddress(remote: string) {
 function findHandler(url = "") {
   const pathname = url.split("?")[0] || "/";
   return routes.find((route) => route.path === pathname || (
-    (route.path === "/_next/static" || route.path === "/scripts" || route.path === "/api/cineby-api") && pathname.startsWith(`${route.path}/`)
+    (route.path === "/_next/static" || route.path === "/scripts" || route.path === "/api/cineby-api" || route.path === "/api/download-full/browser-file") && pathname.startsWith(`${route.path}/`)
   ))?.handler;
 }
 
@@ -378,7 +378,7 @@ function startNativePipe() {
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = req.url?.split("?")[0];
-  const isBrowserFile = pathname === "/api/download-full/browser-file";
+  const isBrowserFile = pathname === "/api/download-full/browser-file" || pathname?.startsWith("/api/download-full/browser-file/");
   const isLocalLibrary = pathname === "/api/local-library";
   if (isLocalLibrary) {
     // Local-only endpoint: the TCP peer always looks like loopback because
