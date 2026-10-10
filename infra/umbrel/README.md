@@ -10,6 +10,8 @@ Install the official Portainer Umbrel app. Its Docker environment requires **nam
 
 The CPU/RAM limits and bounded logs are in the compose file. Spilled downloads allow one active job, reserve 16 GiB free disk, cap the flat download library at 60 GiB and individual downloads at 8 GiB. Checks run during transfers and before publishing the completed file. The full-download limits are optional on other deployments. Private node account quotas are separate. Jellyfin trickplay and chapter image generation are disabled for the download library.
 
+Jellyfin's encoding configuration enables throttling with a 30-second delay and segment deletion with a 60-second retention window. These settings keep playback from processing the entire remote movie ahead of the viewer and retaining all generated segments. They are persistent Jellyfin settings, separate from the container environment.
+
 Compatible streams use signed, scoped, expiring Jellyfin playback URLs. Video and subtitles remain behind Jellyfin; the node port stays private. Tampered and expired links are rejected. The plugin probes codecs, marks a default audio track and uses advertised HLS bandwidth as a conservative bitrate estimate. Compatible MP4 uses direct playback; Jellyfin remuxes HLS with video/audio copy. Probing is limited to 32 MB and five seconds. Unsupported client codecs can still require conversion; the Jellyfin container is capped at two CPU cores. Use a Jellyfin public URL that all intended players can reach.
 
 ## Build and install
