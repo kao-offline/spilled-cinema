@@ -1,0 +1,134 @@
+name: spilled-media
+
+x-runtime: &runtime
+  restart: unless-stopped
+  networks: [media]
+  logging:
+    driver: local
+    options: { max-size: "10m", max-file: "2" }
+
+x-auth-env: &auth-env
+  AUTHENTIK_POSTGRESQL__HOST: spilled-auth-postgres
+  AUTHENTIK_POSTGRESQL__NAME: authentik
+  AUTHENTIK_POSTGRESQL__USER: authentik
+  AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?required}
+  AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?required}
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+
+services:
+  node:
+    <<: *runtime
+    container_name: spilled-node
+    image: ${SPILLED_IMAGE:?set a built immutable server image}
+    mem_limit: 768m
+    cpus: 1
+    volumes: [node:/data, media:/media]
+    environment:
+      SPILLED_NODE_DATABASE: /data/node.db
+      SPILLED_MASTER_KEY_FILE: /data/master-key
+      SPILLED_SECRET_RECORDS_FILE: /data/secrets.json
+      SPILLED_PRIVATE_CONFIG: /data/spilled.private.json
+      SPILLED_VAULT_PATH: /media
+      SPILLED_PUBLIC_TEMP_PATH: /tmp/spilled
+      SPILLED_NODE_MODE: full
+      SPILLED_NODE_ENDPOINT_URL: http://spilled-node:8787
+      SPILLED_DISABLE_AUTO_TUNNEL: "1"
+      SPILLED_DISABLE_MANAGED_GATEWAY: "1"
+      SPILLED_DISABLE_PRIVATE_SETUP: "1"
+      CONVEX_SITE_URL: http://spilled-convex:3211
+      TMDB_API_READ_TOKEN: ${TMDB_API_READ_TOKEN:-}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      TVDB_API_KEY: ${TVDB_API_KEY:-}
+      SPILLED_DOWNLOAD_MAX_CONCURRENCY: "1"
+      SPILLED_DOWNLOAD_DISK_RESERVE_BYTES: "17179869184"
+      SPILLED_DOWNLOAD_MAX_VAULT_BYTES: "64424509440"
+      SPILLED_DOWNLOAD_MAX_FILE_BYTES: "8589934592"
+  convex:
+    <<: *runtime
+    container_name: spilled-convex
+    image: ghcr.io/get-convex/convex-backend@sha256:d715e9ec088784407ca4ba2d3db592702cd328d02c76cdca3852c0018f2a76b4
+    mem_limit: 1g
+    cpus: 1
+    volumes: [convex:/convex/data]
+    environment:
+      INSTANCE_NAME: spilled-control-plane
+      INSTANCE_SECRET: ${CONVEX_INSTANCE_SECRET:?use the copied instance secret}
+      CONVEX_CLOUD_ORIGIN: http://spilled-convex:3210
+      CONVEX_SITE_ORIGIN: http://spilled-convex:3211
+      DISABLE_BEACON: "true"
+      REDACT_LOGS_TO_CLIENT: "true"
+      APPLICATION_MAX_CONCURRENT_MUTATIONS: "4"
+      APPLICATION_MAX_CONCURRENT_QUERIES: "8"
+      APPLICATION_MAX_CONCURRENT_NODE_ACTIONS: "2"
+  jellyfin:
+    <<: *runtime
+    container_name: spilled-jellyfin
+    image: jellyfin/jellyfin@sha256:357724bf0ae27a672c7cbaa899db2d9abeb13dbd8657ccce750258a4c059d037
+    mem_limit: 1g
+    cpus: 2
+    ports: ["8096:8096"]
+    volumes: [jellyfin-config:/config, jellyfin-cache:/cache, media:/media:ro]
+    environment:
+      JELLYFIN_PublishedServerUrl: ${JELLYFIN_PUBLIC_URL:?required}
+      JELLYFIN_FFmpeg__probesize: 32M
+      JELLYFIN_FFmpeg__analyzeduration: "5000000"
+  postgres:
+    <<: *runtime
+    container_name: spilled-auth-postgres
+    image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    mem_limit: 384m
+    cpus: 0.5
+    volumes: [auth-postgres:/var/lib/postgresql/data]
+    environment:
+      {
+        POSTGRES_DB: authentik,
+        POSTGRES_USER: authentik,
+        POSTGRES_PASSWORD: "${PG_PASS:?required}",
+      }
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -d authentik -U authentik"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+  auth-server:
+    <<: *runtime
+    container_name: spilled-auth-server
+    image: ghcr.io/goauthentik/server@sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849
+    command: server
+    mem_limit: 1536m
+    cpus: 1
+    volumes: [auth-data:/data]
+    ports: ["19000:9000"]
+    environment: *auth-env
+    depends_on: { postgres: { condition: service_healthy } }
+  auth-worker:
+    <<: *runtime
+    container_name: spilled-auth-worker
+    image: ghcr.io/goauthentik/server@sha256:ab9b4e8cc4ab3f8d1198d2db6aeea66bafea1963b3f2843589e0d163f97d9849
+    command: worker
+    mem_limit: 1536m
+    cpus: 0.75
+    volumes: [auth-data:/data]
+    environment: *auth-env
+    depends_on: { postgres: { condition: service_healthy } }
+  auth-ldap:
+    <<: *runtime
+    container_name: spilled-auth-ldap
+    image: ghcr.io/goauthentik/ldap@sha256:7114c560be4e24dc61080fe5bd7684cf0ebf4b0a6230a8247943ffa8957b73d4
+    mem_limit: 256m
+    cpus: 0.5
+    environment:
+      AUTHENTIK_HOST: http://spilled-auth-server:9000
+      AUTHENTIK_INSECURE: "false"
+      AUTHENTIK_TOKEN: ${AUTHENTIK_LDAP_TOKEN:?use the outpost token}
+
+networks:
+  media: { name: spilled-media, external: true }
+volumes:
+  node: { name: spilled_node_v1, external: true }
+  media: { name: spilled_media_v1, external: true }
+  convex: { name: spilled_convex_v1, external: true }
+  jellyfin-config: { name: spilled_jellyfin_config_v1, external: true }
+  jellyfin-cache: { name: spilled_jellyfin_cache_v1, external: true }
+  auth-postgres: { name: spilled_auth_postgres_v1, external: true }
+  auth-data: { name: spilled_auth_data_v1, external: true }

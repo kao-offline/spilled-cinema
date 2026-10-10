@@ -1,0 +1,317 @@
+<!doctype html>
+<html>
+  <head>
+    <title>SpilledCinema</title>
+  </head>
+  <body>
+    <div
+      id="spilledPage"
+      data-role="page"
+      class="page type-interior pluginConfigurationPage"
+    >
+      <div data-role="content">
+        <div class="content-primary">
+          <h1>SpilledCinema</h1>
+          <p>
+            Browse provider feeds in the SpilledCinema channel. Imported titles
+            play through Jellyfin, with streams resolved by SpilledCinema when
+            playback starts.
+          </p>
+          <form id="spilledSettings">
+            <div class="inputContainer">
+              <label class="inputLabel" for="spilledUrl"
+                >Spilled server URL</label
+              ><input is="emby-input" id="spilledUrl" type="url" required />
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel" for="spilledPublicUrl"
+                >Jellyfin URL used by your players</label
+              ><input
+                is="emby-input"
+                id="spilledPublicUrl"
+                type="url"
+                required
+              />
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel" for="spilledLanguage"
+                >Preferred player language</label
+              ><input is="emby-input" id="spilledLanguage" required />
+            </div>
+            <label
+              ><input id="spilledDownloads" type="checkbox" /> Enable media
+              downloads</label
+            >
+            <p>
+              Streaming imports save metadata only. Enable downloads only when
+              you want a local media copy.
+            </p>
+            <button
+              is="emby-button"
+              type="submit"
+              class="raised button-submit block"
+            >
+              <span>Save settings</span>
+            </button>
+          </form>
+          <h2>Search and import</h2>
+          <form id="spilledSearch">
+            <div class="selectContainer">
+              <label class="selectLabel" for="spilledProvider">Provider</label
+              ><select is="emby-select" id="spilledProvider"></select>
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel" for="spilledQuery">Title</label
+              ><input
+                is="emby-input"
+                id="spilledQuery"
+                minlength="2"
+                maxlength="200"
+                required
+              />
+            </div>
+            <button is="emby-button" type="submit" class="raised">
+              <span>Search</span>
+            </button>
+          </form>
+          <p id="spilledMessage" role="status"></p>
+          <div id="spilledResults"></div>
+          <h2>Imported library</h2>
+          <button is="emby-button" id="spilledReload" class="raised">
+            Refresh library
+          </button>
+          <div id="spilledLibrary"></div>
+          <h2>Downloads</h2>
+          <button is="emby-button" id="spilledJobs" class="raised">
+            Refresh downloads
+          </button>
+          <div id="spilledDownloadList"></div>
+        </div>
+      </div>
+      <script>
+        (function () {
+          const id = "6bf9cdcb-c6b0-45d4-8a7b-d9d1d3df3b88";
+          const page = document.querySelector("#spilledPage");
+          const find = (selector) => page.querySelector(selector);
+          async function api(path, body) {
+            return ApiClient.ajax({
+              type: body ? "POST" : "GET",
+              url: ApiClient.getUrl("SpilledCinema/" + path),
+              dataType: "json",
+              contentType: "application/json",
+              data: body ? JSON.stringify(body) : undefined,
+            });
+          }
+          function message(text) {
+            find("#spilledMessage").textContent = text;
+          }
+          async function run(fn) {
+            Dashboard.showLoadingMsg();
+            try {
+              await fn();
+            } catch (error) {
+              message(
+                "Request failed. Check the SpilledCinema server and provider status.",
+              );
+              console.error("SpilledCinema request failed", error.status);
+            } finally {
+              Dashboard.hideLoadingMsg();
+            }
+          }
+          function button(label, action) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "raised emby-button";
+            b.textContent = label;
+            b.onclick = () => run(action);
+            return b;
+          }
+          async function library() {
+            const rows = await api("Library");
+            const target = find("#spilledLibrary");
+            target.replaceChildren();
+            for (const row of rows) {
+              const section = document.createElement("section");
+              const heading = document.createElement("h3");
+              heading.textContent = row.show.title;
+              section.append(heading);
+              section.append(
+                button("Refresh title", async () => {
+                  await api("Import", {
+                    moduleId:
+                      row.referenceModule || decode(row.reference).Module,
+                    slug: decode(row.reference).Slug,
+                    mediaType: decode(row.reference).MediaType,
+                    refresh: true,
+                  });
+                  await library();
+                  message("Title refreshed.");
+                }),
+              );
+              for (const episode of row.show.episodes || []) {
+                const line = document.createElement("p");
+                line.textContent =
+                  episode.episodeTitle || episode.episodeCode || row.show.title;
+                const ref = {
+                  ...decode(row.reference),
+                  Kind: "episode",
+                  Episode: episode.id,
+                };
+                line.append(
+                  button("Resolve playback", async () => {
+                    await api(
+                      "Resolve?reference=" + encodeURIComponent(encode(ref)),
+                    );
+                    message(
+                      "Stream resolved. Open this title in the SpilledCinema channel to play.",
+                    );
+                  }),
+                );
+                line.append(
+                  button("Download", async () => {
+                    await api("Download", { reference: encode(ref) });
+                    await jobs();
+                    message("Download queued.");
+                  }),
+                );
+                section.append(line);
+              }
+              target.append(section);
+            }
+          }
+          function decode(value) {
+            return JSON.parse(
+              new TextDecoder().decode(
+                Uint8Array.from(
+                  atob(value.replace(/-/g, "+").replace(/_/g, "/")),
+                  (x) => x.charCodeAt(0),
+                ),
+              ),
+            );
+          }
+          function encode(value) {
+            return btoa(
+              String.fromCharCode(
+                ...new TextEncoder().encode(JSON.stringify(value)),
+              ),
+            )
+              .replace(/=/g, "")
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_");
+          }
+          page.addEventListener("pageshow", () =>
+            run(async () => {
+              try {
+                const config = await ApiClient.getPluginConfiguration(id);
+                find("#spilledUrl").value = config.ServerUrl;
+                find("#spilledPublicUrl").value = config.PublicJellyfinUrl;
+                find("#spilledLanguage").value = config.PreferredLanguage;
+                find("#spilledDownloads").checked = config.EnableDownloads;
+              } catch {
+                find("#spilledSettings").hidden = true;
+                find("#spilledJobs").hidden = true;
+              }
+              const data = await api("Providers");
+              const select = find("#spilledProvider");
+              select.replaceChildren();
+              for (const provider of data.modules || []) {
+                const option = document.createElement("option");
+                option.value = provider.moduleId;
+                option.textContent = provider.displayName;
+                select.append(option);
+              }
+              await library();
+            }),
+          );
+          find("#spilledSettings").onsubmit = (event) => {
+            event.preventDefault();
+            run(async () => {
+              const config = await ApiClient.getPluginConfiguration(id);
+              config.ServerUrl = find("#spilledUrl").value;
+              config.PublicJellyfinUrl = find("#spilledPublicUrl").value;
+              config.PreferredLanguage = find("#spilledLanguage").value;
+              config.EnableDownloads = find("#spilledDownloads").checked;
+              await ApiClient.updatePluginConfiguration(id, config);
+              message("Settings saved.");
+            });
+          };
+          find("#spilledSearch").onsubmit = (event) => {
+            event.preventDefault();
+            run(async () => {
+              const moduleId = find("#spilledProvider").value;
+              const data = await api(
+                "Search?moduleId=" +
+                  encodeURIComponent(moduleId) +
+                  "&query=" +
+                  encodeURIComponent(find("#spilledQuery").value),
+              );
+              const target = find("#spilledResults");
+              target.replaceChildren();
+              for (const result of data.results || []) {
+                const line = document.createElement("p");
+                line.textContent = result.title;
+                line.append(
+                  button("Import", async () => {
+                    await api("Import", {
+                      moduleId,
+                      slug: result.importSlug || result.slug,
+                      mediaType: result.mediaType || "serial",
+                    });
+                    await library();
+                    message(
+                      "Imported. Open the SpilledCinema channel to play.",
+                    );
+                  }),
+                );
+                target.append(line);
+              }
+              message((data.results || []).length + " titles found.");
+            });
+          };
+          find("#spilledReload").onclick = () => run(library);
+          async function jobs() {
+            const data = await api("Downloads");
+            const target = find("#spilledDownloadList");
+            target.replaceChildren();
+            for (const job of data.jobs || []) {
+              const line = document.createElement("p");
+              line.textContent =
+                job.episodeId +
+                " — " +
+                job.state +
+                " " +
+                Math.round(job.percent || 0) +
+                "%";
+              if (["queued", "resolving", "downloading"].includes(job.state))
+                line.append(
+                  button("Cancel", async () => {
+                    await api("Downloads/Cancel", { episodeId: job.episodeId });
+                    await jobs();
+                    message("Download cancelled.");
+                  }),
+                );
+              target.append(line);
+            }
+            for (const file of data.files || []) {
+              const line = document.createElement("p");
+              line.textContent = file;
+              target.append(line);
+            }
+            for (const episodeId of data.episodeIds || []) {
+              target.append(
+                button("Delete download: " + episodeId, async () => {
+                  if (!window.confirm("Delete this downloaded media file?"))
+                    return;
+                  await api("Downloads/Delete", { episodeId });
+                  await jobs();
+                  message("Downloaded media deleted.");
+                }),
+              );
+            }
+          }
+          find("#spilledJobs").onclick = () => run(jobs);
+        })();
+      </script>
+    </div>
+  </body>
+</html>

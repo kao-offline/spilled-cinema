@@ -5,6 +5,8 @@ import { basename, dirname, resolve, sep } from "node:path";
 import { execFile, type ChildProcess } from "node:child_process";
 import { request as httpsRequest } from "node:https";
 import { Worker } from "node:worker_threads";
+import { checkDownloadBudget, freeDiskBytes, readDownloadBudget, vaultSize } from "./download-budget";
+import { getFfmpegHlsOptions } from "./ffmpeg-options";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "../../../server/src/player-resolver";
 
 const USER_AGENT =
@@ -3128,7 +3130,8 @@ function createTemporaryOutputPath(outputPath: string) {
   return outputPath.replace(/\.mp4$/i, ".part.mp4");
 }
 
-function runFfmpeg(job: FullDownloadJob, streamUrl: string, outputPath: string, refererUrl?: string): Promise<void> {
+async function runFfmpeg(job: FullDownloadJob, streamUrl: string, outputPath: string, refererUrl?: string): Promise<void> {
+  const hlsOptions = inferStreamType(streamUrl) === "hls" ? ["-allowed_extensions", "ALL", ...await getFfmpegHlsOptions()] : [];
   return new Promise((resolvePromise, rejectPromise) => {
     let totalDuration: number | null = null;
     let lastError = "";
@@ -3140,10 +3143,7 @@ function runFfmpeg(job: FullDownloadJob, streamUrl: string, outputPath: string, 
       USER_AGENT,
       "-protocol_whitelist",
       "file,http,https,tcp,tls,crypto,data",
-      "-allowed_extensions",
-      "ALL",
-      "-extension_picky",
-      "0",
+      ...hlsOptions,
       ...(refererUrl ? ["-referer", refererUrl] : []),
       "-i",
       streamUrl,
@@ -3546,6 +3546,7 @@ export async function resolvePlaybackStream(input: PlaybackResolveInput): Promis
   return resolution;
 }
 
+let downloadAdmissions = 0;
 export async function createFullDownloadJob(input: CreateDownloadInput): Promise<FullDownloadJob> {
   const existingJob = Array.from(jobs.values()).find(
     (entry) => entry.episodeId === input.episodeId && isActiveDownloadState(entry.state),
@@ -3554,7 +3555,19 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
     return existingJob;
   }
 
-  const job = createJob(input.episodeId);
+  const budget = readDownloadBudget();
+  checkDownloadBudget(budget, { active: downloadAdmissions + Array.from(jobs.values()).filter((entry) => isActiveDownloadState(entry.state)).length, freeBytes: Infinity, vaultBytes: 0, fileBytes: 0 });
+  downloadAdmissions += 1;
+  let initialVaultBytes = 0;
+  let job: FullDownloadJob;
+  try {
+    if (budget.reserveBytes || budget.vaultBytes || budget.fileBytes) {
+      await mkdir(getDownloadsFolder(), { recursive: true });
+      initialVaultBytes = await vaultSize(getDownloadsFolder());
+      checkDownloadBudget(budget, { active: 0, freeBytes: await freeDiskBytes(getDownloadsFolder()), vaultBytes: initialVaultBytes, fileBytes: 0 });
+    }
+    job = createJob(input.episodeId);
+  } finally { downloadAdmissions -= 1; }
 
   void (async () => {
     const outputPath = createOutputPath(input);
@@ -3564,6 +3577,24 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
       outputPath,
       temporaryOutputPath,
     });
+    let budgetError: string | null = null;
+    let checkingBudget = false;
+    const budgetTimer = budget.reserveBytes || budget.vaultBytes || budget.fileBytes ? setInterval(() => {
+      if (checkingBudget || budgetError) return;
+      checkingBudget = true;
+      void (async () => {
+        try {
+          const fileBytes = await stat(temporaryOutputPath).then((info) => info.size, () => 0);
+          checkDownloadBudget(budget, { active: 0, freeBytes: await freeDiskBytes(getDownloadsFolder()), vaultBytes: initialVaultBytes + fileBytes, fileBytes });
+        } catch (error) {
+          if (!isActiveDownloadState(job.state)) return;
+          budgetError = error instanceof Error ? error.message : "Download storage check failed.";
+          cancelRequestedJobs.add(job.id);
+          activeFfmpegProcesses.get(job.id)?.kill("SIGKILL");
+        } finally { checkingBudget = false; }
+      })();
+    }, 2_000) : null;
+    budgetTimer?.unref();
 
     try {
       const mergedCandidates = [
@@ -3659,6 +3690,10 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
           await runFfmpeg(job, resolvedTarget.streamUrl, temporaryOutputPath, resolvedTarget.refererUrl || selectedEmbedUrl);
           ensureNotCanceled(job.id);
 
+          if (budget.reserveBytes || budget.vaultBytes || budget.fileBytes) {
+            const fileBytes = (await stat(temporaryOutputPath)).size;
+            checkDownloadBudget(budget, { active: 0, freeBytes: await freeDiskBytes(getDownloadsFolder()), vaultBytes: initialVaultBytes + fileBytes, fileBytes });
+          }
           await removeFileIfExists(outputPath);
           await rename(temporaryOutputPath, outputPath);
           ensureNotCanceled(job.id);
@@ -3715,11 +3750,12 @@ export async function createFullDownloadJob(input: CreateDownloadInput): Promise
       updateJob(job, {
         state: "failed",
         message: canceled ? "Download canceled" : "Download failed",
-        error: canceled ? "Canceled by user" : error instanceof Error ? error.message : "Unknown error",
+        error: budgetError ?? (canceled ? "Canceled by user" : error instanceof Error ? error.message : "Unknown error"),
       });
       await removeFileIfExists(temporaryOutputPath);
       await removeFileIfExists(outputPath);
     } finally {
+      if (budgetTimer) clearInterval(budgetTimer);
       activeFfmpegProcesses.delete(job.id);
       activeOutputPaths.delete(job.id);
       cancelRequestedJobs.delete(job.id);
