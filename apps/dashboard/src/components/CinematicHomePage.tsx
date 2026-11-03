@@ -401,7 +401,7 @@ export function CinematicHomePage({
 
   return (
     <div className="redesign-home relative isolate min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
-      <ArtworkAtmosphere src={featuredShow ? getOverlayBannerArtwork(featuredShow).bannerUrl : null} />
+      {homeTab === "home" ? <ArtworkAtmosphere src={featuredShow ? getOverlayBannerArtwork(featuredShow).bannerUrl : null} /> : null}
       <div className={tvModeEnabled ? "redesign-tv-home" : undefined}>
         <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 

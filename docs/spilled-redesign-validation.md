@@ -56,6 +56,19 @@ stream disconnection and authenticated-frame tampering.
 
 ## Verification limits
 
+### Full-page artwork continuation follow-up
+
+Read the enabled backdrop layers directly from pen.dev: Home `yhj27` uses an
+extended artwork image, details `uC5rI` uses 110px blur with .62 opacity and a
+contrast tint, and catalog `QCXx2` uses a full-height extended image plus
+`#08111a78`. The shared atmosphere now extends actual artwork across the page
+with heavy blur and these per-surface tints, instead of cover-cropping it into a
+narrow strip or relying on faint palette glows. Primary hero artwork keeps its
+aspect ratio. Home's background is unmounted on provider tabs so it cannot bleed
+behind their own artwork. Catalog's separate opaque hero fade is removed.
+Verified full-height backgrounds with real Home, SvetSerialu and Bombuj data,
+desktop and phone sizing, and the shared series/movie details component.
+
 The preview lacks working shared artwork credentials: the artwork service returns
 Unauthorized, and official TMDB trailer lookup consequently falls back to the
 poster. Live trailer playback and artwork enrichment need a configured TMDB key

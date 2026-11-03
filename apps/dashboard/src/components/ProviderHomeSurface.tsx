@@ -167,13 +167,12 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
 
   return (
     <div className="cinema-catalog min-h-screen text-white">
-      <ArtworkAtmosphere src={heroArtwork} />
+      <ArtworkAtmosphere src={heroArtwork} variant="catalog" />
       <section className={tv
         ? "cinema-catalog-hero cinema-catalog-tv"
         : "cinema-catalog-hero"}>
         {heroArtwork ? <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-30 blur-[2px]" style={balancedBackgroundImage(heroArtwork, "backdrop-hero")} /> : null}
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_25%,rgba(135,103,67,.26),transparent_35%),linear-gradient(90deg,rgba(5,6,10,.94),rgba(5,6,10,.45),rgba(5,6,10,.82))]" />
-        <div className="absolute inset-0 bg-gradient-to-b from-[#05060a]/25 via-transparent to-[#05060a]" />
+        <div className="cinema-catalog-hero-shade absolute inset-0" />
         <div className="cinema-catalog-search">
           <h1 className={tv ? "text-[clamp(1.6rem,2.2vw,2.4rem)] font-black tracking-[-0.035em] text-white" : "text-3xl font-black tracking-[-.045em] text-white sm:text-5xl"}>{config.title}</h1>
           <label className="cinema-catalog-search-input">

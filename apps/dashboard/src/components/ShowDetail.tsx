@@ -365,7 +365,7 @@ export function ShowDetail({
 
   return (
     <section className="redesign-details relative overflow-hidden bg-[#08090d] pb-28 text-white lg:pb-0">
-      <ArtworkAtmosphere src={heroBackdrop} />
+      <ArtworkAtmosphere src={heroBackdrop} variant="details" />
       <div className="cinema-detail-hero animate-detail-hero-open relative" style={{ viewTransitionName: `spilled-hero-${show.slug}` }}>
         {heroBackdrop ? (
           <div className="cinema-detail-artwork absolute inset-0">

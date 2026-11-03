@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { deriveArtworkPalette } from "../lib/artwork-palette";
 import { balanceImageResolution } from "../lib/image-resolution";
 
-export function ArtworkAtmosphere({ src }: { src: string | null | undefined }) {
+export function ArtworkAtmosphere({ src, variant = "home" }: { src: string | null | undefined; variant?: "home" | "catalog" | "details" }) {
   const [palette, setPalette] = useState<string[]>([]);
   useEffect(() => {
     let canceled = false;
@@ -28,8 +28,9 @@ export function ArtworkAtmosphere({ src }: { src: string | null | undefined }) {
     "--art-center": palette[1] ?? "#0b111c",
     "--art-right": palette[2] ?? "#0b111c",
   } as CSSProperties;
-  return <div className="cinema-atmosphere" style={style} aria-hidden="true">
-    {src ? <div className="cinema-atmosphere-image" style={{ backgroundImage: `url(${JSON.stringify(src)})` }} /> : null}
+  return <div className="cinema-atmosphere" data-variant={variant} style={style} aria-hidden="true">
     <div className="cinema-atmosphere-glow" />
+    {src ? <div className="cinema-atmosphere-image" style={{ backgroundImage: `url(${JSON.stringify(balanceImageResolution(src, "backdrop-hero") ?? src)})` }} /> : null}
+    <div className="cinema-atmosphere-tint" />
   </div>;
 }

@@ -321,15 +321,24 @@
 .episode-language-popover button:focus-visible { outline: 2px solid #ecf7ff; outline-offset: 2px; }
 
 .episode-languages:has(.episode-languages-more) { padding-block: 8px; gap: 4px; }
-.cinema-atmosphere { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
-.cinema-atmosphere-image { position: absolute; inset: -80px; background-size: cover; background-position: center; filter: blur(100px) saturate(.8); opacity: .18; }
+.cinema-atmosphere { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: #0c131d; }
+/* Only the blurred continuation is extended. Hero artwork keeps its own framing.
+   Cover would crop a tall catalog to one narrow image strip, losing its colors. */
+.cinema-atmosphere-image { position: absolute; inset: -80px; background-size: 100% 100%; background-repeat: no-repeat; background-position: center; filter: blur(70px) saturate(.9); opacity: .9; }
+.cinema-atmosphere-tint { position: absolute; inset: 0; background: linear-gradient(90deg,#05060aeb,#05060a80 50%,#05060a38),linear-gradient(180deg,#05060a3d,#05060a0f 50%,transparent); }
+.cinema-atmosphere[data-variant="catalog"] .cinema-atmosphere-tint { background: #08111a78; }
+.cinema-atmosphere[data-variant="details"] { background: #0c1420; }
+.cinema-atmosphere[data-variant="details"] .cinema-atmosphere-image { filter: blur(110px); opacity: .62; }
+.cinema-atmosphere[data-variant="details"] .cinema-atmosphere-tint { background: #0b1019a8; }
+.cinema-catalog-hero-shade { background: linear-gradient(90deg,#05060ab3,#05060a33 55%,#05060a66); }
+.cinema-catalog-hero > .cinema-catalog-hero-shade { mask-image: none; }
 .cinema-atmosphere-glow { position: absolute; inset: 0; background: radial-gradient(ellipse at 12% 45%,var(--art-left),transparent 65%),radial-gradient(ellipse at 52% 50%,var(--art-center),transparent 65%),radial-gradient(ellipse at 100% 45%,var(--art-right),transparent 70%); opacity: .8; }
 @property --art-left { syntax: '<color>'; inherits: true; initial-value: #0b111c; }
 @property --art-center { syntax: '<color>'; inherits: true; initial-value: #0b111c; }
 @property --art-right { syntax: '<color>'; inherits: true; initial-value: #0b111c; }
 .cinema-atmosphere { transition: --art-left 1.5s ease,--art-center 1.5s ease,--art-right 1.5s ease; }
 @media (prefers-reduced-motion: reduce) { .cinema-atmosphere { transition: none; } }
-@media (prefers-reduced-transparency: reduce) { .cinema-atmosphere { opacity: .3; } }
+@media (prefers-reduced-transparency: reduce) { .cinema-atmosphere[data-variant] .cinema-atmosphere-tint { background: #08111ac9; } .cinema-atmosphere[data-variant] .cinema-atmosphere-image { opacity: .35; } }
 
 .cinema-player-settings > div:first-child > button { width: 44px; height: 44px; min-height: 44px; }
 
