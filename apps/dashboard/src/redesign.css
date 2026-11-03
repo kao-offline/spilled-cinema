@@ -331,7 +331,6 @@
 .cinema-atmosphere[data-variant="details"] .cinema-atmosphere-image { filter: blur(110px); opacity: .62; }
 .cinema-atmosphere[data-variant="details"] .cinema-atmosphere-tint { background: #0b1019a8; }
 .cinema-catalog-hero-shade { background: linear-gradient(90deg,#05060ab3,#05060a33 55%,#05060a66); }
-.cinema-catalog-hero > .cinema-catalog-hero-shade { mask-image: none; }
 .cinema-atmosphere-glow { position: absolute; inset: 0; background: radial-gradient(ellipse at 12% 45%,var(--art-left),transparent 65%),radial-gradient(ellipse at 52% 50%,var(--art-center),transparent 65%),radial-gradient(ellipse at 100% 45%,var(--art-right),transparent 70%); opacity: .8; }
 @property --art-left { syntax: '<color>'; inherits: true; initial-value: #0b111c; }
 @property --art-center { syntax: '<color>'; inherits: true; initial-value: #0b111c; }
