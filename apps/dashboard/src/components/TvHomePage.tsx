@@ -12,7 +12,7 @@ import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import type { RecommendedWatchItem } from "../lib/home-personalization";
 import { balancedBackgroundImage, balanceImageResolution } from "../lib/image-resolution";
 import {
-  getOverlayBannerArtwork,
+  getHomeHeroArtwork,
   getShowArtwork,
   getTitleDescription,
   getTitleMetadataParts,
@@ -154,9 +154,9 @@ type TvHomePageProps = {
 
 function railArtwork(item: HomepageRailItem) {
   if (item.kind === "local") {
-    return item.bannerWithLogoUrl ?? item.homepageBannerUrl ?? item.backdropUrl ?? item.bannerUrl ?? item.homepagePosterUrl ?? item.posterUrl ?? null;
+    return item.bannerWithLogoUrl ?? item.homepageBannerUrl ?? null;
   }
-  return item.backdropUrl ?? item.bannerUrl ?? item.posterUrl ?? null;
+  return item.bannerWithLogoUrl ?? null;
 }
 
 function TvRailCard({ item, onSelect }: { item: HomepageRailItem; onSelect: () => void }) {
@@ -251,7 +251,7 @@ function TvUpNext({ items, onPlay }: { items: RecommendedWatchItem[]; onPlay: (i
 }
 
 export function TvHomePage(props: TvHomePageProps) {
-  const artwork = props.featuredShow ? getOverlayBannerArtwork(props.featuredShow) : null;
+  const artwork = props.featuredShow ? getHomeHeroArtwork(props.featuredShow) : null;
   const metadata = props.featuredShow ? getTitleMetadataParts(props.featuredShow, { fallback: null }).map((part) => part.label).slice(0, 4) : [];
   const description = props.featuredShow ? getTitleDescription(props.featuredShow, null) : null;
 
@@ -267,7 +267,7 @@ export function TvHomePage(props: TvHomePageProps) {
       />
 
       <section className="relative min-h-[min(48rem,78vh)] overflow-hidden px-[5vw] pb-[clamp(5rem,8vh,8rem)] pt-[clamp(9rem,13vh,12rem)]">
-        <div className="tv-hero-drift absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(artwork?.bannerUrl ?? null, "backdrop-hero")} />
+        <div className="tv-hero-drift absolute inset-0 bg-cover bg-center" style={balancedBackgroundImage(artwork?.imageUrl ?? null, "backdrop-hero")} />
         <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,7,11,.97)_0%,rgba(5,7,11,.75)_38%,rgba(5,7,11,.2)_75%,rgba(5,7,11,.55)_100%)]" />
         <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-[#05070b]" />
 

@@ -20,12 +20,12 @@ export function HomeRail({ rail, onOpenLocal, onImportRemote, layout = "rail" }:
     // owns its own rails with instant D-pad scrolling, so this component
     // must not read the global tv-mode flag — that coupling leaked TV
     // behavior into the desktop UI.
-    node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: "smooth" });
+    node.scrollBy({ left: direction * Math.max(320, node.clientWidth * 0.82), behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
   };
 
   return (
-    <section className="ui-virtual-section relative py-3">
-      <div className="mb-3 flex items-center justify-between px-5 sm:px-10 lg:px-16">
+    <section className="cinema-home-rail ui-virtual-section relative py-3">
+      <div className="cinema-rail-heading mb-3 flex items-center justify-between px-5 sm:px-10 lg:px-16">
         <h2 className="text-lg font-black tracking-normal text-white sm:text-xl">{rail.title}</h2>
         <div className={layout === "grid" ? "hidden" : "hidden items-center gap-2 md:flex"}>
           <button type="button" onClick={() => scrollBy(-1)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white/8 text-white/70 hover:bg-white/14" aria-label="Scroll left">
@@ -36,7 +36,7 @@ export function HomeRail({ rail, onOpenLocal, onImportRemote, layout = "rail" }:
           </button>
         </div>
       </div>
-      <div ref={scrollerRef} className={layout === "grid" ? "grid grid-cols-2 gap-x-4 gap-y-7 px-5 pb-8 sm:grid-cols-3 sm:px-10 md:grid-cols-4 lg:grid-cols-5 lg:px-16 xl:grid-cols-6 2xl:grid-cols-7" : "no-scrollbar flex gap-4 overflow-x-auto px-5 pb-5 sm:px-10 lg:px-16"}>
+      <div ref={scrollerRef} className={layout === "grid" ? "cinema-catalog-grid grid grid-cols-2 gap-x-4 gap-y-7 px-5 pb-8 sm:grid-cols-3 sm:px-10 md:grid-cols-4 lg:grid-cols-5 lg:px-16" : "cinema-rail-items no-scrollbar flex gap-4 overflow-x-auto px-5 pb-5 sm:px-10 lg:px-16"}>
         {rail.items.map((item) => (
           <HomeMediaCard
             key={item.id}

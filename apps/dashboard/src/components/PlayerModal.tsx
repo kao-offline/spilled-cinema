@@ -1,4 +1,4 @@
-import { ArrowLeft, Captions, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, Volume2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, List, LoaderCircle, RotateCw, Server, Trash2, Volume2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource, SubtitleSource } from "../lib/types";
@@ -266,7 +266,6 @@ export function PlayerModal({
   episode,
   show,
   onClose,
-  onHome,
   onSelectPlayer,
   onSelectEpisode,
   onSetEpisodeWatched,
@@ -368,12 +367,13 @@ export function PlayerModal({
       ? formatEpisodeTitle(effectiveEpisode)
       : "Episode";
   const modalSubheading = isMovieEntry ? effectiveEpisode?.showTitle ?? "" : `${effectiveEpisode?.showTitle} - Season ${effectiveEpisode?.seasonNumber} - Episode ${effectiveEpisode?.episodeNumber ?? "?"}`;
+  const phonePlayerContext = isMovieEntry ? effectiveEpisode?.showTitle : `${effectiveEpisode?.showTitle} · S${effectiveEpisode?.seasonNumber} E${effectiveEpisode?.episodeNumber ?? "?"}`;
   const pageTitle = modalHeading;
   const showMetadata = getShowMetadata(show);
   const pageSubtitle = isMovieEntry ? [showMetadata?.years ?? show?.years, activePlayer?.language].filter(Boolean).join(" - ") : modalSubheading;
   const pageDescription = getTitleDescription(show);
   const showArtwork = getShowArtwork(show);
-  const pageArtwork = showArtwork.backdropUrl ?? showArtwork.bannerUrl ?? effectiveEpisode?.posterUrl ?? showArtwork.posterUrl ?? null;
+  const pageArtwork = ((selectedSelectorSeason ?? episode?.seasonNumber) === effectiveEpisode?.seasonNumber && effectiveEpisode?.episodeNumber ? episodePreviews[effectiveEpisode.episodeNumber]?.stillUrl : null) ?? effectiveEpisode?.posterUrl ?? showArtwork.backdropUrl ?? showArtwork.bannerUrl ?? showArtwork.posterUrl ?? null;
   const pageLogo = showArtwork.clearLogoUrl ?? null;
   const pageMetadataParts = getTitleMetadataParts(show, { episode: effectiveEpisode });
   const localPlaybackSrc = vaultPlaybackUrl ?? activePlayer?.streamUrl ?? activePlayer?.embedUrl ?? "";
@@ -869,7 +869,7 @@ export function PlayerModal({
       .catch(() => { if (!canceled) setEpisodePreviews({}); })
       .finally(() => { if (!canceled) setEpisodePreviewsLoading(false); });
     return () => { canceled = true; };
-  }, [show?.slug, previewSeason]);
+  }, [show?.slug, show?.artworkRepairVersion, previewSeason]);
 
   useEffect(() => {
     if (!episodeSelectorOpen || !episode || !show) return;
@@ -902,6 +902,15 @@ export function PlayerModal({
   const activeDownloadJob = fullDownloadJobsByEpisode?.[effectiveEpisode.id];
   const activeDownloadBusy = Boolean(activeDownloadJob && ["queued", "resolving", "downloading"].includes(activeDownloadJob.state));
   const activeDownloaded = Boolean(downloadedEpisodeIds?.has(effectiveEpisode.id) || activeDownloadJob?.state === "completed");
+  const downloadAction = onStartFullDownload ? {
+    label: activeDownloadBusy ? "Cancel download" : activeDownloaded ? "Remove downloaded file" : "Download episode",
+    onClick: () => {
+      if (activeDownloadBusy) onCancelFullDownload?.(effectiveEpisode);
+      else if (activeDownloaded) onDeleteFullDownload?.(effectiveEpisode);
+      else onStartFullDownload(effectiveEpisode);
+    },
+  } : undefined;
+
 
   const playerTransitionKey = show?.slug ?? effectiveEpisode.showSlug ?? null;
   return (
@@ -931,6 +940,9 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
+            onOpenServer={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((value) => !value); }}
+            onOpenEpisodes={!isMovieEntry ? () => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((value) => !value); } : undefined}
+            downloadAction={downloadAction}
             className="h-full min-h-0"
             subtitleTracks={activeSubtitleTracks}
             preferredSubtitleId={selectedSubtitleOption?.id ?? null}
@@ -954,6 +966,9 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
+            onOpenServer={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((value) => !value); }}
+            onOpenEpisodes={!isMovieEntry ? () => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((value) => !value); } : undefined}
+            downloadAction={downloadAction}
             className="h-full min-h-0"
             subtitleTracks={activeSubtitleTracks}
             preferredSubtitleId={selectedSubtitleOption?.id ?? null}
@@ -988,17 +1003,16 @@ export function PlayerModal({
         )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between px-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-7 lg:px-10 lg:pt-5">
+      <div data-universal={Boolean(activeIsLocal || remotePlaybackSrc)} className="cinema-player-header pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between px-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-7 lg:px-10 lg:pt-5">
         <div className="pointer-events-auto flex items-center gap-2.5">
           <button onClick={onClose} className="spilled-glass-icon h-10 w-10" aria-label="Back to episode detail">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <button onClick={onHome} className="spilled-glass-icon h-10 w-10" aria-label="Go to homepage">
-            <Home className="h-4 w-4" />
-          </button>
+
         </div>
 
         <div className="pointer-events-none absolute left-1/2 top-[max(1.25rem,env(safe-area-inset-top))] max-w-[52vw] -translate-x-1/2 truncate px-3 text-center text-sm font-black text-white drop-shadow-lg sm:max-w-[60vw] sm:text-base">
+          <small className="cinema-player-context">{phonePlayerContext}</small>
           {pageTitle}
         </div>
 
@@ -1032,9 +1046,9 @@ export function PlayerModal({
                 </button>
               </div>
             ) : null}
-            <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
-              <Settings className="h-4 w-4" />
-            </button>
+            {!(activeIsLocal || remotePlaybackSrc) ? <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Server">
+              <Server className="h-4 w-4" />
+            </button> : null}
             {!isMovieEntry ? (
               <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
                 <List className="h-4 w-4" />
@@ -1096,7 +1110,7 @@ export function PlayerModal({
                   if (isCurrent) { setEpisodeSelectorOpen(false); return; }
                   setEpisodeTransitioning(true);
                   window.setTimeout(() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); window.setTimeout(() => setEpisodeTransitioning(false), 80); }, 280);
-                }} className={clsx("group absolute left-1/2 top-1/2 isolate aspect-video w-full overflow-hidden rounded-lg bg-black text-left shadow-2xl outline-none transition-all duration-500 ease-out", isFocused ? "border-2 border-red-600" : "border border-white/5")} style={{
+                }} className={clsx("group absolute left-1/2 top-1/2 isolate aspect-video w-full overflow-hidden rounded-lg bg-black text-left shadow-2xl outline-none transition-all duration-500 ease-out", isFocused ? "border-2 border-[#a9d8ff]" : "border border-white/5")} style={{
                   zIndex: 10 - depth,
                   opacity: 1,
                   transform: `translate(calc(-50% + ${depth * 34}px), calc(-50% + ${offset * carouselCardStep}px)) scale(${depth === 0 ? 1 : depth === 1 ? 0.9 : 0.82})`,

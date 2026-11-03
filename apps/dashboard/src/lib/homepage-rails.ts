@@ -27,6 +27,7 @@ export type HomepageRailItem =
       posterUrl?: string | null;
       backdropUrl?: string | null;
       bannerUrl?: string | null;
+      bannerWithLogoUrl?: string | null;
       provider: string;
       importSlug: string;
       mediaType: "movie" | "serial";
@@ -80,6 +81,7 @@ function remoteRailItem(item: ExploreItem): HomepageRailItem {
     posterUrl: item.posterUrl ?? null,
     backdropUrl: item.backdropUrl ?? null,
     bannerUrl: (item as ExploreItem & { bannerUrl?: string | null }).bannerUrl ?? null,
+    bannerWithLogoUrl: item.bannerWithLogoUrl ?? null,
     provider: item.provider,
     importSlug: item.importSlug,
     mediaType: item.mediaType,

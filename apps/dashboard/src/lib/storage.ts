@@ -11,6 +11,7 @@ import { archiveImportedShow } from "./import-archive";
 import { HOMEPAGE_ARTWORK_VERSION } from "./import-client";
 import { getIntegrationById, type IntegrationId } from "./integrations";
 import { balanceImageResolution } from "./image-resolution";
+import { getShowArtwork } from "./media-library";
 
 const STORAGE_KEY = "spilled-library.state.v1";
 const STORAGE_META_KEY = "spilled-library.state-meta.v1";
@@ -584,6 +585,8 @@ function mergeProviderMatches(existingShow: ImportedShow, nextShow: ImportedShow
 }
 
 function mergeShowArtwork(existingShow: ImportedShow, nextShow: ImportedShow): NonNullable<ImportedShow["artwork"]> {
+  const repaired = (nextShow.artworkRepairVersion ?? 0) > (existingShow.artworkRepairVersion ?? 0) ? nextShow : existingShow;
+  if (repaired.artworkRepairVersion) return getShowArtwork(repaired);
   return {
     posterUrl: existingShow.artwork?.posterUrl ?? existingShow.posterUrl ?? nextShow.artwork?.posterUrl ?? nextShow.posterUrl ?? null,
     backdropUrl: existingShow.artwork?.backdropUrl ?? existingShow.backdropUrl ?? nextShow.artwork?.backdropUrl ?? nextShow.backdropUrl ?? null,
@@ -702,6 +705,7 @@ function mergeImportedShow(existingShow: ImportedShow, nextShow: ImportedShow): 
     left.importedAt - right.importedAt
   );
   const artwork = mergeShowArtwork(existingShow, nextShow);
+  const artworkOwner = (nextShow.artworkRepairVersion ?? 0) > (existingShow.artworkRepairVersion ?? 0) ? nextShow : existingShow;
   const metadata = mergeShowMetadata(existingShow, nextShow, episodes);
 
   return {
@@ -718,9 +722,12 @@ function mergeImportedShow(existingShow: ImportedShow, nextShow: ImportedShow): 
     posterUrl: artwork.posterUrl,
     backdropUrl: artwork.backdropUrl,
     bannerUrl: artwork.bannerUrl,
-    homepagePosterUrl: nextShow.homepagePosterUrl ?? existingShow.homepagePosterUrl,
-    homepageBannerUrl: artwork.bannerWithLogoUrl ?? nextShow.homepageBannerUrl ?? existingShow.homepageBannerUrl,
-    homepageArtworkVersion: nextShow.homepageArtworkVersion ?? existingShow.homepageArtworkVersion,
+    bannerWithLogoUrl: artwork.bannerWithLogoUrl,
+    homepagePosterUrl: artworkOwner.artworkRepairVersion ? artwork.posterUrl : nextShow.homepagePosterUrl ?? existingShow.homepagePosterUrl,
+    homepageBannerUrl: artworkOwner.artworkRepairVersion ? artwork.bannerWithLogoUrl : artwork.bannerWithLogoUrl ?? nextShow.homepageBannerUrl ?? existingShow.homepageBannerUrl,
+    homepageArtworkVersion: artworkOwner.artworkRepairVersion ? artworkOwner.homepageArtworkVersion : nextShow.homepageArtworkVersion ?? existingShow.homepageArtworkVersion,
+    artworkRepairVersion: Math.max(existingShow.artworkRepairVersion ?? 0, nextShow.artworkRepairVersion ?? 0) || undefined,
+    artworkRepairIdentity: (nextShow.artworkRepairVersion ?? 0) > (existingShow.artworkRepairVersion ?? 0) ? nextShow.artworkRepairIdentity : existingShow.artworkRepairIdentity,
     clearLogoUrl: artwork.clearLogoUrl,
     artwork,
     metadata,

@@ -10,6 +10,7 @@ import { clsx } from "clsx";
 import type { ArtworkSourceSettings, ImportedShow } from "../lib/types";
 import { searchArtworkAssetsForShow, type ArtworkAsset } from "../lib/import-client";
 import { balancedBackgroundImage } from "../lib/image-resolution";
+import { getShowArtwork } from "../lib/media-library";
 
 type ArtworkTab = "logo" | "poster" | "banner" | "wlogo-banner";
 
@@ -37,10 +38,11 @@ const artworkTabs = [
 ] as const;
 
 function currentArtworkUrl(show: ImportedShow, tab: ArtworkTab) {
-  if (tab === "poster") return show.posterUrl ?? null;
-  if (tab === "banner") return show.artwork?.bannerUrl ?? show.backdropUrl ?? show.bannerUrl ?? null;
-  if (tab === "wlogo-banner") return show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null;
-  return show.clearLogoUrl ?? null;
+  const artwork = getShowArtwork(show);
+  if (tab === "poster") return artwork.posterUrl ?? null;
+  if (tab === "banner") return artwork.bannerUrl ?? null;
+  if (tab === "wlogo-banner") return artwork.bannerWithLogoUrl ?? null;
+  return artwork.clearLogoUrl ?? null;
 }
 
 function previewClasses(tab: ArtworkTab) {
@@ -136,12 +138,13 @@ export function ArtworkPickerModal({ show, open, artworkSources, onClose, onAppl
   const applySelection = (event: React.MouseEvent) => {
     event.stopPropagation();
     if (!selectedAsset) return;
+    const current = getShowArtwork(show);
     onApplyArtwork({
-      posterUrl: artworkTab === "poster" ? selectedAsset.url : show.posterUrl ?? null,
-      backdropUrl: artworkTab === "banner" ? selectedAsset.url : show.backdropUrl ?? null,
-      bannerUrl: artworkTab === "banner" ? selectedAsset.url : show.artwork?.bannerUrl ?? show.backdropUrl ?? show.bannerUrl ?? null,
-      clearLogoUrl: artworkTab === "logo" ? selectedAsset.url : show.clearLogoUrl ?? null,
-      bannerWithLogoUrl: artworkTab === "wlogo-banner" ? selectedAsset.url : show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
+      posterUrl: artworkTab === "poster" ? selectedAsset.url : current.posterUrl ?? null,
+      backdropUrl: artworkTab === "banner" ? selectedAsset.url : current.backdropUrl ?? null,
+      bannerUrl: artworkTab === "banner" ? selectedAsset.url : current.bannerUrl ?? null,
+      clearLogoUrl: artworkTab === "logo" ? selectedAsset.url : current.clearLogoUrl ?? null,
+      bannerWithLogoUrl: artworkTab === "wlogo-banner" ? selectedAsset.url : current.bannerWithLogoUrl ?? null,
     });
     setAppliedSelection(`${artworkTab}:${selectedAsset.url}`);
   };

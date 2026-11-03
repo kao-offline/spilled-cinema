@@ -109,7 +109,8 @@ export function parseSvetLatestShowsPage(html: string) {
 export function parseSvetDetail(html: string) {
   const title = stripTags(html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ?? "");
   const altTitle = stripTags(html.match(/<h1[^>]*>[\s\S]*?<\/h1>\s*<h2[^>]*>([\s\S]*?)<\/h2>/i)?.[1] ?? "");
-  const year = html.match(/\b(19|20)\d{2}(?:\s*-\s*(19|20)\d{2})?\b/)?.[0] ?? null;
+  const yearMarkup = html.match(/<(?:span|div)[^>]*class="[^"]*\byears?\b[^"]*"[^>]*>([\s\S]*?)<\/(?:span|div)>/i)?.[1] ?? "";
+  const year = stripTags(yearMarkup).match(/\b(19|20)\d{2}(?:\s*-\s*(19|20)\d{2})?\b/)?.[0] ?? null;
   const genres = stripTags(html.match(/<\/h1>[\s\S]*?<div class="genre[^"]*">([\s\S]*?)<\/div>/i)?.[1] ?? "")
     .split(/\s{2,}|,/)
     .map((entry) => entry.trim())

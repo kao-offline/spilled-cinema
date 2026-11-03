@@ -4,7 +4,7 @@ import type { ImportedShow, LibraryEpisode } from "../lib/types";
 import { formatEpisodeTitle } from "../lib/episode-title";
 import { balanceImageResolution, balancedBackgroundImage } from "../lib/image-resolution";
 import {
-  getOverlayBannerArtwork,
+  getHeroArtwork,
   getTitleDescription,
   getTitleMetadataParts,
 } from "../lib/media-library";
@@ -32,7 +32,7 @@ export function TvShowDetail({ show, onBack, onPlayLatest, onSelectEpisode }: Tv
   const activeEpisodes = seasons.find(([season]) => season === activeSeason)?.[1] ?? [];
   const isMovie = show.episodes.length <= 1;
 
-  const artwork = getOverlayBannerArtwork(show);
+  const artwork = getHeroArtwork(show);
   const metadata = getTitleMetadataParts(show, { fallback: null })
     .map((part) => part.label)
     .slice(0, 4);
@@ -41,7 +41,7 @@ export function TvShowDetail({ show, onBack, onPlayLatest, onSelectEpisode }: Tv
   return (
     <div className="tv-detail min-h-screen overflow-x-hidden bg-[#05070b] text-white selection:bg-cyan-200/25">
       <section className="relative overflow-hidden px-[5vw] pb-12 pt-[clamp(6rem,10vh,8.5rem)]">
-        <div className="absolute inset-0 scale-[1.015] bg-cover bg-center" style={balancedBackgroundImage(artwork?.bannerUrl ?? null, "backdrop-hero")} />
+        <div className="absolute inset-0 scale-[1.015] bg-cover bg-center" style={balancedBackgroundImage(artwork?.imageUrl ?? null, "backdrop-hero")} />
         <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,7,11,.96)_0%,rgba(5,7,11,.72)_42%,rgba(5,7,11,.25)_75%,rgba(5,7,11,.55)_100%)]" />
         <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-[#05070b]" />
 

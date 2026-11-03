@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeLibraryStates, normalizeLibraryStateCandidate, readLibraryState, setEpisodeWatched, updateEpisodePlaybackProgress, updateShowCast, upsertImportedShow } from "./storage";
 import type { ImportedShow } from "./types";
+import { applyArtworkRepair } from "./artwork-repair";
 
 function createStorageStub() {
   const store = new Map<string, string>();
@@ -17,6 +18,18 @@ function createStorageStub() {
     },
   };
 }
+
+it("keeps repaired artwork when an older account or vault snapshot is merged", () => {
+  const legacy = showFixture({ slug: "slow-horses", posterUrl: "old", backdropUrl: "old", homepageBannerUrl: "old" });
+  const repaired = applyArtworkRepair(legacy, { posterUrl: "poster", bannerUrl: "banner", bannerWithLogoUrl: "wlogo" }, 7);
+  const older = normalizeLibraryStateCandidate({ shows: [legacy] });
+  const newer = normalizeLibraryStateCandidate({ shows: [repaired] });
+  for (const merged of [mergeLibraryStates(older, newer), mergeLibraryStates(newer, older)]) {
+    expect(merged.shows[0].artwork?.posterUrl).toContain("poster");
+    expect(merged.shows[0].artwork?.bannerUrl).toContain("banner");
+    expect(merged.shows[0].artworkRepairVersion).toBe(repaired.artworkRepairVersion);
+  }
+});
 
 function showFixture(overrides: Partial<ImportedShow>): ImportedShow {
   const provider = overrides.slug?.split("-")[0] ?? "vidking";

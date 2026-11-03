@@ -77,6 +77,8 @@ export type ImportedShow = {
   homepagePosterUrl?: string | null;
   homepageBannerUrl?: string | null;
   homepageArtworkVersion?: number | null;
+  artworkRepairVersion?: number;
+  artworkRepairIdentity?: string;
   clearLogoUrl?: string | null;
   artwork?: LibraryArtworkSet;
   metadata?: LibraryTitleMetadata;
@@ -199,6 +201,7 @@ export type ExploreItem = {
   posterUrl?: string | null;
   backdropUrl?: string | null;
   bannerUrl?: string | null;
+  bannerWithLogoUrl?: string | null;
   year?: string | null;
   yearLabel?: string | null;
   alternateTitles?: string[];
