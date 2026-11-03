@@ -27,7 +27,7 @@ export type EpisodePreview = {
   stillUrl: string | null;
 };
 
-export const HOMEPAGE_ARTWORK_VERSION = 6;
+export const HOMEPAGE_ARTWORK_VERSION = 7;
 
 async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
   type TvmazeShow = { id?: number; name?: string; premiered?: string | null };
@@ -39,6 +39,8 @@ async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: numb
   let match: TvmazeShow | null = null;
   if (show.externalIds?.imdb) match = await readJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(show.externalIds.imdb)}`);
   if (!match?.id && show.externalIds?.tvdb) match = await readJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(show.externalIds.tvdb)}`);
+  const expectedYear = String(show.years ?? show.metadata?.year ?? "").match(/\b(19|20)\d{2}\b/)?.[0];
+  if (match?.premiered && expectedYear && !match.premiered.startsWith(expectedYear)) match = null;
   if (!match?.id) {
     const matches = await readJson<Array<{ show?: TvmazeShow }>>(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(show.title)}`) ?? [];
     const wantedYear = String(show.years ?? show.metadata?.year ?? "").match(/\b(19|20)\d{2}\b/)?.[0];
@@ -60,7 +62,7 @@ async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: numb
 const episodePreviewRequests = new Map<string, { expires: number; request: Promise<EpisodePreview[]> }>();
 
 export function fetchEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
-  const key = JSON.stringify([show.slug, show.title, show.years, show.metadata?.year, show.externalIds, seasonNumber]);
+  const key = JSON.stringify([show.slug, show.title, show.years, show.metadata?.year, show.externalIds, show.artworkRepairVersion, seasonNumber]);
   const cached = episodePreviewRequests.get(key);
   if (cached && cached.expires > Date.now()) return cached.request;
   const entry = { expires: Infinity, request: loadEpisodePreviews(show, seasonNumber) };
@@ -404,6 +406,7 @@ export async function checkVidkingAvailability(items: VidkingAvailabilityItem[])
 export async function refreshArtworkForShow(
   show: ImportedShow,
   sources: ArtworkSourceSettings,
+  resetSavedArtwork = false,
 ) {
   const requestRefresh = (mediaType: ArtworkMediaType) => requestRuntimeJson<{
     artwork?: {
@@ -419,6 +422,7 @@ export async function refreshArtworkForShow(
     body: {
       slug: show.slug,
       ...buildArtworkRequestBody(show, sources, mediaType),
+      ...(resetSavedArtwork ? { posterUrl: null, backdropUrl: null, bannerUrl: null, bannerWithLogoUrl: null, clearLogoUrl: null } : {}),
     },
   });
 
@@ -428,7 +432,18 @@ export async function refreshArtworkForShow(
     throw new Error(response.data?.error ?? `Failed to refresh artwork for ${show.title}.`);
   }
 
-  return response.data.artwork;
+  const artwork = response.data.artwork;
+  if (resetSavedArtwork) {
+    if (![artwork.posterUrl, artwork.bannerUrl, artwork.backdropUrl].some(Boolean)) {
+      throw new Error(`No verified artwork available for ${show.title}.`);
+    }
+    if (!artwork.bannerWithLogoUrl && (artwork.bannerUrl || artwork.backdropUrl)) {
+      artwork.bannerWithLogoUrl = await composeHomepageBannerForShow({
+        backdropUrl: (artwork.bannerUrl ?? artwork.backdropUrl)!, logoUrl: artwork.clearLogoUrl, title: show.title,
+      }).catch(() => null);
+    }
+  }
+  return artwork;
 }
 
 export async function fetchTrailerForShow(show: ImportedShow) {

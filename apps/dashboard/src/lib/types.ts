@@ -77,6 +77,8 @@ export type ImportedShow = {
   homepagePosterUrl?: string | null;
   homepageBannerUrl?: string | null;
   homepageArtworkVersion?: number | null;
+  artworkRepairVersion?: number;
+  artworkRepairIdentity?: string;
   clearLogoUrl?: string | null;
   artwork?: LibraryArtworkSet;
   metadata?: LibraryTitleMetadata;

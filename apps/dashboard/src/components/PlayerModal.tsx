@@ -869,7 +869,7 @@ export function PlayerModal({
       .catch(() => { if (!canceled) setEpisodePreviews({}); })
       .finally(() => { if (!canceled) setEpisodePreviewsLoading(false); });
     return () => { canceled = true; };
-  }, [show?.slug, previewSeason]);
+  }, [show?.slug, show?.artworkRepairVersion, previewSeason]);
 
   useEffect(() => {
     if (!episodeSelectorOpen || !episode || !show) return;
@@ -1099,7 +1099,7 @@ export function PlayerModal({
               if (Math.abs(offset) > 2) return null;
               const isCurrent = entry.id === effectiveEpisode.id;
               const preview = entry.episodeNumber ? episodePreviews[entry.episodeNumber] : undefined;
-              const artwork = preview?.stillUrl ?? entry.posterUrl ?? null;
+              const artwork = preview?.stillUrl ?? null;
               const title = preview?.title ?? entry.episodeTitle ?? `Episode ${entry.episodeNumber ?? index + 1}`;
               const minutes = preview?.runtimeMinutes ?? (entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null);
               const airDate = preview?.airDate ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${preview.airDate}T00:00:00`)) : null;

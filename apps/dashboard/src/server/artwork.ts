@@ -1008,6 +1008,8 @@ async function fetchTvmazeEpisodePreviews(input: { title: string; yearHint?: str
   let show: TvmazeShow | null = null;
   if (input.externalIds?.imdb) show = await fetchJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(input.externalIds.imdb)}`);
   if (!show?.id && input.externalIds?.tvdb) show = await fetchJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(input.externalIds.tvdb)}`);
+  const expectedYear = parseYear(input.yearHint);
+  if (show?.premiered && expectedYear && !show.premiered.startsWith(expectedYear)) show = null;
   if (!show?.id) {
     const matches = await fetchJson<Array<{ show?: TvmazeShow }>>(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(input.title)}`) ?? [];
     const wantedYear = input.yearHint?.match(/\b(19|20)\d{2}\b/)?.[0];

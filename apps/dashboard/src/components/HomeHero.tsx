@@ -1,7 +1,7 @@
 import { Download, Heart, Play, Plus } from "lucide-react";
 import type { ImportedShow } from "../lib/types";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { getHeroArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
+import { getHomeHeroArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 
 type HomeHeroProps = {
   featuredShow: ImportedShow | null;
@@ -23,12 +23,12 @@ export function HomeHero({ featuredShow, downloadedCount, onPlay, onAdd, onOpenS
       </div>
     </div>
   </section>;
-  const { imageUrl, logoUrl } = getHeroArtwork(featuredShow);
+  const { imageUrl, logoUrl } = getHomeHeroArtwork(featuredShow);
   const metadata = getTitleMetadataParts(featuredShow);
   const description = getTitleDescription(featuredShow);
   return <section className="cinema-home-hero">
     <div className="cinema-hero-artwork" aria-hidden="true">
-      {imageUrl ? <img src={balanceImageResolution(imageUrl, "poster-detail") ?? imageUrl} alt="" className="poster-fallback" fetchPriority="high" /> : null}
+      {imageUrl ? <img src={balanceImageResolution(imageUrl, "backdrop-hero") ?? imageUrl} alt="" fetchPriority="high" /> : null}
     </div>
     <div className="cinema-hero-copy">
       {logoUrl ? <div className="cinema-hero-logo"><img src={balanceImageResolution(logoUrl, "logo") ?? logoUrl} alt={featuredShow.title} /></div> : <h1>{featuredShow.title}</h1>}

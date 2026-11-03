@@ -1,5 +1,6 @@
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { applyArtworkRepair, artworkIdentityKey, ARTWORK_REPAIR_VERSION, needsArtworkRepair } from "./lib/artwork-repair";
 import { scheduleEpisodeRefresh } from "./lib/episode-refresh";
 import { RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
@@ -428,6 +429,11 @@ function mergeProviderFeedItems(left: ExploreItem[], right: ExploreItem[]) {
   return Array.from(merged.values());
 }
 
+function artworkAccountScope() {
+  const connection = readPrivateNodeConnection();
+  return JSON.stringify([connection.nodeUrl, connection.accountId, connection.profileId]);
+}
+
 function App() {
   const routePath = typeof window !== "undefined" ? window.location.pathname : "/";
   if (routePath === "/node/setup") {
@@ -614,6 +620,48 @@ function AppContent() {
       metadataEnrichmentActiveRef.current = false;
     });
   }, [state.shows, vaultSnapshotReady]);
+
+  // Every account/vault snapshot is repaired on load, including titles outside Home's rails.
+  useEffect(() => {
+    if (!vaultSnapshotReady) return;
+    let canceled = false;
+    let running = false;
+    const failures = new Map<string, number>();
+    const scope = artworkAccountScope;
+    const startedScope = scope();
+    const run = async () => {
+      if (canceled || running || scope() !== startedScope || !navigator.onLine) return;
+      running = true;
+      const candidates = stateRef.current.shows.filter((show) => needsArtworkRepair(show) &&
+        Date.now() - (failures.get(artworkIdentityKey(show)) ?? 0) > 300_000);
+      let cursor = 0;
+      const worker = async () => {
+        while (!canceled && scope() === startedScope) {
+          const show = candidates[cursor++];
+          if (!show) return;
+          const identity = artworkIdentityKey(show);
+          try {
+            const fresh = await refreshArtworkForShow(show, stateRef.current.settings.artworkSources, true);
+            if (canceled || scope() !== startedScope) return;
+            const latest = stateRef.current;
+            const current = latest.shows.find((entry) => entry.slug === show.slug);
+            if (!current || !needsArtworkRepair(current) || artworkIdentityKey(current) !== identity) continue;
+            const next = { ...latest, shows: latest.shows.map((entry) => entry === current ? applyArtworkRepair(entry, fresh, HOMEPAGE_ARTWORK_VERSION) : entry) };
+            writeLibraryState(next);
+            stateRef.current = next;
+            setState(next);
+          } catch { failures.set(identity, Date.now()); }
+        }
+      };
+      try { await Promise.all(Array.from({ length: Math.min(2, candidates.length) }, worker)); }
+      finally { running = false; }
+    };
+    const scan = () => { void run(); };
+    const first = window.setTimeout(scan, 250);
+    const timer = window.setInterval(scan, 60_000);
+    window.addEventListener("online", scan);
+    return () => { canceled = true; window.clearTimeout(first); window.clearInterval(timer); window.removeEventListener("online", scan); };
+  }, [vaultSnapshotReady, vaultStatus.folderName, privateNodeConnection.nodeUrl, privateNodeConnection.accountId, privateNodeConnection.profileId, state.settings.artworkSources.tmdb, state.settings.artworkSources.fanart, state.settings.artworkSources.tvdb]);
 
   useEffect(() => {
     activeWatchEpisodeIdRef.current = activeWatchEpisodeId;
@@ -3494,6 +3542,7 @@ function AppContent() {
   }
 
   async function handleRefreshArtwork() {
+    const startedScope = artworkAccountScope();
     if (artworkRefreshBusy) {
       return;
     }
@@ -3508,25 +3557,13 @@ function AppContent() {
 
     try {
       let updatedCount = 0;
-      const refreshedShows = await Promise.all(
+      const refreshedArtwork = new Map<string, Awaited<ReturnType<typeof refreshArtworkForShow>>>();
+      await Promise.all(
         state.shows.map(async (show) => {
           try {
-            const artwork = await refreshArtworkForShow(show, state.settings.artworkSources);
-            const nextShow = {
-              ...show,
-              posterUrl: artwork.posterUrl ?? show.posterUrl ?? null,
-              backdropUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.backdropUrl ?? null,
-              bannerUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.bannerUrl ?? null,
-              clearLogoUrl: artwork.clearLogoUrl ?? show.clearLogoUrl ?? null,
-              artwork: {
-                ...(show.artwork ?? {}),
-                posterUrl: artwork.posterUrl ?? show.artwork?.posterUrl ?? show.posterUrl ?? null,
-                backdropUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.artwork?.backdropUrl ?? show.backdropUrl ?? null,
-                bannerUrl: artwork.bannerUrl ?? artwork.backdropUrl ?? show.artwork?.bannerUrl ?? show.bannerUrl ?? null,
-                clearLogoUrl: artwork.clearLogoUrl ?? show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null,
-                bannerWithLogoUrl: artwork.bannerWithLogoUrl ?? show.artwork?.bannerWithLogoUrl ?? show.homepageBannerUrl ?? null,
-              },
-            };
+            const artwork = await refreshArtworkForShow(show, state.settings.artworkSources, true);
+            refreshedArtwork.set(artworkIdentityKey(show), artwork);
+            const nextShow = applyArtworkRepair(show, artwork, HOMEPAGE_ARTWORK_VERSION);
 
             if (
               nextShow.posterUrl !== show.posterUrl ||
@@ -3544,11 +3581,14 @@ function AppContent() {
         }),
       );
 
-      const nextState = {
-        ...state,
-        shows: refreshedShows,
-      };
+      if (artworkAccountScope() !== startedScope) return;
+      const latest = stateRef.current;
+      const nextState = { ...latest, shows: latest.shows.map((show) => {
+        const fresh = refreshedArtwork.get(artworkIdentityKey(show));
+        return fresh ? applyArtworkRepair(show, fresh, HOMEPAGE_ARTWORK_VERSION) : show;
+      }) };
       writeLibraryState(nextState);
+      stateRef.current = nextState;
       setState(nextState);
       setArtworkRefreshSummary(`Artwork refreshed. Updated ${updatedCount} of ${state.shows.length} title(s).`);
     } catch (error) {
@@ -3574,6 +3614,8 @@ function AppContent() {
         show.slug === slug
           ? {
               ...show,
+              artworkRepairVersion: ARTWORK_REPAIR_VERSION,
+              artworkRepairIdentity: artworkIdentityKey(show),
               posterUrl: artwork.posterUrl ?? null,
               backdropUrl: artwork.backdropUrl ?? null,
               bannerUrl: artwork.bannerUrl ?? show.bannerUrl ?? null,
@@ -3604,7 +3646,7 @@ function AppContent() {
 
   async function handleEnsureHomepageTextArtwork(slug: string) {
     const show = state.shows.find((entry) => entry.slug === slug);
-    if (!show || show.homepageArtworkVersion === HOMEPAGE_ARTWORK_VERSION) {
+    if (!show || needsArtworkRepair(show) || show.homepageArtworkVersion === HOMEPAGE_ARTWORK_VERSION) {
       return;
     }
 

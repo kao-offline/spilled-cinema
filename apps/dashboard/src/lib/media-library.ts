@@ -17,15 +17,17 @@ export type TitleMetadataFallback = {
 };
 
 export function getShowArtwork(show: ImportedShow | null | undefined): LibraryArtworkSet {
-  // Prefer the legacy backdrop slot when present: older libraries stored provider
-  // WLogo strips in `bannerUrl`, while `backdropUrl` held the clean background.
-  const cleanBannerUrl = show?.artwork?.backdropUrl ?? show?.backdropUrl ?? show?.artwork?.bannerUrl ?? show?.bannerUrl ?? null;
+  const posterUrl = show?.artwork?.posterUrl ?? show?.posterUrl ?? null;
+  const assetKey = (url: string) => url.replace(/\/t\/p\/(?:w\d+|original)\//, "/t/p/");
+  const posters = new Set([posterUrl, show?.posterUrl, show?.homepagePosterUrl].filter((url): url is string => Boolean(url)).map(assetKey));
+  const wide = (urls: Array<string | null | undefined>) => urls.find((url) => url && !posters.has(assetKey(url))) ?? null;
+  const cleanBannerUrl = wide([show?.artwork?.bannerUrl, show?.artwork?.backdropUrl, show?.backdropUrl, show?.bannerUrl]);
   return {
-    posterUrl: show?.artwork?.posterUrl ?? show?.posterUrl ?? null,
+    posterUrl,
     bannerUrl: cleanBannerUrl,
     backdropUrl: cleanBannerUrl,
     clearLogoUrl: show?.artwork?.clearLogoUrl ?? show?.clearLogoUrl ?? null,
-    bannerWithLogoUrl: show?.artwork?.bannerWithLogoUrl ?? show?.bannerWithLogoUrl ?? show?.homepageBannerUrl ?? null,
+    bannerWithLogoUrl: wide([show?.artwork?.bannerWithLogoUrl, show?.bannerWithLogoUrl, show?.homepageBannerUrl]),
   };
 }
 
@@ -39,6 +41,12 @@ export function getOverlayBannerArtwork(show: ImportedShow | null | undefined) {
 export function getHeroArtwork(show: ImportedShow | null | undefined) {
   const artwork = getShowArtwork(show);
   return { imageUrl: artwork.posterUrl ?? null, logoUrl: artwork.clearLogoUrl ?? null };
+}
+
+/** Wide Home/carousel artwork never substitutes a portrait poster. */
+export function getHomeHeroArtwork(show: ImportedShow | null | undefined) {
+  const artwork = getShowArtwork(show);
+  return { imageUrl: artwork.bannerUrl ?? null, logoUrl: artwork.clearLogoUrl ?? null };
 }
 
 /** Self-contained card artwork. Prefer a baked-logo banner wherever no logo layer is rendered. */

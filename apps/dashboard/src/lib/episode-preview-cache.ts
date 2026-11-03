@@ -1,6 +1,6 @@
 import type { EpisodePreview } from "./import-client";
 
-const EPISODE_PREVIEW_VAULT = "spilled-episode-preview-vault-v1";
+const EPISODE_PREVIEW_VAULT = "spilled-episode-preview-vault-v2";
 const MAX_MEMORY_IMAGES = 80;
 const memoryImages = new Map<string, string>();
 const inflightImages = new Map<string, Promise<string>>();

@@ -12,7 +12,7 @@ import type { HomepageRail, HomepageRailItem } from "../lib/homepage-rails";
 import type { RecommendedWatchItem } from "../lib/home-personalization";
 import { balancedBackgroundImage, balanceImageResolution } from "../lib/image-resolution";
 import {
-  getHeroArtwork,
+  getHomeHeroArtwork,
   getShowArtwork,
   getTitleDescription,
   getTitleMetadataParts,
@@ -251,7 +251,7 @@ function TvUpNext({ items, onPlay }: { items: RecommendedWatchItem[]; onPlay: (i
 }
 
 export function TvHomePage(props: TvHomePageProps) {
-  const artwork = props.featuredShow ? getHeroArtwork(props.featuredShow) : null;
+  const artwork = props.featuredShow ? getHomeHeroArtwork(props.featuredShow) : null;
   const metadata = props.featuredShow ? getTitleMetadataParts(props.featuredShow, { fallback: null }).map((part) => part.label).slice(0, 4) : [];
   const description = props.featuredShow ? getTitleDescription(props.featuredShow, null) : null;
 

@@ -56,6 +56,33 @@ stream disconnection and authenticated-frame tampering.
 
 ## Verification limits
 
+### Automatic repair of previously imported artwork
+
+The latest Home clarification uses clean wide banners plus separate logos in
+Home/carousels; details retain poster/trailer plus logo. Portrait cards use
+posters and standalone horizontal cards use WLogo banners. Known poster URLs,
+including different TMDB sizes of the same asset, are rejected in wide slots.
+Episode tiles no longer fall back to a legacy series poster.
+
+Every loaded account/vault library queues all titles missing artwork repair
+version 1. Requests clear all saved artwork hints, use the corrected title/year
+lookup, generate a WLogo composition when necessary, and atomically replace all
+artwork aliases after a successful lookup. Empty/unavailable results do not erase
+working artwork or mark the repair complete. Two workers run in the background;
+failures retry after five minutes, with scans each minute and on reconnect.
+Title identity changes invalidate the repair. Account changes cancel work and
+late results are rejected; production integration adds its exact account-library
+scope and initial account-sync hydration gate.
+
+Older account/vault merges cannot restore stale fields over repaired artwork.
+Progress, favorites, players, library records and downloads remain intact. Manual
+refresh applies only artwork to the latest state and rejects cross-account
+results. Homepage artwork version is 7, and episode preview cache namespace is
+v2. Local browser verification observed automatic refresh requests without using
+the manual action. Fresh live TMDB artwork still needs verification on the
+combined production/canary environment with configured credentials. Local suite:
+354 tests across 66 files passed, with repair/idempotence/merge/progress coverage.
+
 ### Artwork, animation and player follow-up
 
 Source navigation now has a sliding active indicator and a brief content fade,

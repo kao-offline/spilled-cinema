@@ -40,7 +40,7 @@ function formatTime(value: number) {
 function artworkFor(item: RecommendedWatchItem, preview?: EpisodePreview) {
   const artwork = getShowArtwork(item.show);
   return balanceImageResolution(
-    preview?.stillUrl ?? item.episode.posterUrl ?? artwork.bannerWithLogoUrl ?? artwork.bannerUrl ?? artwork.posterUrl ?? null,
+    preview?.stillUrl ?? artwork.bannerWithLogoUrl ?? artwork.bannerUrl ?? null,
     "backdrop-thumb",
   );
 }

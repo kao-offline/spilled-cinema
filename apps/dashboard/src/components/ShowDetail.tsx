@@ -690,7 +690,7 @@ export function ShowDetail({
               {activeSeasonEpisodes.map((episode) => (
                 <article key={episode.id} className="redesign-episode-tile">
                   <button type="button" onClick={() => onSelectEpisode(episode)} className="episode-artwork" aria-label={`Play ${episodeShortLabel(episode)}, ${formatEpisodeTitle(episode)}`}>
-                    {(episodePreviews.find((entry) => entry.episodeNumber === episode.episodeNumber)?.stillUrl || episode.posterUrl || heroBackdrop) ? <img src={balanceImageResolution(episodePreviews.find((entry) => entry.episodeNumber === episode.episodeNumber)?.stillUrl || episode.posterUrl || heroBackdrop, "backdrop-thumb") ?? undefined} alt="" loading="lazy" /> : null}
+                    {episodePreviews.find((entry) => entry.episodeNumber === episode.episodeNumber)?.stillUrl ? <img src={balanceImageResolution(episodePreviews.find((entry) => entry.episodeNumber === episode.episodeNumber)?.stillUrl, "backdrop-thumb") ?? undefined} alt="" loading="lazy" /> : null}
                     <span className="episode-tile-code">{episodeShortLabel(episode)}{episode.watched ? " · ✓" : ""}</span>
                     <span className="episode-tile-title">{formatEpisodeTitle(episode)}</span>
                   </button>

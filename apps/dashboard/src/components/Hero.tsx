@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Heart, Play } from "lucide-react";
 import type { ImportedShow } from "../lib/types";
 import { getCachedHeroLogoAspect, preloadHeroImage } from "../lib/hero-assets";
 import { balanceImageResolution, balancedBackgroundImage } from "../lib/image-resolution";
-import { getHeroArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
+import { getHomeHeroArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 
 type HeroProps = {
   featuredShow: ImportedShow | null;
@@ -21,7 +21,7 @@ type HeroSlideState = {
 };
 
 function getWallpaper(show: ImportedShow | null) {
-  return getHeroArtwork(show).imageUrl;
+  return getHomeHeroArtwork(show).imageUrl;
 }
 
 function getLogoLayout(logoAspect: number) {

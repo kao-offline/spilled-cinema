@@ -1,5 +1,5 @@
 import { ArtworkAtmosphere } from "./ArtworkAtmosphere";
-import { getHeroArtwork } from "../lib/media-library";
+import { getHomeHeroArtwork } from "../lib/media-library";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandSearchResult, RemoteCommandResult } from "../lib/command-search";
 import {
@@ -401,7 +401,7 @@ export function CinematicHomePage({
 
   return (
     <div className="redesign-home relative isolate min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
-      {homeTab === "home" ? <ArtworkAtmosphere src={getHeroArtwork(featuredShow).imageUrl} /> : null}
+      {homeTab === "home" ? <ArtworkAtmosphere src={getHomeHeroArtwork(featuredShow).imageUrl} /> : null}
       <div className={tvModeEnabled ? "redesign-tv-home" : undefined}>
         <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 
