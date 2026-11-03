@@ -56,6 +56,38 @@ stream disconnection and authenticated-frame tampering.
 
 ## Verification limits
 
+### Artwork, animation and player follow-up
+
+Source navigation now has a sliding active indicator and a brief content fade,
+both disabled under reduced motion. Up Next uses fixed slots with an overlapping
+artwork layer: measured a focused card at 390 × 246 while both neighboring slot
+rectangles and the following heading stayed unchanged.
+
+Large Home/carousel and title-detail surfaces use the selected poster and separate
+logo. Portrait cards use posters; standalone horizontal cards use WLogo artwork.
+Missing WLogo artwork retains a title placeholder rather than silently displaying
+a different image type. Remote WLogo fields are preserved through rail mapping.
+The artwork picker reads and preserves the canonical slots when applying changes.
+
+Artwork lookups no longer combine alternate media types or relax ambiguous-title
+confidence for the picker. Known years filter search results, conflicting saved
+TMDB IDs are resolved again, and TVDB/Fanart lookups follow TMDB's linked identity
+when available. Regression fixtures cover same-name series, mismatched years,
+ambiguous matches and stale IDs. Previously saved incorrect artwork is not erased;
+it can be replaced through the existing artwork picker/refresh action.
+
+Removed visible trailer play/pause buttons and disabled embedded player controls.
+Episode still caching keeps opaque cross-origin image URLs instead of creating
+empty blobs. Real Lioness selector stills loaded at 1920px natural width; the
+focused selector border computed to rgb(169,216,255). Native fullscreen playback
+was verified with bottom controls at opacity 0 and pointer-events none after
+inactivity. Controls restore on interaction and stay visible for paused playback,
+settings, or keyboard interaction. Full suite: 349 tests across 65 files passed.
+
+Production integration is coordinated with the active account/library/playback
+thread. This follow-up must be applied as a delta onto its routing fixes, not
+deployed independently from the older redesign baseline.
+
 ### Full-page artwork continuation follow-up
 
 Read the enabled backdrop layers directly from pen.dev: Home `yhj27` uses an

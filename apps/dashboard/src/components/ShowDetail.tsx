@@ -12,7 +12,7 @@ import { balanceImageResolution, balancedBackgroundImage } from "../lib/image-re
 import { fetchCastForShow, fetchPersonCredits, fetchEpisodePreviews, type EpisodePreview } from "../lib/import-client";
 import { fetchExploreFeed } from "../lib/discovery-client";
 import { getProviderLabel } from "../lib/command-search";
-import { getOverlayBannerArtwork, getShowArtwork, getShowMetadata, getStandaloneBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
+import { getHeroArtwork, getShowArtwork, getShowMetadata, getStandaloneBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 import { getEpisodeAudioAvailability } from "../lib/episode-audio";
 
 type ShowDetailProps = {
@@ -192,7 +192,7 @@ export function ShowDetail({
   }, [show, activeSeason]);
   const showArtwork = getShowArtwork(show);
   const showMetadata = getShowMetadata(show);
-  const heroBackdrop = getOverlayBannerArtwork(show).bannerUrl;
+  const heroBackdrop = getHeroArtwork(show).imageUrl;
   const movieJob = movieEpisode ? fullDownloadJobsByEpisode[movieEpisode.id] : undefined;
   const movieBusy = isBusy(movieJob);
   const movieDownloaded = Boolean(movieEpisode && (downloadedEpisodeIds.has(movieEpisode.id) || movieJob?.state === "completed"));
@@ -369,7 +369,7 @@ export function ShowDetail({
       <div className="cinema-detail-hero animate-detail-hero-open relative" style={{ viewTransitionName: `spilled-hero-${show.slug}` }}>
         {heroBackdrop ? (
           <div className="cinema-detail-artwork absolute inset-0">
-            <img className={`cinema-detail-poster ${!showArtwork.bannerUrl && !showArtwork.backdropUrl ? "poster-fallback" : ""}`} src={balanceImageResolution(heroBackdrop, showArtwork.bannerUrl || showArtwork.backdropUrl ? "backdrop-hero" : "poster-detail") ?? heroBackdrop} alt="" fetchPriority="high" />
+            <img className="cinema-detail-poster poster-fallback" src={balanceImageResolution(heroBackdrop, "poster-detail") ?? heroBackdrop} alt="" fetchPriority="high" />
             <SeriesAtmosphere key={show.slug} show={show} />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_35%,rgba(8,9,13,0.1),rgba(8,9,13,0.76)_58%,#08090d_100%)]" />
             <div className="absolute inset-0 bg-gradient-to-r from-[#08090d]/95 via-[#08090d]/38 to-[#08090d]/74" />

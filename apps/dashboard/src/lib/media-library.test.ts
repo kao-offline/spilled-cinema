@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ImportedShow, LibraryEpisode } from "./types";
 import {
   getOverlayBannerArtwork,
+  getHeroArtwork,
   getStandaloneBannerArtwork,
   getTitleDescription,
   getTitleMetadataParts,
@@ -128,8 +129,13 @@ describe("artwork roles", () => {
     expect(getStandaloneBannerArtwork(show)).toBe("https://images.example/wlogo.jpg");
   });
 
-  it("falls back to the clean banner when a WLogo banner is unavailable", () => {
+  it("does not substitute a clean banner for a WLogo banner", () => {
     const show = makeShow({ artwork: { bannerUrl: "https://images.example/banner.jpg" } });
-    expect(getStandaloneBannerArtwork(show)).toBe("https://images.example/banner.jpg");
+    expect(getStandaloneBannerArtwork(show)).toBeNull();
+  });
+  it("uses the selected poster and separate logo for large title surfaces", () => {
+    const show = makeShow({ posterUrl: "poster", backdropUrl: "banner", clearLogoUrl: "logo", homepagePosterUrl: "old-poster", homepageBannerUrl: "wlogo" });
+    expect(getHeroArtwork(show)).toEqual({ imageUrl: "poster", logoUrl: "logo" });
+    expect(getStandaloneBannerArtwork(show)).toBe("wlogo");
   });
 });

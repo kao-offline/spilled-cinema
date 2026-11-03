@@ -16,11 +16,11 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
   const isBanner = railKind === "banner";
   const imageUrl = isBanner
     ? item.kind === "local"
-      ? item.bannerWithLogoUrl ?? item.homepageBannerUrl ?? item.backdropUrl ?? item.bannerUrl ?? null
-      : item.backdropUrl ?? item.bannerUrl ?? null
+      ? item.bannerWithLogoUrl ?? item.homepageBannerUrl ?? null
+      : item.bannerWithLogoUrl ?? null
     : item.kind === "local"
-      ? item.homepagePosterUrl ?? item.posterUrl ?? item.backdropUrl
-      : item.posterUrl ?? item.backdropUrl;
+      ? item.posterUrl ?? null
+      : item.posterUrl ?? null;
   const metadata = item.subtitle.split(/\s+\|\s+|\s{2,}/).filter(Boolean);
   const visibleMetadata = metadata.slice(0, 2);
   const primaryAction = item.kind === "local" ? onOpen : onImport;
@@ -55,6 +55,7 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
             {item.kind === "remote" ? <ProviderIcon provider={item.provider} /> : <Library className="h-7 w-7 text-white/25" />}
           </div>
         )}
+        {isBanner && !balancedImageUrl ? <span className="absolute inset-x-4 bottom-4 text-lg font-bold text-white">{item.title}</span> : null}
         {item.kind === "remote" && (item.importStatus || item.inVault) ? (
           <span className={clsx(
             "absolute left-2 top-2 inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[9px] font-black uppercase tracking-[.12em] shadow-lg backdrop-blur-xl",

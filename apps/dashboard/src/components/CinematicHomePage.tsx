@@ -1,5 +1,5 @@
 import { ArtworkAtmosphere } from "./ArtworkAtmosphere";
-import { getOverlayBannerArtwork } from "../lib/media-library";
+import { getHeroArtwork } from "../lib/media-library";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandSearchResult, RemoteCommandResult } from "../lib/command-search";
 import {
@@ -401,11 +401,11 @@ export function CinematicHomePage({
 
   return (
     <div className="redesign-home relative isolate min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
-      {homeTab === "home" ? <ArtworkAtmosphere src={featuredShow ? getOverlayBannerArtwork(featuredShow).bannerUrl : null} /> : null}
+      {homeTab === "home" ? <ArtworkAtmosphere src={getHeroArtwork(featuredShow).imageUrl} /> : null}
       <div className={tvModeEnabled ? "redesign-tv-home" : undefined}>
         <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 
-        {homeTab === "home" ? <><HomeHero
+        <div key={homeTab} className="cinema-source-content">{homeTab === "home" ? <><HomeHero
           onToggleFavorite={() => { if (featuredShow) onToggleFavorite(featuredShow.slug); }}
           featuredShow={featuredShow}
           downloadedCount={featuredShow ? downloadedCountByShow[featuredShow.slug] ?? 0 : 0}
@@ -444,7 +444,7 @@ export function CinematicHomePage({
               </div>
             </section>
           )}
-        </main></> : providerSurface}
+        </main></> : providerSurface}</div>
       </div>
 
       {!tvModeEnabled && !commandOpen && !accountOpen ? <MobileDock active="home" onHome={() => setHomeTab("home")} onLibrary={onOpenLibrary} onFavorites={onOpenFavorites} onExplore={onOpenExplore} onAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} /> : null}

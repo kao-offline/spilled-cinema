@@ -199,6 +199,7 @@ export type ExploreItem = {
   posterUrl?: string | null;
   backdropUrl?: string | null;
   bannerUrl?: string | null;
+  bannerWithLogoUrl?: string | null;
   year?: string | null;
   yearLabel?: string | null;
   alternateTitles?: string[];

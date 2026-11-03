@@ -129,8 +129,7 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
             const remaining = duration && item.resumeAtSeconds > 0 ? `${Math.max(1, Math.ceil((duration - item.resumeAtSeconds) / 60))} min left` : action;
             const showEpisodeTitle = episodeTitle.toLowerCase() !== item.show.title.toLowerCase();
             return (
-              <button
-                key={`${item.show.slug}:${item.episode.id}`}
+              <div className="up-next-slot" key={`${item.show.slug}:${item.episode.id}`}><button
                 type="button"
                 onClick={() => props.onPlay(item)}
                 className="up-next-card group"
@@ -149,7 +148,7 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
                 </div>
                 <div className="up-next-progress" role="progressbar" aria-label={`${progress}% watched`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div style={{ width: `${progress}%`, backgroundColor: getPlaybackProgressColor(item.episode) }} /></div>
 
-              </button>
+              </button></div>
             );
           })}
         </div>

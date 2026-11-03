@@ -55,7 +55,12 @@ async function loadPreviewIntoVault(sourceUrl: string): Promise<string> {
       response = await fetchOpaque();
       if (!response.ok && response.type !== "opaque") throw new Error(`Episode preview returned ${response.status}.`);
     }
-    const objectUrl = remember(sourceUrl, URL.createObjectURL(await response.blob()));
+    // An opaque response has an empty, unreadable body. Keep its original URL
+    // for img instead of replacing a working still with an empty blob URL.
+    if (response.type === "opaque") return sourceUrl;
+    const blob = await response.blob();
+    if (!blob.size || !blob.type.startsWith("image/")) return sourceUrl;
+    const objectUrl = remember(sourceUrl, URL.createObjectURL(blob));
     await decodeImage(objectUrl);
     return objectUrl;
   })().finally(() => inflightImages.delete(sourceUrl));

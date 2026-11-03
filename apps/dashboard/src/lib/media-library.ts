@@ -25,7 +25,7 @@ export function getShowArtwork(show: ImportedShow | null | undefined): LibraryAr
     bannerUrl: cleanBannerUrl,
     backdropUrl: cleanBannerUrl,
     clearLogoUrl: show?.artwork?.clearLogoUrl ?? show?.clearLogoUrl ?? null,
-    bannerWithLogoUrl: show?.artwork?.bannerWithLogoUrl ?? show?.homepageBannerUrl ?? null,
+    bannerWithLogoUrl: show?.artwork?.bannerWithLogoUrl ?? show?.bannerWithLogoUrl ?? show?.homepageBannerUrl ?? null,
   };
 }
 
@@ -35,10 +35,16 @@ export function getOverlayBannerArtwork(show: ImportedShow | null | undefined) {
   return { bannerUrl: artwork.bannerUrl ?? artwork.posterUrl ?? null, logoUrl: artwork.clearLogoUrl ?? null };
 }
 
+/** Large title surfaces use the selected poster and a separate transparent logo. */
+export function getHeroArtwork(show: ImportedShow | null | undefined) {
+  const artwork = getShowArtwork(show);
+  return { imageUrl: artwork.posterUrl ?? null, logoUrl: artwork.clearLogoUrl ?? null };
+}
+
 /** Self-contained card artwork. Prefer a baked-logo banner wherever no logo layer is rendered. */
 export function getStandaloneBannerArtwork(show: ImportedShow | null | undefined) {
   const artwork = getShowArtwork(show);
-  return artwork.bannerWithLogoUrl ?? artwork.bannerUrl ?? artwork.posterUrl ?? null;
+  return artwork.bannerWithLogoUrl ?? null;
 }
 
 function parseYear(value: string | number | null | undefined) {

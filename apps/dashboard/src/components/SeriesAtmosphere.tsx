@@ -32,7 +32,6 @@ export function SeriesAtmosphere({ show }: { show: ImportedShow }) {
   const [key, setKey] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [motion, setMotion] = useState(false);
-  const [paused, setPaused] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const query = matchMedia("(prefers-reduced-motion: reduce)");
@@ -42,7 +41,7 @@ export function SeriesAtmosphere({ show }: { show: ImportedShow }) {
   }, []);
   useEffect(() => {
     let canceled = false;
-    setKey(null); setPlaying(false); setPaused(false);
+    setKey(null); setPlaying(false);
     if (motion) void fetchTrailerForShow(show).then((value) => { if (!canceled) setKey(value); }).catch(() => {});
     return () => { canceled = true; };
   }, [show, motion]);
@@ -50,24 +49,23 @@ export function SeriesAtmosphere({ show }: { show: ImportedShow }) {
     let canceled = false;
     let player: TrailerPlayer | undefined;
     setPlaying(false);
-    if (key && motion && !paused) void loadYoutubeApi().then((api) => {
+    if (key && motion) void loadYoutubeApi().then((api) => {
       if (canceled || !host.current) return;
       const mount = document.createElement("div");
       host.current.replaceChildren(mount);
       player = new api.Player(mount, {
         host: "https://www.youtube-nocookie.com", videoId: key,
-        playerVars: { autoplay: 1, loop: 1, playlist: key, controls: 0, playsinline: 1, origin: location.origin },
+        playerVars: { autoplay: 1, loop: 1, playlist: key, controls: 0, disablekb: 1, fs: 0, playsinline: 1, origin: location.origin },
         events: {
-          onReady: ({ target }) => { if (!canceled) { target.mute(); target.playVideo(); } },
+          onReady: ({ target }) => { if (!canceled) { host.current?.querySelector("iframe")?.setAttribute("tabindex", "-1"); target.mute(); target.playVideo(); } },
           onStateChange: ({ data }) => { if (!canceled) setPlaying(data === 1); },
           onError: () => { if (!canceled) { setPlaying(false); setKey(null); } },
         },
       });
     }).catch(() => { if (!canceled) setPlaying(false); });
     return () => { canceled = true; player?.destroy(); };
-  }, [key, motion, paused]);
+  }, [key, motion]);
   return <>
     <div ref={host} className={`series-trailer ${playing ? "is-playing" : ""}`} aria-hidden="true" />
-    {key && motion ? <button className="trailer-toggle" type="button" onClick={() => setPaused(!paused)}>{paused ? "Play trailer" : "Pause trailer"}</button> : null}
   </>;
 }

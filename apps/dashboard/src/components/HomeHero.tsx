@@ -1,7 +1,7 @@
 import { Download, Heart, Play, Plus } from "lucide-react";
 import type { ImportedShow } from "../lib/types";
 import { balanceImageResolution } from "../lib/image-resolution";
-import { getOverlayBannerArtwork, getShowArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
+import { getHeroArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 
 type HomeHeroProps = {
   featuredShow: ImportedShow | null;
@@ -23,13 +23,12 @@ export function HomeHero({ featuredShow, downloadedCount, onPlay, onAdd, onOpenS
       </div>
     </div>
   </section>;
-  const { bannerUrl, logoUrl } = getOverlayBannerArtwork(featuredShow);
-  const artwork = getShowArtwork(featuredShow);
+  const { imageUrl, logoUrl } = getHeroArtwork(featuredShow);
   const metadata = getTitleMetadataParts(featuredShow);
   const description = getTitleDescription(featuredShow);
   return <section className="cinema-home-hero">
     <div className="cinema-hero-artwork" aria-hidden="true">
-      {bannerUrl ? <img src={balanceImageResolution(bannerUrl, "backdrop-hero") ?? bannerUrl} alt="" className={!artwork.bannerUrl ? "poster-fallback" : undefined} fetchPriority="high" /> : null}
+      {imageUrl ? <img src={balanceImageResolution(imageUrl, "poster-detail") ?? imageUrl} alt="" className="poster-fallback" fetchPriority="high" /> : null}
     </div>
     <div className="cinema-hero-copy">
       {logoUrl ? <div className="cinema-hero-logo"><img src={balanceImageResolution(logoUrl, "logo") ?? logoUrl} alt={featuredShow.title} /></div> : <h1>{featuredShow.title}</h1>}

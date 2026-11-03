@@ -1099,7 +1099,7 @@ export function PlayerModal({
               if (Math.abs(offset) > 2) return null;
               const isCurrent = entry.id === effectiveEpisode.id;
               const preview = entry.episodeNumber ? episodePreviews[entry.episodeNumber] : undefined;
-              const artwork = preview?.stillUrl ?? null;
+              const artwork = preview?.stillUrl ?? entry.posterUrl ?? null;
               const title = preview?.title ?? entry.episodeTitle ?? `Episode ${entry.episodeNumber ?? index + 1}`;
               const minutes = preview?.runtimeMinutes ?? (entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null);
               const airDate = preview?.airDate ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${preview.airDate}T00:00:00`)) : null;
@@ -1110,7 +1110,7 @@ export function PlayerModal({
                   if (isCurrent) { setEpisodeSelectorOpen(false); return; }
                   setEpisodeTransitioning(true);
                   window.setTimeout(() => { setEpisodeSelectorOpen(false); onSelectEpisode?.(entry); window.setTimeout(() => setEpisodeTransitioning(false), 80); }, 280);
-                }} className={clsx("group absolute left-1/2 top-1/2 isolate aspect-video w-full overflow-hidden rounded-lg bg-black text-left shadow-2xl outline-none transition-all duration-500 ease-out", isFocused ? "border-2 border-red-600" : "border border-white/5")} style={{
+                }} className={clsx("group absolute left-1/2 top-1/2 isolate aspect-video w-full overflow-hidden rounded-lg bg-black text-left shadow-2xl outline-none transition-all duration-500 ease-out", isFocused ? "border-2 border-[#a9d8ff]" : "border border-white/5")} style={{
                   zIndex: 10 - depth,
                   opacity: 1,
                   transform: `translate(calc(-50% + ${depth * 34}px), calc(-50% + ${offset * carouselCardStep}px)) scale(${depth === 0 ? 1 : depth === 1 ? 0.9 : 0.82})`,

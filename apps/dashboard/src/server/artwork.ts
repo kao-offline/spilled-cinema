@@ -640,7 +640,7 @@ function isAmbiguousArtworkTitle(title: string, altTitle?: string | null) {
 }
 
 function getEffectiveYearHint(title: string, altTitle?: string | null, yearHint?: string) {
-  return yearHint ?? parseYear(title) ?? parseYear(altTitle);
+  return parseYear(yearHint) ?? parseYear(title) ?? parseYear(altTitle);
 }
 
 type ArtworkLookupOptions = {
@@ -685,7 +685,10 @@ function withCanonicalArtworkIdentity<T extends ArtworkLookupOptions>(options: T
     identity.titles.some((title) => titleKeys.includes(normalizeSearchText(title))),
   );
 
-  if (!canonical) {
+  if (!canonical || canonical.mediaType !== options.mediaType ||
+    (getEffectiveYearHint(options.title, options.altTitle, options.yearHint) &&
+      getEffectiveYearHint(options.title, options.altTitle, options.yearHint) !== canonical.yearHint) ||
+    options.externalIds?.tmdb || options.externalIds?.imdb || options.externalIds?.tvdb) {
     return options;
   }
 
@@ -786,6 +789,7 @@ async function searchTmdbBestMatch({
     for (const [index, candidate] of (payload?.results ?? []).entries()) {
       let score = scoreTmdbCandidate(candidate, variants, effectiveYearHint, description);
       const candidateYear = parseYear(candidate.release_date ?? candidate.first_air_date);
+      if (effectiveYearHint && effectiveYearHint !== candidateYear) continue;
 
       // TMDB site ordering is useful for localized titles where result payload titles are English-only.
       if (index === 0) score += 26;
@@ -1007,7 +1011,8 @@ async function fetchTvmazeEpisodePreviews(input: { title: string; yearHint?: str
   if (!show?.id) {
     const matches = await fetchJson<Array<{ show?: TvmazeShow }>>(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(input.title)}`) ?? [];
     const wantedYear = input.yearHint?.match(/\b(19|20)\d{2}\b/)?.[0];
-    show = matches.map((entry) => entry.show).find((candidate) => candidate?.name?.localeCompare(input.title, undefined, { sensitivity: "base" }) === 0 && (!wantedYear || candidate.premiered?.startsWith(wantedYear))) ?? matches[0]?.show ?? null;
+    const exact = matches.map((entry) => entry.show).filter((candidate) => candidate?.name?.localeCompare(input.title, undefined, { sensitivity: "base" }) === 0 && (!wantedYear || candidate.premiered?.startsWith(wantedYear)));
+    show = exact.length === 1 ? exact[0] ?? null : null;
   }
   if (!show?.id) return [];
   const episodes = await fetchJson<TvmazeEpisode[]>(`https://api.tvmaze.com/shows/${show.id}/episodes`) ?? [];
@@ -1103,7 +1108,7 @@ export async function fetchTmdbCast(input: {
     description: input.description,
     externalIds: input.externalIds,
     apiKeys: input.apiKeys,
-    allowAmbiguousSearch: true,
+    allowAmbiguousSearch: false,
   });
 
   if (!match?.id) {
@@ -1478,12 +1483,17 @@ async function resolveTmdbMatch(options: {
   allowAmbiguousSearch?: boolean;
 }) {
   const tmdbId = parseExternalNumericId(options.externalIds?.tmdb);
+  const wantedYear = getEffectiveYearHint(options.title, options.altTitle, options.yearHint);
+  const acceptsYear = (candidate: TmdbSearchResult) => {
+    const year = parseYear(candidate.release_date ?? candidate.first_air_date);
+    return !wantedYear || !year || wantedYear === year;
+  };
   if (tmdbId) {
     const detail = await fetchTmdbDetail(options.mediaType, tmdbId, options.apiKeys);
-    if (detail?.id) {
+    if (detail?.id && acceptsYear(detail)) {
       return detail;
     }
-    return { id: tmdbId } satisfies TmdbSearchResult;
+    if (!detail) return { id: tmdbId } satisfies TmdbSearchResult;
   }
 
   const tvdbMatch = options.mediaType === "tv"
@@ -1494,7 +1504,7 @@ async function resolveTmdbMatch(options: {
         apiKeys: options.apiKeys,
       })
     : null;
-  if (tvdbMatch) {
+  if (tvdbMatch && acceptsYear(tvdbMatch)) {
     return tvdbMatch;
   }
 
@@ -1504,7 +1514,7 @@ async function resolveTmdbMatch(options: {
     externalSource: "imdb_id",
     apiKeys: options.apiKeys,
   });
-  if (imdbMatch) {
+  if (imdbMatch && acceptsYear(imdbMatch)) {
     return imdbMatch;
   }
 
@@ -1569,6 +1579,7 @@ async function searchTvdbBestMatch({
 
     const candidates = (payload?.data ?? []).filter((candidate) => Number.isFinite(parseTvdbNumericId(candidate)));
     for (const [index, candidate] of candidates.entries()) {
+      if (effectiveYearHint && effectiveYearHint !== parseYear(candidate.year)) continue;
       let score = scoreTitleAgainstQueries(
         [candidate.name ?? "", ...(candidate.aliases ?? [])],
         variants,
@@ -1591,7 +1602,13 @@ async function searchTvdbBestMatch({
     return null;
   }
 
-  const ranked = rankedCandidates.sort((left, right) => right.score - left.score);
+  const uniqueCandidates = new Map<number, typeof rankedCandidates[number]>();
+  for (const entry of rankedCandidates) {
+    const id = parseTvdbNumericId(entry.candidate);
+    const current = uniqueCandidates.get(id);
+    if (!current || entry.score > current.score) uniqueCandidates.set(id, entry);
+  }
+  const ranked = [...uniqueCandidates.values()].sort((left, right) => right.score - left.score);
 
   const best = ranked[0];
   const runnerUp = ranked[1];
@@ -1668,8 +1685,7 @@ async function fetchFanartBundle(options: {
     const poster = pickPreferredFanart(payload.movieposter);
     const wideEntries = [...(payload.moviethumb ?? []), ...(payload.moviebackground ?? [])];
     const banner = pickPreferredFanart(payload.moviebanner);
-    const backdrop = pickPreferredFanart(wideEntries.filter((entry) => !hasArtworkLanguage(entry.lang)))
-      ?? pickPreferredFanart(wideEntries);
+    const backdrop = pickPreferredFanart(wideEntries.filter((entry) => !hasArtworkLanguage(entry.lang)));
     const wLogoBanner = pickPreferredFanart(wideEntries.filter((entry) => hasArtworkLanguage(entry.lang))) ?? banner;
     const clearLogo = pickPreferredFanart(payload.hdmovielogo) ?? pickPreferredFanart(payload.movielogo);
 
@@ -1880,33 +1896,7 @@ function buildCurrentArtworkAssets(options: {
 }
 
 export async function searchArtworkAssets(input: ArtworkLookupOptions) {
-  const options = withCanonicalArtworkIdentity({
-    ...input,
-    allowAmbiguousSearch: true,
-  });
-
-  const primaryAssets = await searchArtworkAssetsForMedia(options);
-  const primaryExternalCount = countExternalArtworkAssets(primaryAssets);
-  if (primaryExternalCount > 2) {
-    return limitArtworkAssets(primaryAssets);
-  }
-
-  const alternateMediaType = options.mediaType === "movie" ? "tv" : "movie";
-  const alternateAssets = await searchArtworkAssetsForMedia({
-    ...options,
-    mediaType: alternateMediaType,
-  });
-  const alternateExternalCount = countExternalArtworkAssets(alternateAssets);
-
-  if (alternateExternalCount >= primaryExternalCount + 8) {
-    return limitArtworkAssets([...alternateAssets, ...primaryAssets]);
-  }
-
-  return limitArtworkAssets(primaryAssets);
-}
-
-function countExternalArtworkAssets(assets: ArtworkAsset[]) {
-  return assets.filter((asset) => asset.source !== "current").length;
+  return limitArtworkAssets(await searchArtworkAssetsForMedia(withCanonicalArtworkIdentity(input)));
 }
 
 async function searchArtworkAssetsForMedia(options: ArtworkLookupOptions) {
@@ -1955,12 +1945,9 @@ async function searchArtworkAssetsForMedia(options: ArtworkLookupOptions) {
         })
       : Promise.resolve(null),
   ]);
-  const tvdbId = directTvdbId ?? (searchedTvdbMatch ? parseTvdbNumericId(searchedTvdbMatch) : null) ?? await resolveTvdbId({
-    mediaType: options.mediaType,
-    tmdbMatch,
-    externalIds: options.externalIds,
-    apiKeys: options.apiKeys,
-  });
+  const tvdbId = tmdbMatch
+    ? await resolveTvdbId({ mediaType: options.mediaType, tmdbMatch, apiKeys: options.apiKeys })
+    : directTvdbId ?? (searchedTvdbMatch ? parseTvdbNumericId(searchedTvdbMatch) : null);
 
   const [tmdbImages, imageConfig, fanartMoviePayload, fanartTvPayload, tvdbExtended] = await Promise.all([
     tmdbEnabled && tmdbMatch ? fetchTmdbImages(options.mediaType, tmdbMatch.id, options.apiKeys) : Promise.resolve(null),
@@ -2148,12 +2135,9 @@ export async function enrichArtwork(input: ArtworkLookupOptions): Promise<Artwor
         })
       : Promise.resolve(null),
   ]);
-  const tvdbId = directTvdbId ?? (searchedTvdbMatch ? parseTvdbNumericId(searchedTvdbMatch) : null) ?? await resolveTvdbId({
-    mediaType: options.mediaType,
-    tmdbMatch,
-    externalIds: options.externalIds,
-    apiKeys: options.apiKeys,
-  });
+  const tvdbId = tmdbMatch
+    ? await resolveTvdbId({ mediaType: options.mediaType, tmdbMatch, apiKeys: options.apiKeys })
+    : directTvdbId ?? (searchedTvdbMatch ? parseTvdbNumericId(searchedTvdbMatch) : null);
 
   const [tmdbBundle, tvdbBundle, fanartBundle] = await Promise.all([
     tmdbEnabled && tmdbMatch
@@ -2163,7 +2147,7 @@ export async function enrichArtwork(input: ArtworkLookupOptions): Promise<Artwor
             fetchTmdbImages(options.mediaType, tmdbMatch.id, options.apiKeys),
           ]);
           const poster = pickPreferredImage(images?.posters);
-          const backdrop = pickPreferredImage(images?.backdrops);
+          const backdrop = pickPreferredImage(images?.backdrops?.filter((entry) => !hasArtworkLanguage(entry.iso_639_1)));
           const wLogoBackdrop = pickPreferredImage(images?.backdrops?.filter((entry) => hasArtworkLanguage(entry.iso_639_1)));
           const clearLogo = pickPreferredImage(images?.logos);
 

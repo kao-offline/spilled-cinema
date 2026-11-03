@@ -41,8 +41,9 @@ async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: numb
   if (!match?.id && show.externalIds?.tvdb) match = await readJson<TvmazeShow>(`https://api.tvmaze.com/lookup/shows?thetvdb=${encodeURIComponent(show.externalIds.tvdb)}`);
   if (!match?.id) {
     const matches = await readJson<Array<{ show?: TvmazeShow }>>(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(show.title)}`) ?? [];
-    const wantedYear = String(show.metadata?.year ?? show.years ?? "").match(/\b(19|20)\d{2}\b/)?.[0];
-    match = matches.map((entry) => entry.show).find((candidate) => candidate?.name?.localeCompare(show.title, undefined, { sensitivity: "base" }) === 0 && (!wantedYear || candidate.premiered?.startsWith(wantedYear))) ?? matches[0]?.show ?? null;
+    const wantedYear = String(show.years ?? show.metadata?.year ?? "").match(/\b(19|20)\d{2}\b/)?.[0];
+    const exact = matches.map((entry) => entry.show).filter((candidate) => candidate?.name?.localeCompare(show.title, undefined, { sensitivity: "base" }) === 0 && (!wantedYear || candidate.premiered?.startsWith(wantedYear)));
+    match = exact.length === 1 ? exact[0] ?? null : null;
   }
   if (!match?.id) return [];
   const episodes = await readJson<TvmazeEpisode[]>(`https://api.tvmaze.com/shows/${match.id}/episodes`) ?? [];
@@ -59,7 +60,7 @@ async function fetchTvmazeEpisodePreviews(show: ImportedShow, seasonNumber: numb
 const episodePreviewRequests = new Map<string, { expires: number; request: Promise<EpisodePreview[]> }>();
 
 export function fetchEpisodePreviews(show: ImportedShow, seasonNumber: number): Promise<EpisodePreview[]> {
-  const key = JSON.stringify([show.slug, show.externalIds, seasonNumber]);
+  const key = JSON.stringify([show.slug, show.title, show.years, show.metadata?.year, show.externalIds, seasonNumber]);
   const cached = episodePreviewRequests.get(key);
   if (cached && cached.expires > Date.now()) return cached.request;
   const entry = { expires: Infinity, request: loadEpisodePreviews(show, seasonNumber) };
@@ -145,14 +146,6 @@ function inferArtworkMediaType(show: ImportedShow) {
     : "tv";
 }
 
-function shouldRepairArtworkIdentity(show: ImportedShow) {
-  return show.episodes.length === 1 && show.mediaType !== "movie";
-}
-
-function alternateArtworkMediaType(mediaType: ArtworkMediaType): ArtworkMediaType {
-  return mediaType === "movie" ? "tv" : "movie";
-}
-
 function buildArtworkRequestBody(
   show: ImportedShow,
   sources: ArtworkSourceSettings,
@@ -176,38 +169,6 @@ function buildArtworkRequestBody(
     artworkSources: sources,
     artworkApiKeys: readArtworkApiKeys(),
   };
-}
-
-function externalArtworkAssetCount(assets: ArtworkAsset[]) {
-  return assets.filter((asset) => asset.source !== "current").length;
-}
-
-function mergeArtworkAssets(left: ArtworkAsset[], right: ArtworkAsset[]) {
-  const seen = new Set<string>();
-  return [...left, ...right].filter((asset) => {
-    const key = `${asset.kind}:${asset.url}`;
-    if (!asset.url || seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
-function artworkBundleScore(artwork: {
-  posterUrl?: string | null;
-  backdropUrl?: string | null;
-  bannerUrl?: string | null;
-  clearLogoUrl?: string | null;
-  bannerWithLogoUrl?: string | null;
-}, show: ImportedShow) {
-  let score = 0;
-  if (artwork.posterUrl && artwork.posterUrl !== show.posterUrl) score += 1;
-  if (artwork.backdropUrl && artwork.backdropUrl !== show.backdropUrl) score += 1;
-  if (artwork.bannerUrl && artwork.bannerUrl !== show.bannerUrl) score += 1;
-  if (artwork.clearLogoUrl && artwork.clearLogoUrl !== show.clearLogoUrl) score += 1;
-  if (artwork.bannerWithLogoUrl && artwork.bannerWithLogoUrl !== show.artwork?.bannerWithLogoUrl) score += 1;
-  return score;
 }
 
 export async function importSvetSerialuShow(slug: string) {
@@ -467,16 +428,6 @@ export async function refreshArtworkForShow(
     throw new Error(response.data?.error ?? `Failed to refresh artwork for ${show.title}.`);
   }
 
-  if (shouldRepairArtworkIdentity(show)) {
-    const alternateResponse = await requestRefresh(alternateArtworkMediaType(primaryMediaType));
-    const alternateArtwork = alternateResponse.data?.artwork;
-    if (alternateResponse.ok && alternateArtwork) {
-      return artworkBundleScore(alternateArtwork, show) > artworkBundleScore(response.data.artwork, show)
-        ? alternateArtwork
-        : response.data.artwork;
-    }
-  }
-
   return response.data.artwork;
 }
 
@@ -619,16 +570,6 @@ export async function searchArtworkAssetsForShow(
     throw new Error(response.data?.error ?? `Failed to load artwork options for ${show.title}.`);
   }
 
-  if (shouldRepairArtworkIdentity(show)) {
-    const alternateResponse = await requestAssets(alternateArtworkMediaType(primaryMediaType));
-    const alternateAssets = alternateResponse.data?.assets;
-    const primaryExternalCount = externalArtworkAssetCount(response.data.assets);
-    const alternateExternalCount = externalArtworkAssetCount(alternateAssets ?? []);
-    if (alternateResponse.ok && alternateAssets && alternateExternalCount > primaryExternalCount) {
-      return mergeArtworkAssets(alternateAssets, response.data.assets);
-    }
-  }
-
   return response.data.assets;
 }
 
@@ -675,7 +616,7 @@ export async function fetchHomepageTextArtworkForShow(
     textAssets.find((asset) => asset.kind === "wlogo-banner")?.url ??
     null;
   const bannerUrl = sourceBannerUrl ?? (
-    cleanBackdropUrl && (show.artwork?.clearLogoUrl ?? show.clearLogoUrl)
+    cleanBackdropUrl
       ? await composeHomepageBannerForShow({
           backdropUrl: cleanBackdropUrl,
           logoUrl: show.artwork?.clearLogoUrl ?? show.clearLogoUrl ?? null,

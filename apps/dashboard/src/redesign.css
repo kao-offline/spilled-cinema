@@ -148,7 +148,6 @@
 .series-trailer { position: absolute; inset: 0 0 auto auto; width: min(100%,1518px); aspect-ratio: 16/9; opacity: 0; pointer-events: none; transition: opacity 1.2s ease; }
 .series-trailer.is-playing { opacity: .8; }
 .series-trailer iframe { width: 100%; height: 100%; border: 0; }
-.trailer-toggle { position: absolute; right: 48px; top: 88px; z-index: 35; min-height: 44px; padding: 0 14px; background: #101b28e8; border: 1px solid #ffffff38; border-radius: 12px; font-size: 12px; }
 .cinema-catalog { position: relative; isolation: isolate; background: var(--cinema-background); }
 .cinema-catalog-ambient { position: fixed; filter: blur(100px) saturate(.65); opacity: .5; }
 .cinema-catalog-hero { position: relative; display: flex; align-items: center; justify-content: center; height: 566.78px; padding: 112px 24px 64px; overflow: hidden; }
@@ -262,7 +261,6 @@
   .cinema-player-buttons { gap: 4px; }
   .cinema-player-tools { gap: 4px; }
   .cinema-player-copy { padding: 96px 24px 180px; }
-  .trailer-toggle { top: 80px; right: 20px; }
 }
 @media (orientation: landscape) and (max-height: 550px) {
   .cinema-player-header { padding: max(15px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) 0 max(20px,env(safe-area-inset-left)); }
@@ -362,3 +360,23 @@
   .cinema-media-card button[aria-label^="Open menu"]::before { content: ""; position: absolute; inset: -8px; }
 }
 .cinema-catalog-content > div:last-child { color: #a8b6c7; }
+
+.source-logo-nav { position: relative; }
+.source-tab-indicator { position: absolute; left: 3px; top: 3px; width: 50px; height: 40px; border-radius: 12px; background: #ffffff30; box-shadow: inset 0 0 0 1px #e7f4ff55,0 2px 5px #0003; transform: translateX(calc(var(--source-index) * 100%)); transition: transform .3s cubic-bezier(.22,.8,.25,1); pointer-events: none; }
+.source-logo-nav button { z-index: 1; }
+.source-logo-nav button.is-active { background: transparent; box-shadow: none; }
+.source-logo-nav-compact .source-tab-indicator { left: 4px; top: 4px; width: calc((100% - 8px) / 3); height: 44px; }
+.cinema-source-content { animation: cinema-source-enter .22s ease-out; }
+@keyframes cinema-source-enter { from { opacity: .3; } to { opacity: 1; } }
+
+/* Slots stay in flow; the focused artwork expands in its own layer. The scroll
+   gutter gives it room to overlap the headings without clipping or moving them. */
+.cinema-up-next { position: relative; content-visibility: visible; z-index: 2; }
+.cinema-up-next:has(.up-next-card:is(:hover,:focus)) { z-index: 20; }
+.up-next-rail { padding-block: 64px 74px; margin-block: -64px; }
+.up-next-slot { position: relative; flex: 0 0 218px; width: 218px; height: 122px; }
+.up-next-slot:has(.up-next-card:is(:hover,:focus)) { z-index: 2; }
+.up-next-card { position: absolute; left: 0; top: 50%; transform: translateY(-50%); transition: width .25s ease,height .25s ease,border-color .25s,box-shadow .25s; }
+.up-next-slot:last-child:not(:first-child) > .up-next-card { left: auto; right: 0; }
+@media (max-width: 600px) { .up-next-slot { flex-basis: 236px; width: 236px; height: 133px; } }
+@media (prefers-reduced-motion: reduce) { .source-tab-indicator,.up-next-card { transition: none; } .cinema-source-content { animation: none; } }

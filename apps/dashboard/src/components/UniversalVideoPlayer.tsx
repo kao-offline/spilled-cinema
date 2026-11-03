@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward, Server, List, Download } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
@@ -241,6 +241,8 @@ export function UniversalVideoPlayer({
   const [fullscreen, setFullscreen] = useState(false);
   const [cssFullscreen, setCssFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keyboardControlFocus = useRef(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
@@ -263,6 +265,18 @@ export function UniversalVideoPlayer({
   const activeSkipSegment = useMemo(() => findActiveSkipSegment(skipSegments, currentTime), [skipSegments, currentTime]);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceType = useMemo(() => getSourceType(src), [src]);
+  const revealControls = useCallback(() => {
+    if (controlsHideTimer.current) clearTimeout(controlsHideTimer.current);
+    setControlsVisible(true);
+    if (!paused && !settingsOpen) controlsHideTimer.current = setTimeout(() => {
+      if (keyboardControlFocus.current && containerRef.current?.contains(document.activeElement)) return;
+      setControlsVisible(false);
+    }, 2600);
+  }, [paused, settingsOpen]);
+  useEffect(() => {
+    revealControls();
+    return () => { if (controlsHideTimer.current) clearTimeout(controlsHideTimer.current); };
+  }, [revealControls, fullscreen]);
   const subtitleTrackSignature = useMemo(
     () => subtitleTracks
       .map((track) => [track.id, track.src, track.label, track.srclang].join("\u001f"))
@@ -746,7 +760,7 @@ export function UniversalVideoPlayer({
       video.currentTime = nextTime;
     }
     setCurrentTime(nextTime);
-    setControlsVisible(true);
+    revealControls();
   }
 
   function seekFromPointer(event: PointerEvent<HTMLDivElement>) {
@@ -909,6 +923,7 @@ export function UniversalVideoPlayer({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Tab") { keyboardControlFocus.current = true; revealControls(); }
       const target = event.target as HTMLElement | null;
       if (event.defaultPrevented || target?.closest("button,input,select,textarea,[role=slider]")) return;
       if (event.code === "Space") {
@@ -958,8 +973,10 @@ export function UniversalVideoPlayer({
       data-subtitle-edge={subtitleAppearance.edge}
       style={subtitlePlayerStyle}
       onClick={handleSurfaceClick}
-      onMouseMove={() => setControlsVisible(true)}
-      onFocusCapture={() => setControlsVisible(true)}
+      onPointerMove={revealControls}
+      onPointerDownCapture={() => { keyboardControlFocus.current = false; revealControls(); }}
+      onKeyDownCapture={() => { keyboardControlFocus.current = true; revealControls(); }}
+      onFocusCapture={revealControls}
       onMouseLeave={() => {
         if (!paused && !containerRef.current?.contains(document.activeElement)) setControlsVisible(false);
       }}

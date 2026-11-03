@@ -149,6 +149,7 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
       posterUrl: item.posterUrl ?? null,
       backdropUrl: item.backdropUrl ?? null,
       bannerUrl: (item as ExploreItem & { bannerUrl?: string | null }).bannerUrl ?? null,
+      bannerWithLogoUrl: item.bannerWithLogoUrl ?? null,
       provider: item.provider,
       importSlug: item.importSlug,
       mediaType: item.mediaType,

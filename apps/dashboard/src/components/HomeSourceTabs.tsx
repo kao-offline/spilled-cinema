@@ -1,4 +1,5 @@
 import { clsx } from "clsx";
+import type { CSSProperties } from "react";
 import { HOMEPAGE_SOURCE_TABS, type HomepageTab } from "../lib/provider-home-preferences";
 
 const SOURCE_LOGOS: Record<HomepageTab, string> = {
@@ -20,7 +21,9 @@ export function HomeSourceTabs({ activeTab, onTabChange, compact = false, classN
       data-tutorial="homepage-feed-tabs"
       className={clsx("source-logo-nav", compact && "source-logo-nav-compact", className)}
       aria-label="Homepage sources"
+      style={{ "--source-index": HOMEPAGE_SOURCE_TABS.findIndex((source) => source.id === activeTab) } as CSSProperties}
     >
+      <span className="source-tab-indicator" aria-hidden="true" />
       {HOMEPAGE_SOURCE_TABS.map((source) => {
         const active = activeTab === source.id;
         return (

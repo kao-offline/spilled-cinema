@@ -47,13 +47,13 @@ type MobileHomePageProps = {
 function getItemImage(item: HomepageRailItem, kind: "banner" | "poster") {
   if (kind === "banner") {
     return item.kind === "local"
-      ? item.bannerWithLogoUrl ?? item.homepageBannerUrl ?? item.backdropUrl ?? item.bannerUrl ?? null
-      : item.backdropUrl ?? item.bannerUrl ?? null;
+      ? item.bannerWithLogoUrl ?? item.homepageBannerUrl ?? null
+      : item.bannerWithLogoUrl ?? null;
   }
 
   return item.kind === "local"
-    ? item.homepagePosterUrl ?? item.posterUrl ?? item.backdropUrl ?? null
-    : item.posterUrl ?? item.backdropUrl ?? null;
+    ? item.posterUrl ?? null
+    : item.posterUrl ?? null;
 }
 
 function MobileImportBadge({ item }: { item: HomepageRailItem }) {
