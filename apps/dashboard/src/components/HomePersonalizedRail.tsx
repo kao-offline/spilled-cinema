@@ -95,7 +95,7 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
     return () => { canceled = true; };
   }, [props.items]);
   return (
-    <section className={clsx("ui-virtual-section", props.compact ? "py-1.5" : "py-2.5")} aria-labelledby={headingId} aria-busy={props.freshness.checking}>
+    <section className={clsx("cinema-up-next ui-virtual-section", props.compact ? "py-1.5" : "py-2.5")} aria-labelledby={headingId} aria-busy={props.freshness.checking}>
       <div className={clsx("mb-2.5 flex items-end justify-between gap-3", props.compact ? "px-4" : "px-5 sm:px-10 lg:px-16")}>
         <h2 id={headingId} className="text-[17px] font-black tracking-[-0.025em] text-white sm:text-lg">Up Next for You</h2>
         <button
@@ -125,6 +125,8 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
               ? preview?.airDate ? formatAirDate(preview.airDate) : formatDate(item.updatedAt)
               : null;
             const episodeTitle = formatEpisodeTitle(item.episode);
+            const duration = item.episode.playbackDurationSeconds ?? item.episode.durationSeconds;
+            const remaining = duration && item.resumeAtSeconds > 0 ? `${Math.max(1, Math.ceil((duration - item.resumeAtSeconds) / 60))} min left` : action;
             const showEpisodeTitle = episodeTitle.toLowerCase() !== item.show.title.toLowerCase();
             return (
               <button
@@ -137,16 +139,16 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
                 {image ? <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]" loading="lazy" decoding="async" /> : null}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/72 via-transparent to-black/12" />
 
+                <div className="up-next-footer" />
                 <div className="up-next-copy">
                   <div className="up-next-heading"><span>{item.show.title}</span><small>{episodeCode(item)}</small></div>
                   <div className="up-next-expanded">
-                    <p>{episodeCode(item)}{showEpisodeTitle ? ` · ${episodeTitle}` : ""}</p>
-                    <p>{action}{date ? ` · ${date}` : ""}</p>
-                    <span className="up-next-play" aria-hidden="true"><Play size={18} /></span>
+                    <p>{episodeCode(item)}{showEpisodeTitle ? ` · ${episodeTitle}` : ""} · {remaining}</p>
+                    <span className="up-next-play" aria-hidden="true"><Play size={16} /></span>
                   </div>
                 </div>
+                <div className="up-next-progress" role="progressbar" aria-label={`${progress}% watched`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div style={{ width: `${progress}%`, backgroundColor: getPlaybackProgressColor(item.episode) }} /></div>
 
-                <div className="absolute inset-x-0 bottom-0 h-[3px] bg-white/16" role="progressbar" aria-label={`${progress}% watched`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div className="h-full" style={{ width: `${progress}%`, backgroundColor: getPlaybackProgressColor(item.episode) }} /></div>
               </button>
             );
           })}

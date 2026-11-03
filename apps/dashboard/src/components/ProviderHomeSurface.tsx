@@ -1,3 +1,4 @@
+import { ArtworkAtmosphere } from "./ArtworkAtmosphere";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { clsx } from "clsx";
@@ -165,32 +166,31 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
   const heroArtwork = displayedItems[0]?.backdropUrl ?? displayedItems[0]?.posterUrl ?? null;
 
   return (
-    <div className="redesign-catalog min-h-screen bg-[#05060a] text-white">
+    <div className="cinema-catalog min-h-screen text-white">
+      <ArtworkAtmosphere src={heroArtwork} />
       <section className={tv
-        ? "relative overflow-hidden bg-[#0b0d12] px-[5vw] pb-10 pt-[clamp(8.5rem,13vh,11rem)]"
-        : "relative flex min-h-[58vh] items-center justify-center overflow-hidden bg-[#0b0d12] px-4 pb-12 pt-10 lg:min-h-[82vh] lg:px-6 lg:pb-16 lg:pt-28"}>
+        ? "cinema-catalog-hero cinema-catalog-tv"
+        : "cinema-catalog-hero"}>
         {heroArtwork ? <div className="absolute inset-0 scale-105 bg-cover bg-center opacity-30 blur-[2px]" style={balancedBackgroundImage(heroArtwork, "backdrop-hero")} /> : null}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_25%,rgba(135,103,67,.26),transparent_35%),linear-gradient(90deg,rgba(5,6,10,.94),rgba(5,6,10,.45),rgba(5,6,10,.82))]" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#05060a]/25 via-transparent to-[#05060a]" />
-        <div className={tv ? "relative w-full" : "relative w-full max-w-4xl text-center"}>
+        <div className="cinema-catalog-search">
           <h1 className={tv ? "text-[clamp(1.6rem,2.2vw,2.4rem)] font-black tracking-[-0.035em] text-white" : "text-3xl font-black tracking-[-.045em] text-white sm:text-5xl"}>{config.title}</h1>
-          <label className={tv
-            ? "mt-5 flex h-16 w-full items-center gap-3 rounded-2xl border border-white/18 bg-black/45 px-5 shadow-[0_24px_80px_rgba(0,0,0,.48)] backdrop-blur-xl focus-within:border-white/45"
-            : "mx-auto mt-6 flex h-14 max-w-3xl items-center gap-3 rounded-2xl border border-white/18 bg-black/45 px-4 shadow-[0_24px_80px_rgba(0,0,0,.48)] backdrop-blur-xl focus-within:border-white/45 sm:mt-7 sm:h-20 sm:gap-4 sm:px-7"}>
+          <label className="cinema-catalog-search-input">
             <Search className="h-5 w-5 shrink-0 text-white/45" />
             <input aria-label={`Search ${provider}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles…" className="min-w-0 flex-1 bg-transparent text-lg font-semibold tracking-tight text-white outline-none placeholder:text-white/30 sm:text-2xl" />
           </label>
-          <div className={tv ? "mt-4 flex flex-wrap gap-2" : "mt-4 flex flex-wrap justify-center gap-2"}>
+          <div className="cinema-catalog-filters">
             <div className="inline-flex flex-wrap rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-xl">
-              {config.feeds.map(([id, label]) => <button key={id} onClick={() => { setFeedId(id); setResponse(null); }} className={clsx("rounded-full px-4 py-2 text-[10px] font-bold uppercase tracking-[.14em] transition", feedId === id ? "bg-white text-black" : "text-white/48 hover:text-white")}>{label}</button>)}
+              {config.feeds.map(([id, label]) => <button key={id} aria-pressed={feedId === id} onClick={() => { setFeedId(id); setResponse(null); }} className={clsx("rounded-full px-4 py-2 text-[10px] font-bold uppercase tracking-[.14em] transition", feedId === id ? "bg-white text-black" : "text-white/48 hover:text-white")}>{label}</button>)}
             </div>
-            {provider === "bombuj" ? <div className="inline-flex rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-xl">{(["all", "subtitles", "dubbing"] as const).map((id) => <button key={id} onClick={() => setAudioFilter(id)} className={clsx("rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[.14em] transition", audioFilter === id ? "bg-white text-black" : "text-white/45 hover:text-white")}>{id}</button>)}</div> : null}
-            {provider === "svetserialu" ? <div className="inline-flex rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-xl">{(["all", "anime", "no-anime"] as const).map((id) => <button key={id} onClick={() => setAnimeFilter(id)} className={clsx("rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[.14em] transition", animeFilter === id ? "bg-white text-black" : "text-white/45 hover:text-white")}>{id === "no-anime" ? "No anime" : id}</button>)}</div> : null}
+            {provider === "bombuj" ? <div className="inline-flex rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-xl">{(["all", "subtitles", "dubbing"] as const).map((id) => <button key={id} aria-pressed={audioFilter === id} onClick={() => setAudioFilter(id)} className={clsx("rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[.14em] transition", audioFilter === id ? "bg-white text-black" : "text-white/45 hover:text-white")}>{id}</button>)}</div> : null}
+            {provider === "svetserialu" ? <div className="inline-flex rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-xl">{(["all", "anime", "no-anime"] as const).map((id) => <button key={id} aria-pressed={animeFilter === id} onClick={() => setAnimeFilter(id)} className={clsx("rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[.14em] transition", animeFilter === id ? "bg-white text-black" : "text-white/45 hover:text-white")}>{id === "no-anime" ? "No anime" : id}</button>)}</div> : null}
           </div>
         </div>
       </section>
 
-      <main className="relative z-10 -mt-8 pb-24">
+      <main className="cinema-catalog-content relative z-10">
         {loading && rails.length === 0 ? <div className="px-5 py-14 text-sm font-semibold text-white/38 sm:px-10 lg:px-16">Loading…</div> : null}
         {!loading && rails.length === 0 ? <div className="px-5 py-14 text-sm font-semibold text-white/38 sm:px-10 lg:px-16">No titles found.</div> : null}
         {rails.map((rail) => <HomeRail key={rail.id} rail={rail} layout="grid" onOpenLocal={() => {}} onImportRemote={(railItem) => {

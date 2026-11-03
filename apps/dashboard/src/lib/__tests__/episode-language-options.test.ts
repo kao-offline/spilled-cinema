@@ -16,6 +16,10 @@ describe("episode language options", () => {
     expect(rows.find((r) => r.code === "en")?.sub).toBeUndefined();
     expect(rows.find((r) => r.code === "unknown")?.sub).toBe("source");
   });
+  it("keeps the selected source when it already supports the requested language", () => {
+    const rows = episodeLanguageOptions({ players: [player("English audio", "first"), player("English audio", "selected")], selectedPlayerAlias: "selected" } as LibraryEpisode);
+    expect(rows.find((entry) => entry.code === "en")?.dub).toBe("selected");
+  });
   it("preserves provider languages outside the reference flags", () => {
     const row = options(player("French subtitles", "french")).find((entry) => entry.code.startsWith("other:"));
     expect(row).toMatchObject({ label: "French subtitles", sub: "french" });

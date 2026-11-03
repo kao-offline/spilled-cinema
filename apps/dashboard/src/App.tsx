@@ -3837,6 +3837,7 @@ function AppContent() {
           }}
           privateNodeConnection={privateNodeConnection}
           onOpenShow={handleOpenShow}
+          onToggleFavorite={handleToggleFavorite}
           onPlayShow={(show) => {
           const episode = show.episodes[show.episodes.length - 1];
           if (episode) {

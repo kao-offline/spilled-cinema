@@ -1,3 +1,4 @@
+import { ArtworkAtmosphere } from "./ArtworkAtmosphere";
 import { getOverlayBannerArtwork } from "../lib/media-library";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandSearchResult, RemoteCommandResult } from "../lib/command-search";
@@ -18,7 +19,7 @@ import { findImportedShowBySource, importSourceKey, selectPrimaryImportSource } 
 import { HomeHero } from "./HomeHero";
 import { HomeRail } from "./HomeRail";
 import { HomeTopChrome } from "./HomeTopChrome";
-import { MobileHomePage } from "./MobileHomePage";
+import { MobileDock } from "./MobileDock";
 import { ProviderHomeSurface } from "./ProviderHomeSurface";
 import type { ImportActivity } from "./ImportActivityPopup";
 import { buildRecommendedWatchItems } from "../lib/home-personalization";
@@ -37,6 +38,7 @@ type CinematicHomePageProps = {
   onOpenSettings: () => void;
   privateNodeConnection: PrivateNodeConnection;
   onOpenShow: (slug: string) => void;
+  onToggleFavorite: (slug: string) => void;
   onPlayShow: (show: ImportedShow) => void;
   onPlayEpisode: (episode: ImportedShow["episodes"][number]) => void;
   onCheckNewEpisodes: () => void;
@@ -96,6 +98,7 @@ export function CinematicHomePage({
   onOpenSettings,
   privateNodeConnection,
   onOpenShow,
+  onToggleFavorite,
   onPlayShow,
   onPlayEpisode,
   onCheckNewEpisodes,
@@ -107,7 +110,6 @@ export function CinematicHomePage({
   onTvModeChange,
 }: CinematicHomePageProps) {
   const [commandOpen, setCommandOpen] = useState(false);
-  const [mobileSearchActive, setMobileSearchActive] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [remoteResults, setRemoteResults] = useState<RemoteCommandResult[]>([]);
   const [peopleResults, setPeopleResults] = useState<CommandSearchResult[]>([]);
@@ -155,7 +157,7 @@ export function CinematicHomePage({
 
   useEffect(() => {
     const query = commandQuery.trim();
-    if ((!commandOpen && !mobileSearchActive) || query.length < 2) {
+    if ((!commandOpen) || query.length < 2) {
       setRemoteResults([]);
       setPeopleResults([]);
       setSearchLoading(false);
@@ -197,10 +199,10 @@ export function CinematicHomePage({
       canceled = true;
       window.clearTimeout(timer);
     };
-  }, [commandOpen, commandQuery, mobileSearchActive, searchRemotes]);
+  }, [commandOpen, commandQuery, searchRemotes]);
 
   useEffect(() => {
-    if (!commandOpen && !mobileSearchActive) {
+    if (!commandOpen) {
       availabilityRequestKey.current = "";
       return;
     }
@@ -256,7 +258,7 @@ export function CinematicHomePage({
     return () => {
       canceled = true;
     };
-  }, [commandOpen, mobileSearchActive, remoteResults]);
+  }, [commandOpen, remoteResults]);
 
   const commandResults = useMemo(() => {
     const local = buildLocalCommandResults({
@@ -399,46 +401,12 @@ export function CinematicHomePage({
 
   return (
     <div className="redesign-home relative isolate min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
-      {featuredShow ? <div className="home-artwork-ambient" aria-hidden="true" style={{ backgroundImage: `url(${JSON.stringify(getOverlayBannerArtwork(featuredShow).bannerUrl)})` }} /> : null}
-      <div className={tvModeEnabled ? "hidden" : "contents"}><MobileHomePage
-        featuredShow={featuredShow}
-        rails={rails}
-        searchQuery={commandQuery}
-        searchResults={commandResults}
-        searchLoading={searchLoading}
-        busyResultId={busyResultId}
-        onSearchQueryChange={setCommandQuery}
-        onSearchActiveChange={setMobileSearchActive}
-        onPlayResult={handlePlayResult}
-        onAddResult={(result) => { void handleAddResult(result); }}
-        onMoreResult={handleMoreResult}
-        onOpenLibrary={onOpenLibrary}
-        onOpenFavorites={onOpenFavorites}
-        onOpenExplore={onOpenExplore}
-        onOpenSettings={onOpenSettings}
-        onOpenAccount={() => setAccountOpen(true)}
-        accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName}
-        motionPaused={accountOpen || commandOpen}
-        onOpenLocal={handleOpenRailLocal}
-        onImportRemote={handleImportRailRemote}
-        onPlayFeatured={() => {
-          if (featuredShow && latestFeaturedEpisode) onPlayShow(featuredShow);
-          else openSearch();
-        }}
-        recommendedWatchItems={recommendedWatchItems}
-        newEpisodeCheckState={newEpisodeCheckState}
-        onCheckNewEpisodes={onCheckNewEpisodes}
-        onPlayEpisode={onPlayEpisode}
-        activeTab={homeTab}
-        onTabChange={setHomeTab}
-        providerContent={providerSurface}
-      />
-
-      </div>
-      <div className={tvModeEnabled ? "redesign-tv-home block" : "hidden lg:block"}>
+      <ArtworkAtmosphere src={featuredShow ? getOverlayBannerArtwork(featuredShow).bannerUrl : null} />
+      <div className={tvModeEnabled ? "redesign-tv-home" : undefined}>
         <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 
         {homeTab === "home" ? <><HomeHero
+          onToggleFavorite={() => { if (featuredShow) onToggleFavorite(featuredShow.slug); }}
           featuredShow={featuredShow}
           downloadedCount={featuredShow ? downloadedCountByShow[featuredShow.slug] ?? 0 : 0}
           onPlay={() => {
@@ -455,7 +423,7 @@ export function CinematicHomePage({
           onOpenSearch={openSearch}
         />
 
-        <main className="relative z-10 -mt-8 pb-24">
+        <main className="cinema-home-content relative z-10 -mt-8 pb-24">
           <HomePersonalizedRail
             items={recommendedWatchItems}
             freshness={newEpisodeCheckState}
@@ -478,6 +446,8 @@ export function CinematicHomePage({
           )}
         </main></> : providerSurface}
       </div>
+
+      {!tvModeEnabled && !commandOpen && !accountOpen ? <MobileDock active="home" onHome={() => setHomeTab("home")} onLibrary={onOpenLibrary} onFavorites={onOpenFavorites} onExplore={onOpenExplore} onAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} /> : null}
 
       <HomeAccountSheet open={accountOpen} connection={privateNodeConnection} onClose={() => setAccountOpen(false)} onOpenSettings={onOpenSettings} />
 

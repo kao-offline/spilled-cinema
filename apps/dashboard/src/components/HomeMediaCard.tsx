@@ -28,7 +28,7 @@ export function HomeMediaCard({ item, railKind, onOpen, onImport, layout = "rail
   const balancedImageUrl = balanceImageResolution(imageUrl, isBanner ? "backdrop-thumb" : "poster-card");
 
   return (
-    <div className={layout === "grid" ? "animate-grid-scroll-reveal group min-w-0 text-left" : isBanner ? "group w-[78vw] max-w-[420px] shrink-0 text-left sm:w-[31rem]" : "group w-36 shrink-0 text-left sm:w-44"}>
+    <div data-card-kind={isBanner ? "banner" : "poster"} className={layout === "grid" ? "cinema-media-card animate-grid-scroll-reveal group min-w-0 text-left" : isBanner ? "cinema-media-card group w-[78vw] max-w-[420px] shrink-0 text-left sm:w-[31rem]" : "cinema-media-card group w-36 shrink-0 text-left sm:w-44"}>
       {/* Single remote/keyboard stop per card: the artwork button owns focus
         (with a full aria-label). Title text and the overflow dots are
         mouse-only affordances running the same primary action, so the D-pad

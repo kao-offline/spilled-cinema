@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
-import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward, Server } from "lucide-react";
+import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward, Server, List, Download } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
@@ -117,6 +117,8 @@ type UniversalVideoPlayerProps = {
   description?: string | null;
   sourceLabel?: string;
   onOpenServer?: () => void;
+  onOpenEpisodes?: () => void;
+  downloadAction?: { label: string; onClick: () => void };
   className?: string;
   subtitleTracks?: SubtitleTrack[];
   autoPlayToken?: number | null;
@@ -193,6 +195,8 @@ export function UniversalVideoPlayer({
   metadataParts = [],
   sourceLabel = "Universal player",
   onOpenServer,
+  onOpenEpisodes,
+  downloadAction,
   className,
   subtitleTracks = [],
   autoPlayToken = null,
@@ -209,6 +213,12 @@ export function UniversalVideoPlayer({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoHostRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const posterRef = useRef(poster);
+  // Enriching episode artwork must not recreate the active media player.
+  useEffect(() => {
+    posterRef.current = poster;
+    if (videoRef.current) videoRef.current.poster = poster ?? "";
+  }, [poster]);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const initialTimeRef = useRef(initialTime);
   const onErrorRef = useRef(onError);
@@ -338,7 +348,7 @@ export function UniversalVideoPlayer({
     videoElement.setAttribute("webkit-playsinline", "");
     videoElement.preload = "auto";
     videoElement.playbackRate = playbackRate;
-    if (poster) videoElement.poster = poster;
+    if (posterRef.current) videoElement.poster = posterRef.current;
 
     host.appendChild(videoElement);
     videoRef.current = videoElement;
@@ -686,7 +696,7 @@ export function UniversalVideoPlayer({
       video?.removeEventListener("webkitbeginfullscreen", handleWebKitBeginFullscreen);
       video?.removeEventListener("webkitendfullscreen", handleWebKitEndFullscreen);
     };
-  }, [poster, sourceType, src, subtitleTrackSignature]);
+  }, [sourceType, src, subtitleTrackSignature]);
 
   useEffect(() => {
     if (!cssFullscreen) return undefined;
@@ -957,7 +967,7 @@ export function UniversalVideoPlayer({
       <div ref={videoHostRef} className="absolute inset-0" style={{ filter: `brightness(${brightness / 100})`, transform: mirrored ? "scaleX(-1)" : undefined }} />
 
       <div className={clsx(
-        "redesign-player-copy pointer-events-none absolute inset-0 z-10 flex items-end justify-start bg-[linear-gradient(90deg,rgba(0,0,0,0.58),rgba(0,0,0,0.10)_42%,rgba(0,0,0,0.18)),linear-gradient(0deg,rgba(0,0,0,0.66),rgba(0,0,0,0.10)_44%,rgba(0,0,0,0.05))] px-5 pb-36 pt-24 text-left transition-[opacity,transform,filter] duration-300 ease-out sm:px-9 sm:pb-40 lg:px-12",
+        "cinema-player-copy pointer-events-none absolute inset-0 z-10 flex items-end justify-start bg-[linear-gradient(90deg,rgba(0,0,0,0.58),rgba(0,0,0,0.10)_42%,rgba(0,0,0,0.18)),linear-gradient(0deg,rgba(0,0,0,0.66),rgba(0,0,0,0.10)_44%,rgba(0,0,0,0.05))] px-5 pb-36 pt-24 text-left transition-[opacity,transform,filter] duration-300 ease-out sm:px-9 sm:pb-40 lg:px-12",
         paused ? "translate-y-0 opacity-100 blur-0" : "translate-y-3 opacity-0 blur-sm",
       )}>
           <div className="max-w-[35rem]">
@@ -1011,14 +1021,14 @@ export function UniversalVideoPlayer({
       <div
         data-player-control
         className={clsx(
-          "redesign-player-controls absolute inset-x-0 bottom-0 z-30 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8 transition-opacity duration-200 sm:px-7",
+          "cinema-player-controls absolute inset-x-0 bottom-0 z-30 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8 transition-opacity duration-200 sm:px-7",
           "bg-[linear-gradient(0deg,rgba(0,0,0,0.34),rgba(0,0,0,0.16)_56%,rgba(0,0,0,0))]",
           controlsVisible || paused ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
-        <div className="mb-2 flex min-w-0 items-center gap-3 text-[11px] font-semibold text-white/70 sm:mb-3 sm:text-xs">
-          <span className="truncate">{autoplayBlocked ? "Tap play to start" : sourceLabel}</span>
-          <span className="ml-auto tabular-nums text-white/78">{formatClock(currentTime)} / {formatClock(duration)}</span>
+        <div className="cinema-player-timing">
+          <span className="cinema-player-source">{autoplayBlocked ? "Tap play to start" : sourceLabel}</span>
+          <span className="cinema-player-clock"><span className="cinema-player-elapsed">{formatClock(currentTime)}</span><span className="cinema-player-clock-separator"> / </span><span className="cinema-player-duration">{formatClock(duration)}</span></span>
         </div>
 
         {activeSkipSegment && (
@@ -1086,7 +1096,7 @@ export function UniversalVideoPlayer({
           <div className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_16px_rgba(255,255,255,0.42)] transition-transform group-hover/seek:scale-110" style={{ left: `${watchedPercent}%` }} />
         </div>
 
-        <div className="redesign-player-buttons relative mt-2 flex items-center gap-1 sm:mt-4 sm:gap-3">
+        <div className="cinema-player-buttons relative mt-2 flex items-center gap-1 sm:mt-4 sm:gap-3">
           <button type="button" onClick={togglePlay} className="flex h-11 w-11 items-center justify-center rounded-full text-white transition hover:bg-white/10" aria-label={paused ? "Play" : "Pause"}>
             {paused ? <Play className="h-6 w-6 fill-white" strokeWidth={0} /> : <Pause className="h-6 w-6 fill-white" strokeWidth={0} />}
           </button>
@@ -1100,11 +1110,12 @@ export function UniversalVideoPlayer({
             {muted || volume === 0 ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
           </button>
           <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(event) => setPlayerVolume(Number(event.target.value))} className="hidden h-1 w-24 accent-white sm:block" aria-label="Volume" />
-          <div className="ml-auto flex items-center gap-0 sm:gap-2">
+          <div className="cinema-player-tools ml-auto flex items-center gap-0 sm:gap-2">
             {onOpenServer ? <button type="button" onClick={onOpenServer} className="flex h-11 w-11 items-center justify-center" aria-label="Server"><Server className="h-5 w-5" /></button> : null}
             <button type="button" onClick={toggleCaptions} disabled={subtitleTracks.length === 0} className={clsx("flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-white/10", captionsEnabled ? "text-white" : "text-white/55", subtitleTracks.length === 0 && "cursor-not-allowed opacity-35")} aria-label={captionsEnabled ? "Turn subtitles off" : "Turn subtitles on"} aria-pressed={captionsEnabled}>
               <Captions className="h-5 w-5" />
             </button>
+            {onOpenEpisodes ? <button type="button" className="cinema-phone-episodes" onClick={onOpenEpisodes} aria-label="Episodes"><List className="h-5 w-5" /></button> : null}
             <button type="button" onClick={() => setSettingsOpen((value) => !value)} className={clsx("flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10 hover:text-white", settingsOpen ? "bg-white/12 text-white" : "text-white/86")} aria-label="Settings" aria-expanded={settingsOpen}>
               <Settings className="h-5 w-5" />
             </button>
@@ -1114,16 +1125,18 @@ export function UniversalVideoPlayer({
           </div>
 
           {settingsOpen ? (
-            <div className="glass-panel custom-scrollbar absolute bottom-12 right-0 max-h-[min(72svh,40rem)] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl border border-white/12 p-4 text-sm text-white shadow-[0_24px_80px_rgba(0,0,0,0.68)]">
+            <div className="cinema-player-settings glass-panel custom-scrollbar absolute bottom-12 right-0 max-h-[min(72svh,40rem)] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-2xl border border-white/12 p-4 text-sm text-white shadow-[0_24px_80px_rgba(0,0,0,0.68)]">
               <div className="mb-4 flex items-center justify-between">
                 <span className="text-sm font-bold text-white">Settings</span>
-                <button type="button" onClick={() => setSettingsOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/60 transition hover:bg-white/20">
+                <button type="button" aria-label="Close settings" onClick={() => setSettingsOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/60 transition hover:bg-white/20">
                   <Minimize className="h-3.5 w-3.5" />
                 </button>
               </div>
 
               {settingsSection === "main" ? (
                 <div className="space-y-1">
+                  {downloadAction ? <button className="cinema-phone-download glass-settings-item w-full" onClick={downloadAction.onClick}><Download size={16} /><span>{downloadAction.label}</span></button> : null}
+                  <div className="cinema-phone-volume"><label htmlFor="phone-player-volume">Volume</label><input id="phone-player-volume" type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(event) => setPlayerVolume(Number(event.target.value))} /></div>
                   <div className="glass-section-header">Sources</div>
                   <div className="glass-settings-item" onClick={() => {}}>
                     <div className="glass-settings-label">

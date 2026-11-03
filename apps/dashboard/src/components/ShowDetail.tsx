@@ -1,3 +1,4 @@
+import { ArtworkAtmosphere } from "./ArtworkAtmosphere";
 import { SeriesAtmosphere } from "./SeriesAtmosphere";
 import { EpisodeLanguageSelector } from "./EpisodeLanguageSelector";
 import { useEffect, useMemo, useState } from "react";
@@ -13,8 +14,6 @@ import { fetchExploreFeed } from "../lib/discovery-client";
 import { getProviderLabel } from "../lib/command-search";
 import { getOverlayBannerArtwork, getShowArtwork, getShowMetadata, getStandaloneBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
 import { getEpisodeAudioAvailability } from "../lib/episode-audio";
-import { readTvMode } from "../lib/tv-mode";
-import { TvShowDetail } from "./TvShowDetail";
 
 type ShowDetailProps = {
   show: ImportedShow | null;
@@ -162,9 +161,6 @@ export function ShowDetail({
   const [episodePreviews, setEpisodePreviews] = useState<EpisodePreview[]>([]);
   const [actorCatalogLoading, setActorCatalogLoading] = useState(false);
   const [actorCatalogError, setActorCatalogError] = useState<string | null>(null);
-  // TV mode renders the dedicated lean-back surface below: no cast fetch,
-  // no actors, no recommendations. Desktop path is untouched.
-  const tvMode = readTvMode();
 
   const sortedEpisodes = useMemo(() => {
     if (!show) return [];
@@ -270,7 +266,7 @@ export function ShowDetail({
 
   useEffect(() => {
     let canceled = false;
-    if (tvMode || !show || actors.length) return;
+    if (!show || actors.length) return;
     setCastLoading(true);
     void fetchCastForShow(show)
       .then((cast) => {
@@ -288,7 +284,7 @@ export function ShowDetail({
     return () => {
       canceled = true;
     };
-  }, [tvMode, show, actors.length, onUpdateCast]);
+  }, [show, actors.length, onUpdateCast]);
 
   useEffect(() => {
     let canceled = false;
@@ -366,26 +362,14 @@ export function ShowDetail({
     );
   }
 
-  if (tvMode) {
-    return (
-      <TvShowDetail
-        show={show}
-        onBack={onBack}
-        onPlayLatest={() => {
-          if (latestEpisode) onSelectEpisode(latestEpisode);
-        }}
-        onSelectEpisode={onSelectEpisode}
-      />
-    );
-  }
 
   return (
     <section className="redesign-details relative overflow-hidden bg-[#08090d] pb-28 text-white lg:pb-0">
-      {heroBackdrop ? <div className="series-ambient" style={{ backgroundImage: `url(${JSON.stringify(heroBackdrop)})` }} aria-hidden="true" /> : null}
-      <div className="redesign-detail-hero animate-detail-hero-open relative min-h-[100svh] origin-top overflow-hidden lg:min-h-[46rem]" style={{ viewTransitionName: `spilled-hero-${show.slug}` }}>
+      <ArtworkAtmosphere src={heroBackdrop} />
+      <div className="cinema-detail-hero animate-detail-hero-open relative" style={{ viewTransitionName: `spilled-hero-${show.slug}` }}>
         {heroBackdrop ? (
-          <div className="absolute inset-0">
-            <div className="absolute inset-0 scale-[1.01] bg-cover bg-center" style={{ ...balancedBackgroundImage(heroBackdrop, showArtwork.backdropUrl || showArtwork.bannerUrl ? "backdrop-hero" : "poster-detail"), ...(!showArtwork.bannerUrl && !showArtwork.backdropUrl ? { backgroundSize: "contain", backgroundPosition: "right center", backgroundRepeat: "no-repeat" } : {}) }} />
+          <div className="cinema-detail-artwork absolute inset-0">
+            <img className={`cinema-detail-poster ${!showArtwork.bannerUrl && !showArtwork.backdropUrl ? "poster-fallback" : ""}`} src={balanceImageResolution(heroBackdrop, showArtwork.bannerUrl || showArtwork.backdropUrl ? "backdrop-hero" : "poster-detail") ?? heroBackdrop} alt="" fetchPriority="high" />
             <SeriesAtmosphere key={show.slug} show={show} />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_35%,rgba(8,9,13,0.1),rgba(8,9,13,0.76)_58%,#08090d_100%)]" />
             <div className="absolute inset-0 bg-gradient-to-r from-[#08090d]/95 via-[#08090d]/38 to-[#08090d]/74" />
@@ -396,13 +380,12 @@ export function ShowDetail({
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_65%_20%,rgba(42,48,40,0.7),rgba(8,9,13,1)_62%)]" />
         )}
 
-        <div className="redesign-detail-content relative z-20 flex min-h-[100svh] flex-col px-4 pb-28 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between px-5 pt-6 sm:px-8 lg:px-12">
+        <div className="cinema-detail-content relative z-20">
+          <div className="cinema-detail-header pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between">
             <div className="pointer-events-auto flex items-center gap-3">
               <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to home">
                 <ArrowLeft className="h-5 w-5" />
               </button>
-              <img src="/Spilled.svg" alt="Spilled" className="hidden h-11 w-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.75)] sm:block" />
             </div>
 
             <div className="hidden">
@@ -579,7 +562,7 @@ export function ShowDetail({
             </div>
           </div>
 
-          <div className="relative z-10 mt-auto max-w-[46rem] pb-5 pt-40 sm:pt-48 lg:pb-[9vh] lg:pl-7">
+          <div className="cinema-detail-copy relative z-10">
             {showArtwork.clearLogoUrl ? (
               <img
                 src={balanceImageResolution(showArtwork.clearLogoUrl, "logo") ?? showArtwork.clearLogoUrl}
@@ -661,22 +644,9 @@ export function ShowDetail({
         </div>
       </div>
 
-      <div className="animate-detail-content-open relative z-10 border-t border-white/[0.04] bg-[#050609] px-5 pb-2 pt-8 sm:px-8 lg:px-12">
-        {directors.length > 0 ? (
-          <div className="mb-7 rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-4">
-            <div className="mb-2 text-[11px] font-black uppercase tracking-[0.24em] text-white/34">Directed by</div>
-            <div className="flex flex-wrap gap-2">
-              {directors.map((director, index) => (
-                <span key={`${director.name}:${index}`} className="rounded-full bg-white/8 px-3 py-1.5 text-sm font-bold text-white/78">
-                  {director.name}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
+      <div className="cinema-detail-sections animate-detail-content-open relative z-10">
         {sortedEpisodes.length > 1 ? (
-          <section className="tv-episode-browser mb-9" aria-labelledby="episode-browser-heading">
+          <section className="cinema-episode-browser" aria-labelledby="episode-browser-heading">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div id="episode-browser-heading" className="inline-flex items-center gap-2 text-2xl font-black text-white">
                 <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
@@ -703,14 +673,15 @@ export function ShowDetail({
                 <span className="text-xs font-bold text-white/32">{sortedEpisodes.length} available</span>
               </div>
             </div>
+            <p className="sr-only">SUB · Subtitles <span>DUB · Dubbed audio</span><span>Availability varies by episode</span></p>
             {checkNewEpisodesState?.message ? (
-              <div className={clsx("mb-4 text-xs font-semibold", checkNewEpisodesState.error ? "text-red-300" : "text-emerald-300")}>
+              <div role="status" className={checkNewEpisodesState.error ? "mb-4 text-xs font-semibold text-red-300" : "sr-only"}>
                 {checkNewEpisodesState.message}
               </div>
             ) : null}
-            <div className="no-scrollbar mb-4 flex gap-2 overflow-x-auto pb-1">
+            <div className="cinema-season-tabs no-scrollbar">
               {seasons.map(([seasonNumber, episodes]) => (
-                <button key={seasonNumber} type="button" onClick={() => setSelectedSeason(seasonNumber)} className={clsx("tv-episode-season shrink-0 rounded-full border px-4 py-2 text-xs font-black transition", activeSeason === seasonNumber ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.035] text-white/52 hover:bg-white/[0.08] hover:text-white")}>
+                <button key={seasonNumber} type="button" aria-pressed={activeSeason === seasonNumber} onClick={() => setSelectedSeason(seasonNumber)} className={clsx("tv-episode-season shrink-0 rounded-full border px-4 py-2 text-xs font-black transition", activeSeason === seasonNumber ? "border-white bg-white text-black" : "border-white/10 bg-white/[0.035] text-white/52 hover:bg-white/[0.08] hover:text-white")}>
                   Season {seasonNumber} <span className="ml-1 opacity-50">{episodes.length}</span>
                 </button>
               ))}
@@ -730,12 +701,12 @@ export function ShowDetail({
           </section>
         ) : null}
 
-        <div className="mb-5 inline-flex items-center gap-2 bg-[#050609] pr-8 text-2xl font-black text-white">
+        <div className="cinema-section-title inline-flex items-center gap-2 text-2xl font-bold text-white">
           <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
           Actors
         </div>
         {actors.length > 0 ? (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="cinema-cast-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {actors.slice(0, 12).map((actor, index) => (
               <button key={`${actor.name}:${index}`} type="button" onClick={() => setSelectedActor(actor)} className="flex min-w-0 items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3 py-3 text-left transition hover:border-white/16 hover:bg-white/[0.055]">
                 <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-white/10">
@@ -757,11 +728,24 @@ export function ShowDetail({
             {castLoading ? "Loading cast..." : "Cast is unavailable for this title."}
           </div>
         )}
+        {directors.length > 0 ? (
+          <div className="mb-7 rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-4">
+            <div className="mb-2 text-[11px] font-black uppercase tracking-[0.24em] text-white/34">Directed by</div>
+            <div className="flex flex-wrap gap-2">
+              {directors.map((director, index) => (
+                <span key={`${director.name}:${index}`} className="rounded-full bg-white/8 px-3 py-1.5 text-sm font-bold text-white/78">
+                  {director.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
       </div>
 
       {relatedShows.length > 0 ? (
-        <div className="animate-detail-content-open-late relative z-10 border-t border-white/[0.04] bg-[#08090d] px-5 pb-24 pt-8 sm:px-8 lg:px-12">
-          <div className="mb-5 inline-flex items-center gap-2 bg-[#08090d] pr-8 text-2xl font-black text-white">
+        <div className="cinema-related-section animate-detail-content-open-late relative z-10">
+          <div className="cinema-section-title inline-flex items-center gap-2 text-2xl font-bold text-white">
             <img src="/spilled-star.svg" alt="" className="h-4 w-4" />
             You may like
           </div>

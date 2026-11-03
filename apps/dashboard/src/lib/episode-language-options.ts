@@ -26,8 +26,12 @@ export function episodeLanguageOptions(episode: LibraryEpisode): EpisodeLanguage
     const [audioPart, subtitlePart] = key.includes("-audio-") ? key.split("-audio-") : /\b(?:sub|subs|subtitles|titulky)\b/.test(key) ? ["", key] : [key, ""];
     const audioCodes = codes(audioPart);
     const subCodes = codes(subtitlePart.replace("czsk", "cz sk"));
-    for (const code of audioCodes) row(code).dub ??= player.alias;
-    for (const code of subCodes) row(code).sub ??= player.alias;
+    for (const code of audioCodes) {
+      if (!row(code).dub || player.alias === episode.selectedPlayerAlias) row(code).dub = player.alias;
+    }
+    for (const code of subCodes) {
+      if (!row(code).sub || player.alias === episode.selectedPlayerAlias) row(code).sub = player.alias;
+    }
     // A URL proves subtitles exist, but cannot prove their language.
     if (player.subtitlesUrl && !subCodes.length) row("unknown").sub ??= player.alias;
     if (!audioCodes.length && !subCodes.length) {
