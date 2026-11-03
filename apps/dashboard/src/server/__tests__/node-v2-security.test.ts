@@ -31,9 +31,11 @@ describe("node v2 transport security", () => {
     });
 
     expect(decryptNodeRequest(envelope, transport.privateKey, 2_000).toString()).toBe("private payload");
+    const changedCiphertext = Buffer.from(envelope.ciphertext, "base64url");
+    changedCiphertext[0] ^= 1;
     expect(() => decryptNodeRequest({
       ...envelope,
-      ciphertext: `${envelope.ciphertext.slice(0, -1)}A`,
+      ciphertext: changedCiphertext.toString("base64url"),
     }, transport.privateKey, 2_000)).toThrow();
   });
 

@@ -9,7 +9,7 @@ import {
   writeLocalLibrarySnapshot,
 } from "./local-library-store";
 import { isIP } from "node:net";
-import { Readable } from "node:stream";
+import { Readable, pipeline, type Writable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { SpillshareSource } from "../../../packages/node-protocol/src";
 import {
@@ -45,7 +45,7 @@ import {
 import type { ImportedShow, ResolvedTitle } from "../../dashboard/src/lib/types";
 import type { SvetSerialuCredentials } from "../../dashboard/src/server/svetserialu";
 import { resolvePlayerEmbedUrl, shouldResolvePlayerUrl } from "./player-resolver";
-import { composeHomepageBanner, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbSeasonEpisodePreviews, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
+import { composeHomepageBanner, fetchTmdbTrailer, fetchTmdbCast, fetchTmdbPersonCredits, fetchTmdbSeasonEpisodePreviews, fetchTmdbTitleMetadata, searchPeopleSuggestions } from "../../dashboard/src/server/artwork";
 import { resolveArtworkApiKeys } from "../../dashboard/src/server/shared-artwork-api-keys";
 import {
   findEpisodeDownloadByFileNameFast,
@@ -1065,6 +1065,35 @@ export function createHttpHandlers() {
     }
   };
 
+  const trailerArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
+    try {
+      const body = await readJsonBody<{
+        title: string;
+        altTitle?: string | null;
+        yearHint?: string | null;
+        description?: string | null;
+        mediaType: "movie" | "tv";
+        externalIds?: { imdb?: string; tmdb?: string; tvdb?: string } | null;
+        artworkApiKeys?: { tmdbApiKey?: string; fanartApiKey?: string; tvdbApiKey?: string };
+      }>(req);
+      const apiKeys = await resolveArtworkApiKeys(body.artworkApiKeys);
+      sendJson(res, 200, {
+        trailerKey: await fetchTmdbTrailer({
+          mediaType: body.mediaType,
+          title: body.title,
+          altTitle: body.altTitle ?? null,
+          yearHint: body.yearHint ?? undefined,
+          description: body.description ?? null,
+          externalIds: body.externalIds ?? undefined,
+          apiKeys,
+        }),
+      });
+    } catch (error) {
+      sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to fetch trailer." });
+    }
+  };
+
   const castArtworkHandler = async (req: RequestLike, res: JsonResponse) => {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed." });
     try {
@@ -1523,7 +1552,7 @@ export function createHttpHandlers() {
       if (contentLength) res.setHeader("Content-Length", contentLength);
       if (contentRange) res.setHeader("Content-Range", contentRange);
       if (req.method === "HEAD" || !upstream.body) return res.end();
-      Readable.fromWeb(upstream.body as unknown as NodeReadableStream).pipe(res as never);
+      pipeUpstreamBody(upstream.body as unknown as NodeReadableStream, res as unknown as Writable);
     } catch (error) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : "Failed to proxy download." });
     }
@@ -2462,6 +2491,7 @@ export function createHttpHandlers() {
     titleMetadataArtworkHandler,
     episodePreviewsArtworkHandler,
     castArtworkHandler,
+    trailerArtworkHandler,
     personCreditsArtworkHandler,
     composeHomepageBannerHandler,
     exploreFeedHandler,
@@ -2526,4 +2556,9 @@ export function createHttpHandlers() {
     remotePollHandler,
     remotePageHandler,
   };
+}
+
+// pipeline closes both ends on disconnect and consumes asynchronous stream errors.
+export function pipeUpstreamBody(body: NodeReadableStream, response: Writable) {
+  pipeline(Readable.fromWeb(body), response, () => {});
 }

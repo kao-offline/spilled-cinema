@@ -112,8 +112,14 @@ export function MobileHomePage({
     // menu) is open: besides saving motion, the parent re-renders on every
     // tick, which used to yank focus out of open modal inputs.
     if (heroItems.length < 2 || searchActive || motionPaused) return;
-    const timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroItems.length), 6500);
-    return () => window.clearInterval(timer);
+    const preference = matchMedia("(prefers-reduced-motion: reduce)");
+    let timer: number | undefined;
+    const update = () => {
+      window.clearInterval(timer);
+      if (!preference.matches) timer = window.setInterval(() => setHeroIndex((index) => (index + 1) % heroItems.length), 6500);
+    };
+    update(); preference.addEventListener("change", update);
+    return () => { window.clearInterval(timer); preference.removeEventListener("change", update); };
   }, [heroItems.length, searchActive, motionPaused]);
 
   useEffect(() => {
@@ -239,6 +245,7 @@ export function MobileHomePage({
                     <button
                       type="button"
                       onClick={() => activateItem(item)}
+                    aria-label={`${item.kind === "local" ? "Open" : "Add"} ${item.title}`}
                       disabled={item.kind === "remote" && item.importStatus === "importing"}
                       className="mobile-home-card relative block aspect-[2/3] w-full overflow-hidden rounded-[15px] bg-[#181a20] text-left transition active:scale-[0.96]"
                     >
@@ -280,6 +287,7 @@ export function MobileHomePage({
                     key={item.id}
                     type="button"
                     onClick={() => activateItem(item)}
+                    aria-label={`${item.kind === "local" ? "Open" : "Add"} ${item.title}`}
                     disabled={item.kind === "remote" && item.importStatus === "importing"}
                     className="relative aspect-[16/7] w-[82vw] max-w-[430px] shrink-0 snap-center overflow-hidden rounded-[20px] bg-[#181a20]"
                   >

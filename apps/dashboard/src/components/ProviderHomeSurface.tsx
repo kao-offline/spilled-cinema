@@ -131,7 +131,8 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
 
   const displayedItems = useMemo(() => {
     const sourceItems = query.trim().length >= 2 ? searchItems : response?.items ?? [];
-    const items = sourceItems.map((item) => item.inVault || !isInVault?.(item) ? item : { ...item, inVault: true });
+    const uniqueItems = Array.from(new Map(sourceItems.map((item) => [item.id, item])).values());
+    const items = uniqueItems.map((item) => item.inVault || !isInVault?.(item) ? item : { ...item, inVault: true });
     const audioItems = audioFilter === "all" ? items : items.filter((item) => item.audioBuckets.includes(audioFilter));
     if (animeFilter === "all") return audioItems;
     return audioItems.filter((item) => animeFilter === "anime" ? isAnimeItem(item) : !isAnimeItem(item));
@@ -164,7 +165,7 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
   const heroArtwork = displayedItems[0]?.backdropUrl ?? displayedItems[0]?.posterUrl ?? null;
 
   return (
-    <div className="min-h-screen bg-[#05060a] text-white">
+    <div className="redesign-catalog min-h-screen bg-[#05060a] text-white">
       <section className={tv
         ? "relative overflow-hidden bg-[#0b0d12] px-[5vw] pb-10 pt-[clamp(8.5rem,13vh,11rem)]"
         : "relative flex min-h-[58vh] items-center justify-center overflow-hidden bg-[#0b0d12] px-4 pb-12 pt-10 lg:min-h-[82vh] lg:px-6 lg:pb-16 lg:pt-28"}>
@@ -177,7 +178,7 @@ export function ProviderHomeSurface({ provider, onImport, onOpenVault, isInVault
             ? "mt-5 flex h-16 w-full items-center gap-3 rounded-2xl border border-white/18 bg-black/45 px-5 shadow-[0_24px_80px_rgba(0,0,0,.48)] backdrop-blur-xl focus-within:border-white/45"
             : "mx-auto mt-6 flex h-14 max-w-3xl items-center gap-3 rounded-2xl border border-white/18 bg-black/45 px-4 shadow-[0_24px_80px_rgba(0,0,0,.48)] backdrop-blur-xl focus-within:border-white/45 sm:mt-7 sm:h-20 sm:gap-4 sm:px-7"}>
             <Search className="h-5 w-5 shrink-0 text-white/45" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles…" className="min-w-0 flex-1 bg-transparent text-lg font-semibold tracking-tight text-white outline-none placeholder:text-white/30 sm:text-2xl" />
+            <input aria-label={`Search ${provider}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles…" className="min-w-0 flex-1 bg-transparent text-lg font-semibold tracking-tight text-white outline-none placeholder:text-white/30 sm:text-2xl" />
           </label>
           <div className={tv ? "mt-4 flex flex-wrap gap-2" : "mt-4 flex flex-wrap justify-center gap-2"}>
             <div className="inline-flex flex-wrap rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-xl">

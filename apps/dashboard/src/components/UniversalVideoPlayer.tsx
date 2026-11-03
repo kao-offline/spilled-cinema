@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
-import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward } from "lucide-react";
+import { Captions, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, Volume2, VolumeX, Sun, Repeat, Clock, PictureInPicture, ArrowLeftRight, SkipForward, Server } from "lucide-react";
 import Hls from "hls.js";
 import type { MediaPlayerClass } from "dashjs";
 import { clsx } from "clsx";
-import { balanceImageResolution } from "../lib/image-resolution";
 import { findSmallBufferGapTarget, formatHlsQualityLabel, getBufferedAheadSeconds, isAutoplayPolicyError, selectHlsBufferProfile, shouldPreferNativeHls } from "../lib/hls-buffering";
 import type { SkipSegment } from "../lib/intro-skip";
 import { findActiveSkipSegment, prewarmSkipTarget } from "../lib/intro-skip";
@@ -117,6 +116,7 @@ type UniversalVideoPlayerProps = {
   metadataParts?: Array<{ label: string; kind?: "rating" | "year" | "runtime" | "scope" | "genre"; pending?: boolean }>;
   description?: string | null;
   sourceLabel?: string;
+  onOpenServer?: () => void;
   className?: string;
   subtitleTracks?: SubtitleTrack[];
   autoPlayToken?: number | null;
@@ -189,11 +189,10 @@ export function UniversalVideoPlayer({
   src,
   poster,
   title,
-  titleLogoUrl,
   titleTransitionKey,
   metadataParts = [],
-  description,
   sourceLabel = "Universal player",
+  onOpenServer,
   className,
   subtitleTracks = [],
   autoPlayToken = null,
@@ -901,7 +900,7 @@ export function UniversalVideoPlayer({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
+      if (event.defaultPrevented || target?.closest("button,input,select,textarea,[role=slider]")) return;
       if (event.code === "Space") {
         event.preventDefault();
         togglePlay();
@@ -950,30 +949,19 @@ export function UniversalVideoPlayer({
       style={subtitlePlayerStyle}
       onClick={handleSurfaceClick}
       onMouseMove={() => setControlsVisible(true)}
+      onFocusCapture={() => setControlsVisible(true)}
       onMouseLeave={() => {
-        if (!paused) setControlsVisible(false);
+        if (!paused && !containerRef.current?.contains(document.activeElement)) setControlsVisible(false);
       }}
     >
       <div ref={videoHostRef} className="absolute inset-0" style={{ filter: `brightness(${brightness / 100})`, transform: mirrored ? "scaleX(-1)" : undefined }} />
 
       <div className={clsx(
-        "pointer-events-none absolute inset-0 z-10 flex items-end justify-start bg-[linear-gradient(90deg,rgba(0,0,0,0.58),rgba(0,0,0,0.10)_42%,rgba(0,0,0,0.18)),linear-gradient(0deg,rgba(0,0,0,0.66),rgba(0,0,0,0.10)_44%,rgba(0,0,0,0.05))] px-5 pb-36 pt-24 text-left transition-[opacity,transform,filter] duration-300 ease-out sm:px-9 sm:pb-40 lg:px-12",
+        "redesign-player-copy pointer-events-none absolute inset-0 z-10 flex items-end justify-start bg-[linear-gradient(90deg,rgba(0,0,0,0.58),rgba(0,0,0,0.10)_42%,rgba(0,0,0,0.18)),linear-gradient(0deg,rgba(0,0,0,0.66),rgba(0,0,0,0.10)_44%,rgba(0,0,0,0.05))] px-5 pb-36 pt-24 text-left transition-[opacity,transform,filter] duration-300 ease-out sm:px-9 sm:pb-40 lg:px-12",
         paused ? "translate-y-0 opacity-100 blur-0" : "translate-y-3 opacity-0 blur-sm",
       )}>
           <div className="max-w-[35rem]">
-            {titleLogoUrl ? (
-              <img
-                src={balanceImageResolution(titleLogoUrl, "logo") ?? titleLogoUrl}
-                alt={title}
-                className="mb-3 max-h-24 w-auto max-w-[min(28rem,78vw)] object-contain drop-shadow-[0_8px_28px_rgba(0,0,0,0.72)]"
-                draggable={false}
-                style={titleTransitionKey ? { viewTransitionName: `spilled-title-${titleTransitionKey}` } : undefined}
-              />
-            ) : (
-              <div className="text-4xl font-black uppercase text-white drop-shadow-[0_4px_24px_rgba(0,0,0,0.82)] sm:text-6xl" style={titleTransitionKey ? { viewTransitionName: `spilled-title-${titleTransitionKey}` } : undefined}>
-                {title}
-              </div>
-            )}
+            <div className="text-[29px] font-bold leading-tight text-white drop-shadow-lg">{title}</div>
             {renderedMetadataParts.length > 0 ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-extrabold text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.78)]" style={titleTransitionKey ? { viewTransitionName: `spilled-meta-${titleTransitionKey}` } : undefined}>
                 {renderedMetadataParts.map((part, index) => (
@@ -985,10 +973,9 @@ export function UniversalVideoPlayer({
                 ))}
               </div>
             ) : null}
-            {renderedMetadataParts.length === 0 && !titleLogoUrl ? (
+            {renderedMetadataParts.length === 0 ? (
               <div className="mt-3 text-sm font-bold text-white/82">{title}</div>
             ) : null}
-            {description ? <div className="mt-3 line-clamp-2 max-w-xl text-sm leading-5 text-white/82">{description}</div> : null}
           </div>
         </div>
 
@@ -1014,7 +1001,7 @@ export function UniversalVideoPlayer({
             event.stopPropagation();
             togglePlay();
           }}
-          className="absolute left-1/2 top-1/2 z-20 flex h-16 w-16 touch-manipulation -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/54 text-white shadow-[0_18px_50px_rgba(0,0,0,.48)] backdrop-blur-md transition active:scale-95 lg:hidden"
+          className="mobile-center-play absolute left-1/2 top-1/2 z-20 flex h-16 w-16 touch-manipulation -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/54 text-white shadow-[0_18px_50px_rgba(0,0,0,.48)] backdrop-blur-md transition active:scale-95 lg:hidden"
           aria-label={autoplayBlocked ? "Tap to start playback" : "Play"}
         >
           <Play className="ml-1 h-7 w-7 fill-white" strokeWidth={0} />
@@ -1024,7 +1011,7 @@ export function UniversalVideoPlayer({
       <div
         data-player-control
         className={clsx(
-          "absolute inset-x-0 bottom-0 z-30 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8 transition-opacity duration-200 sm:px-7",
+          "redesign-player-controls absolute inset-x-0 bottom-0 z-30 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8 transition-opacity duration-200 sm:px-7",
           "bg-[linear-gradient(0deg,rgba(0,0,0,0.34),rgba(0,0,0,0.16)_56%,rgba(0,0,0,0))]",
           controlsVisible || paused ? "opacity-100" : "pointer-events-none opacity-0",
         )}
@@ -1062,10 +1049,13 @@ export function UniversalVideoPlayer({
           onPointerDown={handleSeekPointerDown}
           onPointerMove={handleSeekPointerMove}
           onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") seekBy(-10);
-            if (event.key === "ArrowRight") seekBy(10);
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+              event.preventDefault();
+              event.stopPropagation();
+              seekBy(event.key === "ArrowLeft" ? -10 : 10);
+            }
           }}
-          className="group/seek relative h-5 cursor-pointer touch-none"
+          className="group/seek relative h-11 cursor-pointer touch-none"
         >
           <div className="absolute left-0 right-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-white/28" />
           {playableDuration > 0 ? skipSegments.map((segment, index) => (
@@ -1096,7 +1086,7 @@ export function UniversalVideoPlayer({
           <div className="absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_16px_rgba(255,255,255,0.42)] transition-transform group-hover/seek:scale-110" style={{ left: `${watchedPercent}%` }} />
         </div>
 
-        <div className="relative mt-2 flex items-center gap-1 sm:mt-4 sm:gap-3">
+        <div className="redesign-player-buttons relative mt-2 flex items-center gap-1 sm:mt-4 sm:gap-3">
           <button type="button" onClick={togglePlay} className="flex h-11 w-11 items-center justify-center rounded-full text-white transition hover:bg-white/10" aria-label={paused ? "Play" : "Pause"}>
             {paused ? <Play className="h-6 w-6 fill-white" strokeWidth={0} /> : <Pause className="h-6 w-6 fill-white" strokeWidth={0} />}
           </button>
@@ -1111,6 +1101,7 @@ export function UniversalVideoPlayer({
           </button>
           <input type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(event) => setPlayerVolume(Number(event.target.value))} className="hidden h-1 w-24 accent-white sm:block" aria-label="Volume" />
           <div className="ml-auto flex items-center gap-0 sm:gap-2">
+            {onOpenServer ? <button type="button" onClick={onOpenServer} className="flex h-11 w-11 items-center justify-center" aria-label="Server"><Server className="h-5 w-5" /></button> : null}
             <button type="button" onClick={toggleCaptions} disabled={subtitleTracks.length === 0} className={clsx("flex h-11 w-11 items-center justify-center rounded-full transition hover:bg-white/10", captionsEnabled ? "text-white" : "text-white/55", subtitleTracks.length === 0 && "cursor-not-allowed opacity-35")} aria-label={captionsEnabled ? "Turn subtitles off" : "Turn subtitles on"} aria-pressed={captionsEnabled}>
               <Captions className="h-5 w-5" />
             </button>

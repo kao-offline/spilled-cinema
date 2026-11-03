@@ -1,3 +1,4 @@
+import { getOverlayBannerArtwork } from "../lib/media-library";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandSearchResult, RemoteCommandResult } from "../lib/command-search";
 import {
@@ -23,7 +24,6 @@ import type { ImportActivity } from "./ImportActivityPopup";
 import { buildRecommendedWatchItems } from "../lib/home-personalization";
 import { HomePersonalizedRail } from "./HomePersonalizedRail";
 import { HomeAccountSheet } from "./HomeAccountSheet";
-import { TvHomePage, TvProviderPage, type TvSection } from "./TvHomePage";
 
 type CinematicHomePageProps = {
   state: LibraryState;
@@ -116,7 +116,6 @@ export function CinematicHomePage({
   const [trendingItems, setTrendingItems] = useState<ExploreItem[]>([]);
   const [homeTab, setHomeTab] = useState<HomepageTab>(() => readHomepageTab());
   const [accountOpen, setAccountOpen] = useState(false);
-  const [tvSection, setTvSection] = useState<TvSection>("home");
   const requestedArtworkSlugs = useRef(new Set<string>());
   const availabilityRequestKey = useRef<string>("");
 
@@ -283,17 +282,8 @@ export function CinematicHomePage({
   }, [commandQuery, downloadedCountByShow, peopleResults, remoteResults, state.shows]);
 
   const baseRails = useMemo(
-    () => buildHomepageRails({ shows: state.shows, downloadedCountByShow, trendingItems }),
-    [downloadedCountByShow, state.shows, trendingItems],
-  );
-  const tvLibraryRails = useMemo(
-    () => buildHomepageRails({
-      shows: state.shows,
-      downloadedCountByShow,
-      trendingItems: [],
-      libraryLimit: Number.POSITIVE_INFINITY,
-    }).filter((rail) => rail.id === "library-banners" || rail.id === "library-posters"),
-    [downloadedCountByShow, state.shows],
+    () => buildHomepageRails({ shows: state.shows, downloadedCountByShow, trendingItems, ...(tvModeEnabled ? { libraryLimit: Number.POSITIVE_INFINITY } : {}) }),
+    [downloadedCountByShow, state.shows, trendingItems, tvModeEnabled],
   );
   const rails = useMemo(() => baseRails.map((rail) => ({
     ...rail,
@@ -406,85 +396,11 @@ export function CinematicHomePage({
     />
   );
 
-  if (tvModeEnabled) {
-    // Keep recommendations at the top, then let the viewer browse the whole
-    // collection: a cinematic banner shelf first and every saved title below.
-    const tvRails = tvLibraryRails.map((rail) => ({
-      ...rail,
-      title: rail.id === "library-banners" ? "From your library" : "All titles",
-    }));
-    const handleProviderImport = (item: ExploreItem) => {
-      void onImportRemote(item.provider, item.importSlug, item.mediaType, { title: item.title, posterUrl: item.posterUrl });
-    };
-    const handleProviderOpenVault = (item: ExploreItem) => {
-      const show = findImportedShowBySource(state.shows, item.provider, item.importSlug);
-      if (show) onOpenShow(show.slug);
-    };
-    const isProviderInVault = (item: ExploreItem) => Boolean(findImportedShowBySource(state.shows, item.provider, item.importSlug));
-
-    return (
-      <div className="min-h-screen bg-[#05070b] text-white">
-        {tvSection === "home" ? (
-          <TvHomePage
-            featuredShow={featuredShow}
-            rails={tvRails}
-            recommendedWatchItems={recommendedWatchItems}
-            activeSection={tvSection}
-            onSelectSection={setTvSection}
-            accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName}
-            onPlayFeatured={() => {
-              if (featuredShow && latestFeaturedEpisode) onPlayShow(featuredShow);
-              else openSearch();
-            }}
-            onOpenFeatured={() => {
-              if (featuredShow) onOpenShow(featuredShow.slug);
-              else handleImportFromEmpty();
-            }}
-            onOpenLocal={handleOpenRailLocal}
-            onImportRemote={(item) => { void handleImportRailRemote(item); }}
-            onPlayEpisode={(item) => onPlayEpisode(item.episode)}
-            onOpenSearch={openSearch}
-            onOpenSettings={onOpenSettings}
-            onOpenAccount={() => setAccountOpen(true)}
-          />
-        ) : (
-          <TvProviderPage
-            provider={tvSection}
-            activeSection={tvSection}
-            onSelectSection={setTvSection}
-            accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName}
-            onOpenSearch={openSearch}
-            onOpenSettings={onOpenSettings}
-            onOpenAccount={() => setAccountOpen(true)}
-            onImportItem={handleProviderImport}
-            onOpenVaultItem={handleProviderOpenVault}
-            isInVaultItem={isProviderInVault}
-            importActivity={importActivity}
-          />
-        )}
-
-        <HomeAccountSheet open={accountOpen} connection={privateNodeConnection} onClose={() => setAccountOpen(false)} onOpenSettings={onOpenSettings} />
-        <CommandMenu
-          open={commandOpen}
-          query={commandQuery}
-          onQueryChange={setCommandQuery}
-          results={commandResults}
-          loading={searchLoading}
-          busyResultId={busyResultId}
-          onClose={() => setCommandOpen(false)}
-          onPlay={handlePlayResult}
-          onAdd={(result) => { void handleAddResult(result); }}
-          onMore={handleMoreResult}
-          tvModeEnabled={tvModeEnabled}
-          onTvModeChange={onTvModeChange}
-        />
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
-      <MobileHomePage
+    <div className="redesign-home relative isolate min-h-screen overflow-x-hidden bg-[#05060a] text-white selection:bg-white/20 selection:text-white">
+      {featuredShow ? <div className="home-artwork-ambient" aria-hidden="true" style={{ backgroundImage: `url(${JSON.stringify(getOverlayBannerArtwork(featuredShow).bannerUrl)})` }} /> : null}
+      <div className={tvModeEnabled ? "hidden" : "contents"}><MobileHomePage
         featuredShow={featuredShow}
         rails={rails}
         searchQuery={commandQuery}
@@ -518,7 +434,8 @@ export function CinematicHomePage({
         providerContent={providerSurface}
       />
 
-      <div className="hidden lg:block">
+      </div>
+      <div className={tvModeEnabled ? "redesign-tv-home block" : "hidden lg:block"}>
         <HomeTopChrome onOpenSearch={openSearch} onOpenLibrary={onOpenLibrary} onOpenSettings={onOpenSettings} onOpenAccount={() => setAccountOpen(true)} accountLabel={privateNodeConnection.profileName ?? privateNodeConnection.accountName} activeTab={homeTab} onTabChange={setHomeTab} />
 
         {homeTab === "home" ? <><HomeHero

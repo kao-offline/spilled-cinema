@@ -1,3 +1,5 @@
+import { SeriesAtmosphere } from "./SeriesAtmosphere";
+import { EpisodeLanguageSelector } from "./EpisodeLanguageSelector";
 import { useEffect, useMemo, useState } from "react";
 import type { ArtworkSourceSettings, CastMember, ExploreItem, ImportedShow, LibraryEpisode, LibraryState, PersonCredit, UserTasteProfile } from "../lib/types";
 import { ArrowLeft, Captions, Check, ChevronDown, Download, ExternalLink, Film, Heart, ImagePlus, Library, LoaderCircle, MoreHorizontal, Play, RefreshCw, Trash2, Volume2, X } from "lucide-react";
@@ -6,7 +8,7 @@ import type { FullDownloadJob } from "../lib/full-download-client";
 import { ArtworkPickerModal } from "./ArtworkPickerModal";
 import { formatEpisodeTitle } from "../lib/episode-title";
 import { balanceImageResolution, balancedBackgroundImage } from "../lib/image-resolution";
-import { fetchCastForShow, fetchPersonCredits } from "../lib/import-client";
+import { fetchCastForShow, fetchPersonCredits, fetchEpisodePreviews, type EpisodePreview } from "../lib/import-client";
 import { fetchExploreFeed } from "../lib/discovery-client";
 import { getProviderLabel } from "../lib/command-search";
 import { getOverlayBannerArtwork, getShowArtwork, getShowMetadata, getStandaloneBannerArtwork, getTitleDescription, getTitleMetadataParts } from "../lib/media-library";
@@ -157,6 +159,7 @@ export function ShowDetail({
   const [selectedActor, setSelectedActor] = useState<CastMember | null>(null);
   const [actorCredits, setActorCredits] = useState<PersonCredit[]>([]);
   const [actorCatalog, setActorCatalog] = useState<ExploreItem[]>([]);
+  const [episodePreviews, setEpisodePreviews] = useState<EpisodePreview[]>([]);
   const [actorCatalogLoading, setActorCatalogLoading] = useState(false);
   const [actorCatalogError, setActorCatalogError] = useState<string | null>(null);
   // TV mode renders the dedicated lean-back surface below: no cast fetch,
@@ -185,6 +188,12 @@ export function ShowDetail({
   const movieEpisode = sortedEpisodes.length === 1 ? sortedEpisodes[0] : null;
   const activeSeason = selectedSeason ?? latestEpisode?.seasonNumber ?? seasons[0]?.[0] ?? null;
   const activeSeasonEpisodes = seasons.find(([season]) => season === activeSeason)?.[1] ?? [];
+  useEffect(() => {
+    let canceled = false;
+    setEpisodePreviews([]);
+    if (show && activeSeason) void fetchEpisodePreviews(show, activeSeason).then((items) => { if (!canceled) setEpisodePreviews(items); }).catch(() => {});
+    return () => { canceled = true; };
+  }, [show, activeSeason]);
   const showArtwork = getShowArtwork(show);
   const showMetadata = getShowMetadata(show);
   const heroBackdrop = getOverlayBannerArtwork(show).bannerUrl;
@@ -371,11 +380,13 @@ export function ShowDetail({
   }
 
   return (
-    <section className="relative overflow-hidden bg-[#08090d] pb-28 text-white lg:pb-0">
-      <div className="animate-detail-hero-open relative min-h-[100svh] origin-top overflow-hidden lg:min-h-[46rem]" style={{ viewTransitionName: `spilled-hero-${show.slug}` }}>
+    <section className="redesign-details relative overflow-hidden bg-[#08090d] pb-28 text-white lg:pb-0">
+      {heroBackdrop ? <div className="series-ambient" style={{ backgroundImage: `url(${JSON.stringify(heroBackdrop)})` }} aria-hidden="true" /> : null}
+      <div className="redesign-detail-hero animate-detail-hero-open relative min-h-[100svh] origin-top overflow-hidden lg:min-h-[46rem]" style={{ viewTransitionName: `spilled-hero-${show.slug}` }}>
         {heroBackdrop ? (
           <div className="absolute inset-0">
-            <div className="absolute inset-0 scale-[1.01] bg-cover bg-center" style={balancedBackgroundImage(heroBackdrop, showArtwork.backdropUrl || showArtwork.bannerUrl ? "backdrop-hero" : "poster-detail")} />
+            <div className="absolute inset-0 scale-[1.01] bg-cover bg-center" style={{ ...balancedBackgroundImage(heroBackdrop, showArtwork.backdropUrl || showArtwork.bannerUrl ? "backdrop-hero" : "poster-detail"), ...(!showArtwork.bannerUrl && !showArtwork.backdropUrl ? { backgroundSize: "contain", backgroundPosition: "right center", backgroundRepeat: "no-repeat" } : {}) }} />
+            <SeriesAtmosphere key={show.slug} show={show} />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_72%_35%,rgba(8,9,13,0.1),rgba(8,9,13,0.76)_58%,#08090d_100%)]" />
             <div className="absolute inset-0 bg-gradient-to-r from-[#08090d]/95 via-[#08090d]/38 to-[#08090d]/74" />
             <div className="absolute inset-x-0 bottom-0 h-[48%] bg-gradient-to-t from-[#08090d] via-[#08090d]/74 to-transparent" />
@@ -385,7 +396,7 @@ export function ShowDetail({
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_65%_20%,rgba(42,48,40,0.7),rgba(8,9,13,1)_62%)]" />
         )}
 
-        <div className="relative z-20 flex min-h-[100svh] flex-col px-4 pb-28 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
+        <div className="redesign-detail-content relative z-20 flex min-h-[100svh] flex-col px-4 pb-28 pt-4 sm:px-8 lg:min-h-[46rem] lg:px-12 lg:pb-10 lg:pt-6">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between px-5 pt-6 sm:px-8 lg:px-12">
             <div className="pointer-events-auto flex items-center gap-3">
               <button onClick={onBack} className="spilled-glass-icon h-10 w-10" aria-label="Back to home">
@@ -579,7 +590,7 @@ export function ShowDetail({
                 style={{ viewTransitionName: `spilled-title-${show.slug}` }}
               />
             ) : (
-              <h1 className="mb-3 max-w-[min(88vw,38rem)] text-4xl font-black uppercase leading-[0.88] tracking-normal text-white drop-shadow-[3px_0_0_#f26d21,-3px_0_0_#2b69ff,0_14px_30px_rgba(0,0,0,0.86)] sm:text-7xl lg:text-8xl" style={{ viewTransitionName: `spilled-title-${show.slug}` }}>
+              <h1 className="mb-3 max-w-[min(88vw,38rem)] text-4xl font-black uppercase leading-[0.88] tracking-normal text-white drop-shadow-[0_14px_30px_rgba(0,0,0,0.86)] sm:text-7xl lg:text-8xl" style={{ viewTransitionName: `spilled-title-${show.slug}` }}>
                 {show.title}
               </h1>
             )}
@@ -704,25 +715,17 @@ export function ShowDetail({
                 </button>
               ))}
             </div>
-            <div className="tv-episode-grid grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              {activeSeasonEpisodes.map((episode) => {
-                const audioAvailability = getEpisodeAudioAvailability(episode);
-                return (
-                <button key={episode.id} type="button" onClick={() => onSelectEpisode(episode)} className="tv-episode-card group min-w-0 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3 text-left transition hover:border-white/18 hover:bg-white/[0.065] active:scale-[0.98]">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="tv-episode-code text-[10px] font-black uppercase tracking-[0.18em] text-white/35">{episodeShortLabel(episode)}</span>
-                    <Play className="h-3.5 w-3.5 fill-white/65 text-white/65 transition group-hover:fill-white group-hover:text-white" />
-                  </div>
-                  <div className="flex min-w-0 items-end justify-between gap-2">
-                    <div className="tv-episode-title min-w-0 truncate text-sm font-black text-white">{formatEpisodeTitle(episode)}</div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {audioAvailability.subtitles ? <span className="spilled-subtitle-tag spilled-audio-marker" title="Subtitles available" aria-label="Subtitles available"><Captions className="h-3.5 w-3.5" /><span>SUB</span></span> : null}
-                      {audioAvailability.dubbing ? <span className="spilled-dubbing-tag spilled-audio-marker" title="Dubbed audio available" aria-label="Dubbed audio available"><Volume2 className="h-3.5 w-3.5" /><span>DUB</span></span> : null}
-                    </div>
-                  </div>
-                </button>
-                );
-              })}
+            <div className="redesign-episode-grid">
+              {activeSeasonEpisodes.map((episode) => (
+                <article key={episode.id} className="redesign-episode-tile">
+                  <button type="button" onClick={() => onSelectEpisode(episode)} className="episode-artwork" aria-label={`Play ${episodeShortLabel(episode)}, ${formatEpisodeTitle(episode)}`}>
+                    {(episodePreviews.find((entry) => entry.episodeNumber === episode.episodeNumber)?.stillUrl || episode.posterUrl || heroBackdrop) ? <img src={balanceImageResolution(episodePreviews.find((entry) => entry.episodeNumber === episode.episodeNumber)?.stillUrl || episode.posterUrl || heroBackdrop, "backdrop-thumb") ?? undefined} alt="" loading="lazy" /> : null}
+                    <span className="episode-tile-code">{episodeShortLabel(episode)}{episode.watched ? " · ✓" : ""}</span>
+                    <span className="episode-tile-title">{formatEpisodeTitle(episode)}</span>
+                  </button>
+                  <EpisodeLanguageSelector episode={episode} onSelect={onSelectEpisode} />
+                </article>
+              ))}
             </div>
           </section>
         ) : null}

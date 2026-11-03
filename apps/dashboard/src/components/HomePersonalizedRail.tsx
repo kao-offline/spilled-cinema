@@ -111,11 +111,10 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
       </div>
 
       {props.items.length === 0 ? <EmptyRecommendations freshness={props.freshness} onRetry={props.onRetry} compact={props.compact} /> : (
-        <div className={clsx("no-scrollbar flex snap-x snap-mandatory gap-2.5 overflow-x-auto pb-2.5", props.compact ? "px-4" : "px-5 sm:px-10 lg:px-16")}>
+        <div className={clsx("up-next-rail no-scrollbar flex snap-x snap-mandatory gap-2.5 overflow-x-auto pb-2.5", props.compact ? "px-4" : "px-5 sm:px-10 lg:px-16")}>
           {props.items.map((item) => {
             const preview = previews[`${item.show.slug}:${item.episode.seasonNumber}:${item.episode.episodeNumber}`];
             const image = artworkFor(item, preview);
-            const logo = balanceImageResolution(getShowArtwork(item.show).clearLogoUrl ?? null, "logo");
             const progress = item.progressPercent;
             const action = item.resumeAtSeconds > 0
               ? `Continue at ${formatTime(item.resumeAtSeconds)}`
@@ -132,36 +131,22 @@ export function HomePersonalizedRail(props: HomePersonalizedRailProps) {
                 key={`${item.show.slug}:${item.episode.id}`}
                 type="button"
                 onClick={() => props.onPlay(item)}
-                className={clsx(
-                  "group relative aspect-video w-[72vw] max-w-[282px] shrink-0 snap-start overflow-hidden rounded-[18px] border border-white/[0.09] bg-[#111319] text-left shadow-[0_10px_24px_rgba(0,0,0,.24)] transition sm:w-[258px] lg:w-[266px]",
-                  "hover:-translate-y-0.5 hover:border-white/16 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/75 active:scale-[0.985]",
-                )}
+                className="up-next-card group"
                 aria-label={`${item.resumeAtSeconds > 0 ? "Resume" : "Play"} ${item.show.title}, ${formatEpisodeTitle(item.episode)}${date ? `, ${preview?.airDate ? "released" : "added"} ${date}` : ""}`}
               >
                 {image ? <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]" loading="lazy" decoding="async" /> : null}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/72 via-transparent to-black/12" />
 
-                <div className="absolute left-0 top-0 max-w-[88%] rounded-br-[20px] bg-[#080a0d]/94 px-3 pb-2.5 pt-2.5 pr-5 shadow-[8px_8px_24px_rgba(0,0,0,.24)]">
-                  <div className="flex min-w-0 items-baseline gap-1.5">
-                    <span className="truncate text-[13px] font-black leading-none text-white">{item.show.title}</span>
-                    <span className="shrink-0 text-[10px] font-black uppercase leading-none text-white/45">{episodeCode(item)}</span>
+                <div className="up-next-copy">
+                  <div className="up-next-heading"><span>{item.show.title}</span><small>{episodeCode(item)}</small></div>
+                  <div className="up-next-expanded">
+                    <p>{episodeCode(item)}{showEpisodeTitle ? ` · ${episodeTitle}` : ""}</p>
+                    <p>{action}{date ? ` · ${date}` : ""}</p>
+                    <span className="up-next-play" aria-hidden="true"><Play size={18} /></span>
                   </div>
-                  {showEpisodeTitle ? <p className="mt-1 truncate text-[10px] font-semibold leading-none text-white/48">{episodeTitle}</p> : null}
                 </div>
 
-                <div className={clsx("absolute bottom-2.5 left-2.5 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/72 px-2.5 py-1.5 text-[8px] font-black uppercase tracking-[.1em] text-white/80 shadow-lg", logo ? "max-w-[68%]" : "max-w-[88%]")}>
-                  <Play className="h-2.5 w-2.5 shrink-0 fill-current" />
-                  <span className="truncate">{action}</span>
-                  {date ? <><span className="text-white/25">·</span><span className="truncate text-white/42">{date}</span></> : null}
-                </div>
-
-                {logo ? (
-                  <div className="absolute bottom-2.5 right-2.5 flex h-8 max-w-[28%] items-center justify-center rounded-lg bg-black/66 px-2">
-                    <img src={logo} alt="" className="max-h-5 max-w-full object-contain brightness-0 invert opacity-90" loading="lazy" decoding="async" />
-                  </div>
-                ) : null}
-
-                {progress > 0 ? <div className="absolute inset-x-0 bottom-0 h-[3px] bg-white/16" role="progressbar" aria-label={`${progress}% watched`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div className="h-full" style={{ width: `${progress}%`, backgroundColor: getPlaybackProgressColor(item.episode) }} /></div> : null}
+                <div className="absolute inset-x-0 bottom-0 h-[3px] bg-white/16" role="progressbar" aria-label={`${progress}% watched`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div className="h-full" style={{ width: `${progress}%`, backgroundColor: getPlaybackProgressColor(item.episode) }} /></div>
               </button>
             );
           })}

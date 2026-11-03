@@ -2235,3 +2235,13 @@ export async function enrichArtwork(input: ArtworkLookupOptions): Promise<Artwor
       null,
   };
 }
+
+export async function fetchTmdbTrailer(input: Parameters<typeof fetchTmdbCast>[0]): Promise<string | null> {
+  const match = await resolveTmdbMatch({ ...input, allowAmbiguousSearch: false });
+  if (!match?.id) return null;
+  const result = await fetchTmdbJson<{ results?: Array<{ site: string; key: string; official: boolean; type: string }> }>(
+    `/${input.mediaType}/${match.id}/videos`, { language: "en-US" }, input.apiKeys,
+  );
+  const video = result?.results?.find((entry) => entry.official && entry.type === "Trailer" && entry.site === "YouTube" && /^[\w-]{11}$/.test(entry.key));
+  return video?.key ?? null;
+}

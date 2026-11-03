@@ -3,6 +3,7 @@ import {
   composeHomepageBanner,
   enrichArtwork,
   fetchTmdbCast,
+  fetchTmdbTrailer,
   fetchTmdbPersonCredits,
   fetchTmdbSeasonEpisodePreviews,
   fetchTmdbTitleMetadata,
@@ -75,6 +76,25 @@ export default async function handler(req: { method?: string; query?: Record<str
 
   try {
     switch (action) {
+      case "trailer": {
+        res.setHeader("Cache-Control", "no-store");
+        const title = typeof body.title === "string" ? body.title : "";
+        if (!title.trim()) {
+          res.status(400).json({ error: "Title is required." });
+          return;
+        }
+        const trailerKey = await fetchTmdbTrailer({
+          mediaType: body.mediaType === "movie" ? "movie" : "tv",
+          title,
+          altTitle: typeof body.altTitle === "string" ? body.altTitle : null,
+          yearHint: typeof body.yearHint === "string" ? body.yearHint : undefined,
+          description: typeof body.description === "string" ? body.description : null,
+          externalIds: typeof body.externalIds === "object" && body.externalIds ? body.externalIds as ArtworkExternalIds : undefined,
+          apiKeys,
+        });
+        res.status(200).json({ trailerKey });
+        return;
+      }
       case "cast": {
         res.setHeader("Cache-Control", "no-store");
         const title = typeof body.title === "string" ? body.title : "";

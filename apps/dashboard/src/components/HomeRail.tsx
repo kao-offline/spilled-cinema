@@ -36,7 +36,7 @@ export function HomeRail({ rail, onOpenLocal, onImportRemote, layout = "rail" }:
           </button>
         </div>
       </div>
-      <div ref={scrollerRef} className={layout === "grid" ? "grid grid-cols-2 gap-x-4 gap-y-7 px-5 pb-8 sm:grid-cols-3 sm:px-10 md:grid-cols-4 lg:grid-cols-5 lg:px-16 xl:grid-cols-6 2xl:grid-cols-7" : "no-scrollbar flex gap-4 overflow-x-auto px-5 pb-5 sm:px-10 lg:px-16"}>
+      <div ref={scrollerRef} className={layout === "grid" ? "grid grid-cols-2 gap-x-4 gap-y-7 px-5 pb-8 sm:grid-cols-3 sm:px-10 md:grid-cols-4 lg:grid-cols-5 lg:px-16" : "no-scrollbar flex gap-4 overflow-x-auto px-5 pb-5 sm:px-10 lg:px-16"}>
         {rail.items.map((item) => (
           <HomeMediaCard
             key={item.id}

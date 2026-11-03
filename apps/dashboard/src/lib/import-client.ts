@@ -480,6 +480,29 @@ export async function refreshArtworkForShow(
   return response.data.artwork;
 }
 
+export async function fetchTrailerForShow(show: ImportedShow) {
+  const response = await requestRuntimeJson<{
+    trailerKey?: string | null;
+    error?: string;
+  }>("/api/artwork/trailer", {
+    method: "POST",
+    body: {
+      title: show.title,
+      altTitle: show.altTitle ?? null,
+      yearHint: parseYearHint(show.title) ?? parseYearHint(show.slug) ?? parseYearHint(show.years),
+      description: show.description ?? null,
+      externalIds: show.externalIds ?? null,
+      mediaType: inferArtworkMediaType(show),
+      artworkApiKeys: readArtworkApiKeys(),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(response.data?.error ?? `Failed to fetch trailer for ${show.title}.`);
+  }
+
+  return response.data?.trailerKey ?? null;
+}
 export async function fetchCastForShow(show: ImportedShow) {
   const response = await requestRuntimeJson<{
     actors?: CastMember[];

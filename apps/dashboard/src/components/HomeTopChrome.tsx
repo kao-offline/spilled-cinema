@@ -13,7 +13,7 @@ type HomeTopChromeProps = {
 
 export function HomeTopChrome({ onOpenSearch, onOpenLibrary, onOpenSettings, onOpenAccount, accountLabel, activeTab = "home", onTabChange }: HomeTopChromeProps) {
   return (
-    <header className="pointer-events-none fixed inset-x-0 top-0 z-50 flex h-20 items-center justify-center px-4 sm:h-24 sm:px-8">
+    <header className="redesign-home-chrome pointer-events-none fixed inset-x-0 top-0 z-50 flex h-20 items-center justify-center px-4 sm:h-24 sm:px-8">
       <HomeSourceTabs activeTab={activeTab} onTabChange={(tab) => onTabChange?.(tab)} className="pointer-events-auto absolute left-4 top-4 sm:left-8 sm:top-6" />
 
       <button type="button" onClick={onOpenLibrary} className="pointer-events-auto transition-transform hover:scale-105" aria-label="Open library">

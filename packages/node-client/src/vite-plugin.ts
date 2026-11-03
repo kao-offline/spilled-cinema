@@ -36,6 +36,7 @@ export function createDashboardApiPlugin(): Plugin {
     server.middlewares.use("/api/artwork/refresh", handlers.refreshArtworkHandler);
     server.middlewares.use("/api/artwork/search", handlers.searchArtworkHandler);
     server.middlewares.use("/api/artwork/cast", handlers.castArtworkHandler);
+    server.middlewares.use("/api/artwork/trailer", handlers.trailerArtworkHandler);
     server.middlewares.use("/api/artwork/title-metadata", handlers.titleMetadataArtworkHandler);
     server.middlewares.use("/api/artwork/person-credits", handlers.personCreditsArtworkHandler);
     server.middlewares.use("/api/artwork/homepage-banner", handlers.composeHomepageBannerHandler);

@@ -2908,6 +2908,9 @@ function AppContent() {
   }
 
   function handleSelectEpisode(episode: LibraryEpisode) {
+    if (episode.players.some((player) => player.alias === episode.selectedPlayerAlias)) {
+      updateSelectedPlayer(episode.id, episode.selectedPlayerAlias);
+    }
     const watchPath = buildLibraryWatchPath(episode.id);
     const applySelection = () => {
       setPlayerAutoPlayToken(Date.now());

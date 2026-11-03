@@ -1,7 +1,7 @@
 import { Download, Heart, Play, Plus } from "lucide-react";
 import type { ImportedShow } from "../lib/types";
 import { balancedBackgroundImage, balanceImageResolution } from "../lib/image-resolution";
-import { getOverlayBannerArtwork, getTitleDescription, getTitleMetadataParts, type TitleMetadataFallback } from "../lib/media-library";
+import { getOverlayBannerArtwork, getShowArtwork, getTitleDescription, getTitleMetadataParts, type TitleMetadataFallback } from "../lib/media-library";
 
 type HomeHeroProps = {
   featuredShow: ImportedShow | null;
@@ -49,11 +49,11 @@ export function HomeHero({ featuredShow, downloadedCount, onPlay, onAdd, onOpenS
   const { bannerUrl: heroBackground, logoUrl } = getOverlayBannerArtwork(featuredShow);
 
   return (
-    <section className="relative min-h-[78vh] overflow-hidden bg-[#05060a] px-5 pb-16 pt-28 sm:px-10 lg:min-h-[82vh] lg:px-16">
+    <section className="redesign-home-hero relative min-h-[78vh] overflow-hidden bg-[#05060a] px-5 pb-16 pt-28 sm:px-10 lg:min-h-[82vh] lg:px-16">
       <div key={`bg:${featuredShow.slug}`} className="absolute inset-0 animate-home-hero-bg">
         <div
           className="absolute inset-0 scale-[1.01] bg-cover bg-center"
-          style={balancedBackgroundImage(heroBackground, "backdrop-hero")}
+          style={{ ...balancedBackgroundImage(heroBackground, "backdrop-hero"), ...(!getShowArtwork(featuredShow).bannerUrl ? { backgroundSize: "contain", backgroundPosition: "right center", backgroundRepeat: "no-repeat" } : {}) }}
         />
         <div className="absolute inset-0 bg-gradient-to-r from-[#05060a]/92 via-[#05060a]/50 to-[#05060a]/22" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#05060a]/24 via-[#05060a]/6 to-transparent" />

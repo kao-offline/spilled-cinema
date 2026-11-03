@@ -1,4 +1,4 @@
-import { ArrowLeft, Captions, Check, ChevronDown, Download, Home, List, LoaderCircle, RotateCw, Settings, Trash2, Volume2, X } from "lucide-react";
+import { ArrowLeft, Captions, Check, ChevronDown, Download, List, LoaderCircle, RotateCw, Server, Trash2, Volume2, X } from "lucide-react";
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { EpisodePlayer, ImportedShow, LibraryEpisode, PlayerAlias, PlayerSource, SubtitleSource } from "../lib/types";
@@ -266,7 +266,6 @@ export function PlayerModal({
   episode,
   show,
   onClose,
-  onHome,
   onSelectPlayer,
   onSelectEpisode,
   onSetEpisodeWatched,
@@ -931,6 +930,7 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
+            onOpenServer={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((value) => !value); }}
             className="h-full min-h-0"
             subtitleTracks={activeSubtitleTracks}
             preferredSubtitleId={selectedSubtitleOption?.id ?? null}
@@ -954,6 +954,7 @@ export function PlayerModal({
             metadataParts={pageMetadataParts}
             description={pageDescription}
             sourceLabel={sourceLabel}
+            onOpenServer={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((value) => !value); }}
             className="h-full min-h-0"
             subtitleTracks={activeSubtitleTracks}
             preferredSubtitleId={selectedSubtitleOption?.id ?? null}
@@ -988,17 +989,16 @@ export function PlayerModal({
         )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between px-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-7 lg:px-10 lg:pt-5">
+      <div className="redesign-player-header pointer-events-none absolute inset-x-0 top-0 z-40 flex items-start justify-between px-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-7 lg:px-10 lg:pt-5">
         <div className="pointer-events-auto flex items-center gap-2.5">
           <button onClick={onClose} className="spilled-glass-icon h-10 w-10" aria-label="Back to episode detail">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <button onClick={onHome} className="spilled-glass-icon h-10 w-10" aria-label="Go to homepage">
-            <Home className="h-4 w-4" />
-          </button>
+
         </div>
 
         <div className="pointer-events-none absolute left-1/2 top-[max(1.25rem,env(safe-area-inset-top))] max-w-[52vw] -translate-x-1/2 truncate px-3 text-center text-sm font-black text-white drop-shadow-lg sm:max-w-[60vw] sm:text-base">
+          <small className="phone-player-subheading">{modalSubheading}</small>
           {pageTitle}
         </div>
 
@@ -1032,9 +1032,9 @@ export function PlayerModal({
                 </button>
               </div>
             ) : null}
-            <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Sources">
-              <Settings className="h-4 w-4" />
-            </button>
+            {!(activeIsLocal || remotePlaybackSrc) ? <button type="button" onClick={() => { setEpisodeSelectorOpen(false); setPlayerMenuOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Server">
+              <Server className="h-4 w-4" />
+            </button> : null}
             {!isMovieEntry ? (
               <button type="button" onClick={() => { setPlayerMenuOpen(false); setEpisodeSelectorOpen((v) => !v); }} className="spilled-glass-icon h-10 w-10" aria-label="Episodes">
                 <List className="h-4 w-4" />
